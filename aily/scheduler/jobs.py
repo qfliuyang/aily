@@ -36,6 +36,7 @@ class PassiveCaptureScheduler:
             trigger=IntervalTrigger(seconds=self._current_interval + random.randint(0, JITTER_MAX)),
             id="passive_capture",
             replace_existing=True,
+            max_instances=1,
         )
         logger.info("Passive capture scheduler started")
 
@@ -54,11 +55,11 @@ class PassiveCaptureScheduler:
                 for url in urls:
                     await self.enqueue_fn(url)
             self._on_success()
-        except (OSError, asyncio.TimeoutError) as exc:
+        except Exception as exc:
             logger.exception("Passive capture failed")
             self._on_failure()
             if self._should_alert():
-                self._send_alert()
+                await asyncio.to_thread(self._send_alert)
                 logger.error("Passive capture failed for >24h; stopping scheduler")
                 self.stop()
                 return

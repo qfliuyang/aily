@@ -36,15 +36,18 @@ class BrowserUseManager:
         async with self._lock:
             if self._proc and self._proc.poll() is None:
                 try:
-                    await self._send({"type": "shutdown"})
+                    await asyncio.wait_for(
+                        self._send({"type": "shutdown"}),
+                        timeout=5,
+                    )
                 except Exception:
                     pass
                 self._proc.terminate()
                 try:
-                    self._proc.wait(timeout=5)
+                    await asyncio.to_thread(self._proc.wait, timeout=5)
                 except subprocess.TimeoutExpired:
                     self._proc.kill()
-                    self._proc.wait()
+                    await asyncio.to_thread(self._proc.wait)
             self._proc = None
             self._port = None
 

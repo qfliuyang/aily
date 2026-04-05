@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI):
         scheduler.stop()
     if worker:
         await worker.stop()
-    await fetcher._manager.stop()
+    await fetcher.stop()
     logger.info("Aily shutdown complete")
 
 

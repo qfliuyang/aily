@@ -23,7 +23,14 @@ async def _fetch(url: str, timeout: int, profile_dir: str) -> str:
             text = await page.inner_text("body")
             return text or ""
         finally:
-            await browser.close()
+            try:
+                await page.close()
+            except Exception:
+                pass
+            try:
+                await browser.close()
+            except Exception:
+                pass
 
 
 def _run_loop(listener, fetch_fn):
