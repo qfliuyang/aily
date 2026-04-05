@@ -15,7 +15,7 @@ def _mock_session(status: int, side_effect=None):
     mock_session = MagicMock()
     mock_resp = AsyncMock()
     mock_resp.status = status
-    mock_resp.raise_for_status = AsyncMock()
+    mock_resp.raise_for_status = MagicMock()
 
     def make_put_cm(*args, **kwargs):
         cm = MagicMock()

@@ -35,7 +35,17 @@ class JobWorker:
 
     async def _loop(self) -> None:
         while not self._stop_event.is_set():
-            job = await self.db.dequeue()
+            try:
+                job = await self.db.dequeue()
+            except Exception:
+                logger.exception("Dequeue failed")
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), timeout=self.poll_interval
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                return
             if job is None:
                 try:
                     await asyncio.wait_for(
