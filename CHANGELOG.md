@@ -15,3 +15,7 @@ All notable changes to Aily will be documented in this file.
 - `JobWorker` async background worker for processing queued URL fetch jobs
 - pytest-asyncio test suite covering webhook handling, queue operations, browser fetching, Obsidian writing, and end-to-end pipeline flow
 - Week 2 implementation plan (`.omc/plans/week2.md`) covering BrowserUseManager subprocess queue, passive capture scheduler, entity graph schema, URL dedup hash, and LLM client wrapper
+
+### Fixed
+- Escape `source_url` in Obsidian frontmatter to prevent malformed YAML from URLs containing quotes
+- Sanitize note titles to block `..` path traversal in `ObsidianWriter._file_path`
