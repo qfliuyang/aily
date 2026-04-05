@@ -2,6 +2,12 @@
 
 ## Deferred from Eng Review
 
+### Evaluate SQLite connection pooling for GraphDB and QueueDB
+- **What:** Both GraphDB and QueueDB open/close connections per call. Under concurrent load this may become a bottleneck.
+- **Why:** The eng review flagged per-call connection open/close as a potential performance issue once ingestion and graph pipelines run concurrently.
+- **Context:** Evaluate aiosqlite connection pool options or switch to a shared async connection with WAL mode. Only optimize if profiling shows it matters.
+- **Priority:** P2
+
 ### Validate Browser Use with Chinese-language and dynamic-content pages
 - **What:** Before trusting Browser Use for Monica/Kimi URLs, verify it correctly extracts Chinese text from JS-rendered pages.
 - **Why:** 小刘's core workflow involves Chinese-language AI tools. If Browser Use fails on these, the prototype is dead on arrival.
@@ -25,6 +31,7 @@
 - **Effort:** M → S
 - **Priority:** P1
 - **Depends on:** SQLite queue schema defined.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Verify Feishu voice message webhook payload (BUILD NOW)
 - **What:** Confirm that Feishu bot webhooks deliver voice messages as audio file URLs, and document the payload format and download auth.
@@ -41,6 +48,7 @@
 - **Effort:** S-M → S
 - **Priority:** P1
 - **Depends on:** Browser Use dependency installed.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Expand test plan for accepted scope expansions (DONE)
 - **What:** Add test files for passive capture, voice memos, auto-parser registry, learning loop, weekly collision reports, and LLM client failure modes.
@@ -66,6 +74,7 @@
 - **Effort:** S → S
 - **Priority:** P2
 - **Depends on:** SQLite queue schema defined.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Add LLM timeout/retry/degrade spec
 - **What:** Document and implement explicit timeout, retry, and graceful-degradation behavior for every LLM-dependent path (tagging, collision detection, preference inference, planning).
@@ -74,6 +83,7 @@
 - **Effort:** S → S
 - **Priority:** P2
 - **Depends on:** Planner agent design complete.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Define Monica/Kimi DOM selectors or run discovery spike
 - **What:** Identify the exact DOM selectors or detection strategy for finding new Monica chats and Kimi reports during passive capture.
@@ -90,4 +100,5 @@
 - **Effort:** S → S
 - **Priority:** P1
 - **Depends on:** BrowserUseManager implemented.
+- **Completed:** v0.2.0.0 (2026-04-05)
 

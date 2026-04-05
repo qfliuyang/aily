@@ -97,8 +97,21 @@ Aily main process (Python 3.11)
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | Scope accepted: full Week 2 bundle |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 3 minor notes, 0 critical gaps |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 8 notes addressed inline |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+
+### Post-Review Fixes (applied)
+1. **BrowserUseManager port race** — Child now picks its own ephemeral port via `Listener(("localhost", 0), ...)` and reports it via `READY <port>` stdout. Removes socket race entirely.
+2. **IPC timeout leak** — `Client(..., timeout=65)` now sets a socket-level timeout so a hung subprocess cannot orphan the executor thread indefinitely.
+3. **BrowserFetcher.stop() wrapper** — Added `stop()` method to `BrowserFetcher` so `main.py` can shut down the manager without reaching past the public facade.
+4. **GraphDB DRY helpers** — Added `_execute()` and `_fetchall()` helpers to remove repeated `aiosqlite.connect` boilerplate.
+5. **Scheduler exception narrowing** — `_passive_capture_job` now catches `(OSError, asyncio.TimeoutError)` instead of bare `Exception`, preventing silent swallowing of coding errors.
+6. **Remove `_running` bool** — Scheduler relies on APScheduler's native state; `_running` flag removed to eliminate stale-state bugs.
+7. **Subprocess worker tests** — Added `tests/test_subprocess_worker.py` covering fetch, error response, and unknown message types against `_run_loop`.
+8. **Missing tests added** — Subprocess start-failure (`test_browser_manager.py`), reschedule exception (`test_scheduler.py`), LLM repair failure (`test_llm_client.py`).
+
+### Deferred
+- **SQLite connection pooling** — Added to `TODOS.md` as P2. Evaluate only if profiling shows contention under concurrent ingestion.
 
 - **UNRESOLVED:** 0
 - **VERDICT:** ENG CLEARED — ready to implement

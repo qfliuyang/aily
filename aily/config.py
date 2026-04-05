@@ -21,5 +21,9 @@ class Settings(BaseSettings):
     def queue_db_path(self) -> Path:
         return self.aily_data_dir / "aily_queue.db"
 
+    @property
+    def graph_db_path(self) -> Path:
+        return self.aily_data_dir / "aily_graph.db"
+
 
 SETTINGS = Settings()

@@ -81,6 +81,10 @@ async def feishu_webhook(request: Request) -> dict:
     db = QueueDB(SETTINGS.queue_db_path)
     await db.initialize()
     open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
+    log_id = await db.insert_raw_log(url, source="manual")
+    if log_id is None:
+        logger.info("Deduplicated URL from Feishu: %s", url)
+        return {"status": "ok"}
     await db.enqueue("url_fetch", {"url": url, "open_id": open_id})
     logger.info("Enqueued URL from Feishu: %s", url)
     return {"status": "ok"}
