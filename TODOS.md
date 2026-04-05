@@ -2,6 +2,12 @@
 
 ## Deferred from Eng Review
 
+### Evaluate SQLite connection pooling for GraphDB and QueueDB
+- **What:** Both GraphDB and QueueDB open/close connections per call. Under concurrent load this may become a bottleneck.
+- **Why:** The eng review flagged per-call connection open/close as a potential performance issue once ingestion and graph pipelines run concurrently.
+- **Context:** Evaluate aiosqlite connection pool options or switch to a shared async connection with WAL mode. Only optimize if profiling shows it matters.
+- **Priority:** P2
+
 ### Validate Browser Use with Chinese-language and dynamic-content pages
 - **What:** Before trusting Browser Use for Monica/Kimi URLs, verify it correctly extracts Chinese text from JS-rendered pages.
 - **Why:** 小刘's core workflow involves Chinese-language AI tools. If Browser Use fails on these, the prototype is dead on arrival.

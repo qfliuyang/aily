@@ -15,8 +15,7 @@ def scheduler():
     mock_enqueue.return_value.set_result(None)
     sched = PassiveCaptureScheduler(enqueue_fn=mock_enqueue)
     yield sched
-    if sched._running:
-        sched.stop()
+    sched.stop()
 
 
 @pytest.mark.asyncio
@@ -82,12 +81,12 @@ async def test_alert_sent_and_stops_after_24h_failures():
     sched._current_interval = 0.05
 
     with patch.object(sched, "_send_alert") as mock_alert:
-        with patch.object(sched, "_detect_urls", side_effect=Exception("boom")):
+        with patch.object(sched, "_detect_urls", side_effect=OSError("boom")):
             with patch("aily.scheduler.jobs.random.randint", return_value=0):
                 sched.start()
                 await asyncio.sleep(0.15)
                 mock_alert.assert_called_once()
-                assert sched._running is False
+                assert not sched.scheduler.running
     sched.stop()
 
 
@@ -106,4 +105,25 @@ async def test_success_resets_and_reschedules():
             await asyncio.sleep(0.15)
             assert sched._consecutive_failures == 0
             assert sched._current_interval == BASE_INTERVAL
+    sched.stop()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_exception_logged():
+    mock_enqueue = MagicMock(return_value=asyncio.Future())
+    mock_enqueue.return_value.set_result(None)
+    sched = PassiveCaptureScheduler(enqueue_fn=mock_enqueue)
+
+    sched._consecutive_failures = 0
+    sched._current_interval = 0.05
+
+    with patch.object(sched, "_detect_urls", return_value=[]):
+        with patch.object(sched.scheduler, "reschedule_job", side_effect=RuntimeError("reschedule boom")):
+            with patch("aily.scheduler.jobs.random.randint", return_value=0):
+                with patch("aily.scheduler.jobs.logger") as mock_logger:
+                    sched.start()
+                    await asyncio.sleep(0.15)
+                    mock_logger.exception.assert_called()
+                    messages = [call.args[0] for call in mock_logger.exception.call_args_list]
+                    assert any("Failed to reschedule" in m for m in messages)
     sched.stop()

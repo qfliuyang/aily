@@ -65,13 +65,21 @@ class GraphDB:
             )
             await db.commit()
 
-    async def insert_node(self, node_id: str, node_type: str, label: str, source: str) -> None:
+    async def _execute(self, sql: str, params: tuple | None = None) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO nodes (id, type, label, source) VALUES (?, ?, ?, ?)",
-                (node_id, node_type, label, source),
-            )
+            await db.execute(sql, params or ())
             await db.commit()
+
+    async def _fetchall(self, sql: str, params: tuple | None = None) -> list[tuple]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(sql, params or ())
+            return await cursor.fetchall()
+
+    async def insert_node(self, node_id: str, node_type: str, label: str, source: str) -> None:
+        await self._execute(
+            "INSERT OR IGNORE INTO nodes (id, type, label, source) VALUES (?, ?, ?, ?)",
+            (node_id, node_type, label, source),
+        )
 
     async def insert_edge(
         self,
@@ -82,62 +90,54 @@ class GraphDB:
         weight: float,
         source: str,
     ) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                INSERT OR IGNORE INTO edges
-                (id, source_node_id, target_node_id, relation_type, weight, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (edge_id, source_node_id, target_node_id, relation_type, weight, source),
-            )
-            await db.commit()
+        await self._execute(
+            """
+            INSERT OR IGNORE INTO edges
+            (id, source_node_id, target_node_id, relation_type, weight, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (edge_id, source_node_id, target_node_id, relation_type, weight, source),
+        )
 
     async def insert_occurrence(self, occurrence_id: str, node_id: str, raw_log_id: str) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO occurrences (id, node_id, raw_log_id) VALUES (?, ?, ?)",
-                (occurrence_id, node_id, raw_log_id),
-            )
-            await db.commit()
+        await self._execute(
+            "INSERT INTO occurrences (id, node_id, raw_log_id) VALUES (?, ?, ?)",
+            (occurrence_id, node_id, raw_log_id),
+        )
 
     async def get_nodes_by_type(self, node_type: str) -> list[dict]:
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT id, type, label, source, created_at FROM nodes WHERE type = ?",
-                (node_type,),
-            )
-            rows = await cursor.fetchall()
-            return [
-                {
-                    "id": row[0],
-                    "type": row[1],
-                    "label": row[2],
-                    "source": row[3],
-                    "created_at": row[4],
-                }
-                for row in rows
-            ]
+        rows = await self._fetchall(
+            "SELECT id, type, label, source, created_at FROM nodes WHERE type = ?",
+            (node_type,),
+        )
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+            }
+            for row in rows
+        ]
 
     async def get_cooccurring_nodes(self, raw_log_id: str) -> list[dict]:
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT n.id, n.type, n.label, n.source, n.created_at
-                FROM nodes n
-                JOIN occurrences o ON n.id = o.node_id
-                WHERE o.raw_log_id = ?
-                """,
-                (raw_log_id,),
-            )
-            rows = await cursor.fetchall()
-            return [
-                {
-                    "id": row[0],
-                    "type": row[1],
-                    "label": row[2],
-                    "source": row[3],
-                    "created_at": row[4],
-                }
-                for row in rows
-            ]
+        rows = await self._fetchall(
+            """
+            SELECT n.id, n.type, n.label, n.source, n.created_at
+            FROM nodes n
+            JOIN occurrences o ON n.id = o.node_id
+            WHERE o.raw_log_id = ?
+            """,
+            (raw_log_id,),
+        )
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+            }
+            for row in rows
+        ]

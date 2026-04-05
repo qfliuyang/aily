@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socket
 import subprocess
 import sys
 from multiprocessing.connection import Client
@@ -79,7 +78,7 @@ class BrowserUseManager:
         loop = asyncio.get_running_loop()
 
         def _call() -> dict:
-            with Client(("localhost", self._port), authkey=self.authkey) as conn:
+            with Client(("localhost", self._port), authkey=self.authkey, timeout=65) as conn:
                 conn.send(msg)
                 return conn.recv()
 
@@ -95,16 +94,10 @@ class BrowserUseManager:
         return response["text"]
 
     async def _spawn(self) -> None:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("localhost", 0))
-            self._port = s.getsockname()[1]
-
         script = Path(__file__).with_name("subprocess_worker.py")
         cmd = [
             sys.executable,
             str(script),
-            "--port",
-            str(self._port),
             "--profile-dir",
             str(self.profile_dir),
         ]
@@ -119,10 +112,15 @@ class BrowserUseManager:
             asyncio.get_running_loop().run_in_executor(None, self._proc.stdout.readline),
             timeout=30,
         )
-        if "READY" not in line:
+        if not line.startswith("READY"):
             self._proc.kill()
             stdout = line.strip()
             stderr = self._proc.stderr.read() if self._proc.stderr else ""
             raise BrowserFetchError(
                 f"Browser subprocess failed to start: {stdout} {stderr}"
             )
+        try:
+            self._port = int(line.split()[1])
+        except (IndexError, ValueError) as exc:
+            self._proc.kill()
+            raise BrowserFetchError(f"Browser subprocess reported invalid port: {line.strip()}") from exc

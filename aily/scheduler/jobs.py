@@ -28,11 +28,8 @@ class PassiveCaptureScheduler:
         self._consecutive_failures = 0
         self._first_failure_at: datetime | None = None
         self._current_interval = BASE_INTERVAL
-        self._running = False
 
     def start(self) -> None:
-        if self._running:
-            return
         self.scheduler.start()
         self.scheduler.add_job(
             self._passive_capture_job,
@@ -40,14 +37,13 @@ class PassiveCaptureScheduler:
             id="passive_capture",
             replace_existing=True,
         )
-        self._running = True
         logger.info("Passive capture scheduler started")
 
     def stop(self) -> None:
-        if not self._running:
-            return
-        self.scheduler.shutdown(wait=False)
-        self._running = False
+        try:
+            self.scheduler.shutdown(wait=False)
+        except Exception:
+            pass
         logger.info("Passive capture scheduler stopped")
 
     async def _passive_capture_job(self) -> None:
@@ -58,7 +54,7 @@ class PassiveCaptureScheduler:
                 for url in urls:
                     await self.enqueue_fn(url)
             self._on_success()
-        except Exception as exc:
+        except (OSError, asyncio.TimeoutError) as exc:
             logger.exception("Passive capture failed")
             self._on_failure()
             if self._should_alert():

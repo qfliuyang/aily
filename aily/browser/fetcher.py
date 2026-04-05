@@ -21,6 +21,9 @@ class BrowserFetcher:
         except BrowserFetchError as exc:
             raise FetchError(str(exc)) from exc
         except asyncio.TimeoutError as exc:
-            raise FetchError(f"Timeout fetching {url}") from exc
+            raise FetchError(f"Timeout fetching {url}: {exc}") from exc
         except Exception as exc:
             raise FetchError(str(exc)) from exc
+
+    async def stop(self) -> None:
+        await self._manager.stop()

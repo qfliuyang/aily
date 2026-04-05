@@ -51,3 +51,21 @@ async def test_chat_json_malformed_then_repaired(client):
         with patch("asyncio.to_thread", return_value='{"key": "value"}'):
             result = await client.chat_json([{"role": "user", "content": "hi"}])
             assert result == {"key": "value"}
+
+
+@pytest.mark.asyncio
+async def test_chat_json_repair_fails_raises_llm_error(client):
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "not json"}}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    async def mock_post(*args, **kwargs):
+        return mock_resp
+
+    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+        with patch("asyncio.to_thread", return_value="still not json"):
+            with pytest.raises(LLMError, match="Could not parse or repair"):
+                await client.chat_json([{"role": "user", "content": "hi"}])
