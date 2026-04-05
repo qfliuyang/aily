@@ -1,0 +1,197 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775347244457,
+  "projectRoot": "/Users/luzi/code/aily",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {},
+  "hotPaths": [
+    {
+      "path": "aily/config.py",
+      "accessCount": 4,
+      "lastAccessed": 1775347703048,
+      "type": "file"
+    },
+    {
+      "path": "aily/queue/db.py",
+      "accessCount": 4,
+      "lastAccessed": 1775347736269,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_e2e.py",
+      "accessCount": 3,
+      "lastAccessed": 1775347564247,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_writer.py",
+      "accessCount": 3,
+      "lastAccessed": 1775347778004,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_fetcher.py",
+      "accessCount": 2,
+      "lastAccessed": 1775347755544,
+      "type": "file"
+    },
+    {
+      "path": "pyproject.toml",
+      "accessCount": 1,
+      "lastAccessed": 1775347379573,
+      "type": "file"
+    },
+    {
+      "path": "requirements.txt",
+      "accessCount": 1,
+      "lastAccessed": 1775347379702,
+      "type": "file"
+    },
+    {
+      "path": "pytest.ini",
+      "accessCount": 1,
+      "lastAccessed": 1775347379959,
+      "type": "file"
+    },
+    {
+      "path": ".env.example",
+      "accessCount": 1,
+      "lastAccessed": 1775347380086,
+      "type": "file"
+    },
+    {
+      "path": "aily/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347380209,
+      "type": "file"
+    },
+    {
+      "path": "aily/queue/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347408202,
+      "type": "file"
+    },
+    {
+      "path": "aily/queue/worker.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347408458,
+      "type": "file"
+    },
+    {
+      "path": "tests/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347408584,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_queue.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347408708,
+      "type": "file"
+    },
+    {
+      "path": "aily/push/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347432878,
+      "type": "file"
+    },
+    {
+      "path": "aily/push/feishu.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347433006,
+      "type": "file"
+    },
+    {
+      "path": "aily/writer/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347433139,
+      "type": "file"
+    },
+    {
+      "path": "aily/writer/obsidian.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347433264,
+      "type": "file"
+    },
+    {
+      "path": "aily/browser/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347461459,
+      "type": "file"
+    },
+    {
+      "path": "aily/browser/fetcher.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347461603,
+      "type": "file"
+    },
+    {
+      "path": "aily/parser/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347461736,
+      "type": "file"
+    },
+    {
+      "path": "aily/parser/parsers.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347461863,
+      "type": "file"
+    },
+    {
+      "path": "aily/parser/registry.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347461987,
+      "type": "file"
+    },
+    {
+      "path": "aily/bot/__init__.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347534073,
+      "type": "file"
+    },
+    {
+      "path": "aily/bot/webhook.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347534199,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_bot.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347534326,
+      "type": "file"
+    },
+    {
+      "path": "aily/main.py",
+      "accessCount": 1,
+      "lastAccessed": 1775347534451,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

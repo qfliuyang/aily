@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+*.db
+.pytest_cache/
+.mypy_cache/
+~/.aily/
+.omc/state/
+.omc/state/*
+.claude/
+
