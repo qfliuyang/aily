@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,12 +33,12 @@ class ObsidianWriter:
         }
 
     def _file_path(self, title: str) -> str:
-        safe = title.replace("/", "_")[:120]
+        safe = title.replace("/", "_").replace("..", "_")[:120]
         return f"{self.draft_folder}/{safe}.md"
 
     def _frontmatter(self, source_url: str) -> str:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return f"---\naily_generated: true\naily_written_at: \"{ts}\"\nsource_url: \"{source_url}\"\n---\n\n"
+        return f"---\naily_generated: true\naily_written_at: \"{ts}\"\nsource_url: {json.dumps(source_url)}\n---\n\n"
 
     async def write_note(
         self,
