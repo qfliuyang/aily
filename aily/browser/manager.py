@@ -81,7 +81,7 @@ class BrowserUseManager:
         loop = asyncio.get_running_loop()
 
         def _call() -> dict:
-            with Client(("localhost", self._port), authkey=self.authkey, timeout=65) as conn:
+            with Client(("localhost", self._port), authkey=self.authkey) as conn:
                 conn.send(msg)
                 return conn.recv()
 
@@ -92,9 +92,9 @@ class BrowserUseManager:
 
         if response.get("status") == "error":
             raise BrowserFetchError(response.get("message", "Unknown error"))
-        if response.get("status") != "ok" or "text" not in response:
+        if response.get("status") != "ok":
             raise BrowserFetchError(f"Unexpected response: {response}")
-        return response["text"]
+        return response.get("text", "")
 
     async def _spawn(self) -> None:
         script = Path(__file__).with_name("subprocess_worker.py")
@@ -111,10 +111,19 @@ class BrowserUseManager:
             text=True,
         )
         assert self._proc.stdout is not None
-        line = await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(None, self._proc.stdout.readline),
-            timeout=30,
-        )
+        try:
+            line = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, self._proc.stdout.readline),
+                timeout=30,
+            )
+        except asyncio.TimeoutError as exc:
+            if self._proc:
+                self._proc.kill()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            raise BrowserFetchError("Browser subprocess failed to report READY in time") from exc
         if not line.startswith("READY"):
             self._proc.kill()
             stdout = line.strip()

@@ -48,7 +48,6 @@ class PassiveCaptureScheduler:
         logger.info("Passive capture scheduler stopped")
 
     async def _passive_capture_job(self) -> None:
-        interval = self._current_interval + random.randint(0, JITTER_MAX)
         try:
             urls = await self._detect_urls()
             if urls:
@@ -64,7 +63,7 @@ class PassiveCaptureScheduler:
                 self.stop()
                 return
 
-        # Reschedule with updated interval
+        interval = self._current_interval + random.randint(0, JITTER_MAX)
         try:
             self.scheduler.reschedule_job(
                 "passive_capture",

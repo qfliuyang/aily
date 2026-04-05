@@ -34,26 +34,27 @@ async def _fetch(url: str, timeout: int, profile_dir: str) -> str:
 
 
 def _run_loop(listener, fetch_fn):
-    with listener.accept() as conn:
-        while True:
-            try:
-                msg = conn.recv()
-            except EOFError:
-                break
-            if msg.get("type") == "shutdown":
-                conn.send({"status": "ok"})
-                break
-            if msg.get("type") == "fetch":
-                url = msg.get("url")
-                timeout = msg.get("timeout", 60)
+    while True:
+        with listener.accept() as conn:
+            while True:
                 try:
-                    text = fetch_fn(url, timeout)
-                    conn.send({"status": "ok", "text": text})
-                except Exception as exc:
-                    logger.exception("Fetch failed for %s", url)
-                    conn.send({"status": "error", "message": str(exc)})
-            else:
-                conn.send({"status": "error", "message": "Unknown type"})
+                    msg = conn.recv()
+                except EOFError:
+                    break
+                if msg.get("type") == "shutdown":
+                    conn.send({"status": "ok"})
+                    return
+                if msg.get("type") == "fetch":
+                    url = msg.get("url")
+                    timeout = msg.get("timeout", 60)
+                    try:
+                        text = fetch_fn(url, timeout)
+                        conn.send({"status": "ok", "text": text})
+                    except Exception as exc:
+                        logger.exception("Fetch failed for %s", url)
+                        conn.send({"status": "error", "message": str(exc)})
+                else:
+                    conn.send({"status": "error", "message": "Unknown type"})
 
 
 def main(argv=None) -> None:
