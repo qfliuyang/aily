@@ -31,6 +31,7 @@
 - **Effort:** M → S
 - **Priority:** P1
 - **Depends on:** SQLite queue schema defined.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Verify Feishu voice message webhook payload (BUILD NOW)
 - **What:** Confirm that Feishu bot webhooks deliver voice messages as audio file URLs, and document the payload format and download auth.
@@ -47,6 +48,7 @@
 - **Effort:** S-M → S
 - **Priority:** P1
 - **Depends on:** Browser Use dependency installed.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Expand test plan for accepted scope expansions (DONE)
 - **What:** Add test files for passive capture, voice memos, auto-parser registry, learning loop, weekly collision reports, and LLM client failure modes.
@@ -72,6 +74,7 @@
 - **Effort:** S → S
 - **Priority:** P2
 - **Depends on:** SQLite queue schema defined.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Add LLM timeout/retry/degrade spec
 - **What:** Document and implement explicit timeout, retry, and graceful-degradation behavior for every LLM-dependent path (tagging, collision detection, preference inference, planning).
@@ -80,6 +83,7 @@
 - **Effort:** S → S
 - **Priority:** P2
 - **Depends on:** Planner agent design complete.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Define Monica/Kimi DOM selectors or run discovery spike
 - **What:** Identify the exact DOM selectors or detection strategy for finding new Monica chats and Kimi reports during passive capture.
@@ -96,4 +100,5 @@
 - **Effort:** S → S
 - **Priority:** P1
 - **Depends on:** BrowserUseManager implemented.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
