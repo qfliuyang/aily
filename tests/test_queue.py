@@ -53,3 +53,30 @@ async def test_retry_and_max_fail(queue_db: QueueDB):
     # status should be failed
     next_job = await queue_db.dequeue()
     assert next_job is None
+
+
+@pytest.mark.asyncio
+async def test_complete_job(queue_db: QueueDB):
+    job_id = await queue_db.enqueue("url_fetch", {"url": "https://example.com"})
+    await queue_db.complete_job(job_id, success=True)
+    job = await queue_db.get_job(job_id)
+    assert job["status"] == "completed"
+    assert job["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_job(queue_db: QueueDB):
+    job_id = await queue_db.enqueue("url_fetch", {"url": "https://example.com"})
+    job = await queue_db.get_job(job_id)
+    assert job is not None
+    assert job["id"] == job_id
+    assert job["type"] == "url_fetch"
+
+
+@pytest.mark.asyncio
+async def test_complete_job_with_error(queue_db: QueueDB):
+    job_id = await queue_db.enqueue("url_fetch", {"url": "https://example.com"})
+    await queue_db.complete_job(job_id, success=False, error_message="boom")
+    job = await queue_db.get_job(job_id)
+    assert job["status"] == "failed"
+    assert job["error_message"] == "boom"
