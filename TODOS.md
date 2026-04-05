@@ -50,13 +50,14 @@
 - **Priority:** P1
 - **Depends on:** Core test suite skeleton exists.
 
-### Implement Obsidian draft folder + aily_generated frontmatter (BUILD NOW)
+### Implement Obsidian draft folder + aily_generated frontmatter (DONE)
 - **What:** Aily writes all new notes to a staging / draft folder inside the vault with `aily_generated: true` and `aily_written_at` timestamps. The learning loop only triggers on notes that have been moved out of the draft folder and subsequently edited.
 - **Why:** The pure frontmatter + 5-second cooldown approach is not reliable enough. A draft folder eliminates false positives entirely by making user "approval" (moving the note) the signal that the note is part of the permanent vault.
 - **Context:** Implement in the writer module. The file watcher monitors the main vault (not the draft folder) for edits to notes that originated from Aily.
 - **Effort:** S → S
 - **Priority:** P1
 - **Depends on:** Writer module design complete.
+- **Completed:** v0.1.0.0 (2026-04-05)
 
 ### Add URL dedup hash in raw ingestion log
 - **What:** Hash incoming URLs with SHA256 and deduplicate against the raw ingestion log before enqueueing.
