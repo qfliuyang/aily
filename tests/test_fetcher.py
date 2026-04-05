@@ -3,55 +3,33 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
 from aily.browser.fetcher import BrowserFetcher, FetchError
-
-
-def _build_mock_playwright(inner_text: str):
-    """Return a mock for async_playwright that yields a page with given inner_text."""
-    async def _mock_playwright():
-        pass
-
-    mock_pw = AsyncMock()
-    mock_p = AsyncMock()
-    mock_context = AsyncMock()
-    mock_page = AsyncMock()
-    mock_page.inner_text = AsyncMock(return_value=inner_text)
-    mock_page.goto = AsyncMock()
-    mock_context.new_page = AsyncMock(return_value=mock_page)
-    mock_context.close = AsyncMock()
-    mock_p.chromium.launch_persistent_context = AsyncMock(return_value=mock_context)
-    mock_pw.__aenter__ = AsyncMock(return_value=mock_p)
-    mock_pw.__aexit__ = AsyncMock(return_value=False)
-    return mock_pw
+from aily.browser.manager import BrowserFetchError
 
 
 @pytest.mark.asyncio
-async def test_fetch_local_html(tmp_path: Path):
-    html = "<html><head><title>Local Page</title></head><body><p>Hello 世界</p></body></html>"
-    html_path = tmp_path / "test.html"
-    html_path.write_text(html, encoding="utf-8")
-
-    fetcher = BrowserFetcher(profile_dir=tmp_path / "profile")
-    mock_pw = _build_mock_playwright("Hello 世界")
-    with patch("aily.browser.fetcher.async_playwright", return_value=mock_pw):
-        text = await fetcher.fetch(f"file://{html_path}")
-        assert "Hello 世界" in text
+async def test_fetch_returns_text():
+    fetcher = BrowserFetcher(profile_dir=Path("/tmp/profile"))
+    with patch.object(fetcher._manager, "start", new_callable=AsyncMock) as mock_start:
+        with patch.object(fetcher._manager, "fetch", new_callable=AsyncMock, return_value="hello world") as mock_fetch:
+            text = await fetcher.fetch("https://example.com")
+            assert text == "hello world"
+            mock_start.assert_called_once()
+            mock_fetch.assert_awaited_once_with("https://example.com", timeout=60)
 
 
 @pytest.mark.asyncio
-async def test_timeout_raises_fetch_error():
+async def test_fetch_maps_browser_error_to_fetch_error():
     fetcher = BrowserFetcher()
-    mock_pw = AsyncMock()
-    mock_pw.__aenter__ = AsyncMock(side_effect=Exception("browser crashed"))
-    mock_pw.__aexit__ = AsyncMock(return_value=False)
-    with patch("aily.browser.fetcher.async_playwright", return_value=mock_pw):
-        with pytest.raises(FetchError):
-            await fetcher.fetch("https://example.com", timeout=1)
+    with patch.object(fetcher._manager, "start", new_callable=AsyncMock):
+        with patch.object(fetcher._manager, "fetch", new_callable=AsyncMock, side_effect=BrowserFetchError("crashed")):
+            with pytest.raises(FetchError, match="crashed"):
+                await fetcher.fetch("https://example.com")
 
 
 @pytest.mark.asyncio
-async def test_empty_content_returns_empty_string():
+async def test_fetch_maps_timeout_to_fetch_error():
     fetcher = BrowserFetcher()
-    mock_pw = _build_mock_playwright("")
-    with patch("aily.browser.fetcher.async_playwright", return_value=mock_pw):
-        text = await fetcher.fetch("https://example.com")
-        assert text == ""
+    with patch.object(fetcher._manager, "start", new_callable=AsyncMock):
+        with patch.object(fetcher._manager, "fetch", new_callable=AsyncMock, side_effect=TimeoutError("timed out")):
+            with pytest.raises(FetchError, match="timed out"):
+                await fetcher.fetch("https://example.com")

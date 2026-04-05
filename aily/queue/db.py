@@ -1,3 +1,4 @@
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ class QueueDB:
     async def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA journal_mode=WAL")
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -30,7 +32,39 @@ class QueueDB:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)"
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raw_ingestion_log (
+                    id TEXT PRIMARY KEY,
+                    url_hash TEXT UNIQUE NOT NULL,
+                    url TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_ingestion_log(url_hash)"
+            )
             await db.commit()
+
+    @staticmethod
+    def _hash_url(url: str) -> str:
+        return hashlib.sha256(url.encode()).hexdigest()
+
+    async def insert_raw_log(self, url: str, source: str = "manual") -> Optional[str]:
+        url_hash = self._hash_url(url)
+        log_id = str(uuid.uuid4())
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO raw_ingestion_log (id, url_hash, url, source) VALUES (?, ?, ?, ?)",
+                    (log_id, url_hash, url, source),
+                )
+                await db.commit()
+            except aiosqlite.IntegrityError:
+                return None
+        return log_id
 
     async def enqueue(self, job_type: str, payload: dict) -> str:
         job_id = str(uuid.uuid4())
@@ -114,4 +148,4 @@ class QueueDB:
                     (retry_count, "pending", job_id),
                 )
             await db.commit()
-            return retry_count < max_retries
+        return retry_count < max_retries

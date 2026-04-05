@@ -22,11 +22,14 @@ from aily.parser.parsers import (
     parse_github,
     parse_youtube,
 )
+from aily.graph.db import GraphDB
+from aily.scheduler.jobs import PassiveCaptureScheduler
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 db = QueueDB(SETTINGS.queue_db_path)
+graph_db = GraphDB(SETTINGS.graph_db_path)
 fetcher = BrowserFetcher()
 pusher = FeishuPusher(SETTINGS.feishu_app_id, SETTINGS.feishu_app_secret)
 writer = ObsidianWriter(
@@ -35,6 +38,7 @@ writer = ObsidianWriter(
     SETTINGS.obsidian_rest_api_port,
 )
 worker: JobWorker | None = None
+scheduler: PassiveCaptureScheduler | None = None
 
 ERROR_MESSAGES = {
     "FETCH_FAILED": "Could not fetch the page. The link may be expired or require login.",
@@ -45,9 +49,18 @@ ERROR_MESSAGES = {
 }
 
 
+async def _enqueue_url(url: str, open_id: str = "") -> None:
+    log_id = await db.insert_raw_log(url, source="passive" if not open_id else "manual")
+    if log_id is None:
+        logger.info("Deduplicated URL: %s", url)
+        return
+    await db.enqueue("url_fetch", {"url": url, "open_id": open_id})
+    logger.info("Enqueued URL: %s", url)
+
+
 async def process_job(job: dict) -> None:
     url = job["payload"]["url"]
-    open_id = job["payload"]["open_id"]
+    open_id = job["payload"].get("open_id", "")
     note_path = ""
     try:
         raw_text = await fetcher.fetch(url)
@@ -63,14 +76,17 @@ async def process_job(job: dict) -> None:
         await _notify_failure(open_id, "PARSE_FAILED")
         raise
 
-    try:
-        await pusher.send_message(open_id, f"Saved to Obsidian: {note_path}")
-    except Exception:
-        logger.exception("Push failed for job %s", job["id"])
-        await _notify_failure(open_id, "PUSH_FAILED")
+    if open_id:
+        try:
+            await pusher.send_message(open_id, f"Saved to Obsidian: {note_path}")
+        except Exception:
+            logger.exception("Push failed for job %s", job["id"])
+            await _notify_failure(open_id, "PUSH_FAILED")
 
 
 async def _notify_failure(open_id: str, code: str) -> None:
+    if not open_id:
+        return
     try:
         await pusher.send_message(open_id, ERROR_MESSAGES[code])
     except Exception:
@@ -79,8 +95,9 @@ async def _notify_failure(open_id: str, code: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker
+    global worker, scheduler
     await db.initialize()
+    await graph_db.initialize()
     registry.register(r"^https://kimi\.moonshot\.cn/share/", parse_kimi)
     registry.register(r"^https://monica\.im/", parse_monica)
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
@@ -88,10 +105,15 @@ async def lifespan(app: FastAPI):
     registry.register(r"^https://(www\.)?youtube\.com/watch", parse_youtube)
     worker = JobWorker(db, process_job)
     await worker.start()
+    scheduler = PassiveCaptureScheduler(enqueue_fn=_enqueue_url)
+    scheduler.start()
     logger.info("Aily startup complete")
     yield
+    if scheduler:
+        scheduler.stop()
     if worker:
         await worker.stop()
+    await fetcher._manager.stop()
     logger.info("Aily shutdown complete")
 
 
