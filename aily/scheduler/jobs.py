@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
@@ -117,3 +118,41 @@ class PassiveCaptureScheduler:
             )
         except Exception:
             logger.exception("Failed to send macOS alert")
+
+
+class DailyDigestScheduler:
+    def __init__(
+        self,
+        enqueue_digest_fn: Callable[[], asyncio.Awaitable[None]],
+        hour: int = 9,
+        minute: int = 0,
+    ) -> None:
+        self.enqueue_digest_fn = enqueue_digest_fn
+        self.hour = hour
+        self.minute = minute
+        self.scheduler = AsyncIOScheduler()
+
+    def start(self) -> None:
+        self.scheduler.start()
+        self.scheduler.add_job(
+            self._daily_digest_job,
+            trigger=CronTrigger(hour=self.hour, minute=self.minute),
+            id="daily_digest",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("Daily digest scheduler started (hh:mm=%02d:%02d)", self.hour, self.minute)
+
+    def stop(self) -> None:
+        try:
+            self.scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        logger.info("Daily digest scheduler stopped")
+
+    async def _daily_digest_job(self) -> None:
+        try:
+            await self.enqueue_digest_fn()
+            logger.info("Daily digest enqueued")
+        except Exception:
+            logger.exception("Daily digest job failed")

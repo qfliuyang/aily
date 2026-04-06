@@ -23,7 +23,9 @@ from aily.parser.parsers import (
     parse_youtube,
 )
 from aily.graph.db import GraphDB
-from aily.scheduler.jobs import PassiveCaptureScheduler
+from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler
+from aily.llm.client import LLMClient
+from aily.digest.pipeline import DigestPipeline
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +41,12 @@ writer = ObsidianWriter(
 )
 worker: JobWorker | None = None
 scheduler: PassiveCaptureScheduler | None = None
+llm_client = LLMClient(
+    base_url=SETTINGS.llm_base_url,
+    api_key=SETTINGS.llm_api_key,
+    model=SETTINGS.llm_model,
+)
+digest_scheduler: DailyDigestScheduler | None = None
 
 ERROR_MESSAGES = {
     "FETCH_FAILED": "Could not fetch the page. The link may be expired or require login.",
@@ -58,7 +66,16 @@ async def _enqueue_url(url: str, open_id: str = "") -> None:
     logger.info("Enqueued URL: %s", url)
 
 
-async def process_job(job: dict) -> None:
+async def _dispatch_job(job: dict) -> None:
+    if job["type"] == "url_fetch":
+        await _process_url_job(job)
+    elif job["type"] == "daily_digest":
+        await _process_digest_job(job)
+    else:
+        raise ValueError(f"Unknown job type: {job['type']}")
+
+
+async def _process_url_job(job: dict) -> None:
     url = job["payload"]["url"]
     open_id = job["payload"].get("open_id", "")
     note_path = ""
@@ -84,6 +101,12 @@ async def process_job(job: dict) -> None:
             await _notify_failure(open_id, "PUSH_FAILED")
 
 
+async def _process_digest_job(job: dict) -> None:
+    open_id = job["payload"].get("open_id", SETTINGS.aily_digest_feishu_open_id)
+    pipeline = DigestPipeline(graph_db, db, llm_client, writer, pusher)
+    await pipeline.run(open_id=open_id)
+
+
 async def _notify_failure(open_id: str, code: str) -> None:
     if not open_id:
         return
@@ -93,9 +116,17 @@ async def _notify_failure(open_id: str, code: str) -> None:
         logger.exception("Failed to send failure notification")
 
 
+async def _enqueue_digest() -> None:
+    if not SETTINGS.aily_digest_enabled:
+        return
+    open_id = SETTINGS.aily_digest_feishu_open_id
+    await db.enqueue("daily_digest", {"open_id": open_id})
+    logger.info("Enqueued daily digest")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker, scheduler
+    global worker, scheduler, digest_scheduler
     await db.initialize()
     await graph_db.initialize()
     registry.register(r"^https://kimi\.moonshot\.cn/share/", parse_kimi)
@@ -103,12 +134,20 @@ async def lifespan(app: FastAPI):
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
     registry.register(r"^https://github\.com/", parse_github)
     registry.register(r"^https://(www\.)?youtube\.com/watch", parse_youtube)
-    worker = JobWorker(db, process_job)
+    worker = JobWorker(db, _dispatch_job)
     await worker.start()
     scheduler = PassiveCaptureScheduler(enqueue_fn=_enqueue_url)
     scheduler.start()
+    digest_scheduler = DailyDigestScheduler(
+        enqueue_digest_fn=_enqueue_digest,
+        hour=SETTINGS.aily_digest_hour,
+        minute=SETTINGS.aily_digest_minute,
+    )
+    digest_scheduler.start()
     logger.info("Aily startup complete")
     yield
+    if digest_scheduler:
+        digest_scheduler.stop()
     if scheduler:
         scheduler.stop()
     if worker:

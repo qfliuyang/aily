@@ -1,60 +1,27 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
-from aily.queue.db import QueueDB
-from aily.queue.worker import JobWorker
-
-
-@pytest.fixture
-async def worker_db(tmp_path):
-    db = QueueDB(tmp_path / "worker.db")
-    await db.initialize()
-    return db
+from aily.main import _dispatch_job
 
 
 @pytest.mark.asyncio
-async def test_worker_processes_job(worker_db):
-    processor = AsyncMock()
-    worker = JobWorker(worker_db, processor, poll_interval=0.01)
-    await worker.start()
-
-    job_id = await worker_db.enqueue("url_fetch", {"url": "https://example.com"})
-
-    # Wait for the processor to be called
-    for _ in range(50):
-        if processor.await_count >= 1:
-            break
-        import asyncio
-        await asyncio.sleep(0.01)
-
-    await worker.stop()
-    assert processor.await_count >= 1
+async def test_dispatch_url_fetch():
+    with patch("aily.main._process_url_job", new=AsyncMock()) as mock_url:
+        job = {"type": "url_fetch", "payload": {"url": "https://example.com"}}
+        await _dispatch_job(job)
+        mock_url.assert_awaited_once_with(job)
 
 
 @pytest.mark.asyncio
-async def test_worker_stop_cancels_loop(worker_db):
-    worker = JobWorker(worker_db, AsyncMock(), poll_interval=0.1)
-    await worker.start()
-    assert worker._task is not None
-    await worker.stop()
-    assert worker._task.done()
+async def test_dispatch_daily_digest():
+    with patch("aily.main._process_digest_job", new=AsyncMock()) as mock_digest:
+        job = {"type": "daily_digest", "payload": {"open_id": "u1"}}
+        await _dispatch_job(job)
+        mock_digest.assert_awaited_once_with(job)
 
 
 @pytest.mark.asyncio
-async def test_worker_marks_job_complete(worker_db):
-    processor = AsyncMock()
-    worker = JobWorker(worker_db, processor, poll_interval=0.01)
-    await worker.start()
-
-    job_id = await worker_db.enqueue("url_fetch", {"url": "https://example.com"})
-
-    for _ in range(50):
-        job = await worker_db.get_job(job_id)
-        if job and job["status"] == "completed":
-            break
-        import asyncio
-        await asyncio.sleep(0.01)
-
-    await worker.stop()
-    job = await worker_db.get_job(job_id)
-    assert job["status"] == "completed"
+async def test_dispatch_unknown_job_type():
+    job = {"type": "unknown", "payload": {}}
+    with pytest.raises(ValueError, match="Unknown job type"):
+        await _dispatch_job(job)

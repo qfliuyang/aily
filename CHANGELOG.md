@@ -2,6 +2,17 @@
 
 All notable changes to Aily will be documented in this file.
 
+## [0.3.0.0] - 2026-04-05
+
+### Added
+- GraphDB query engine with time-windowed reads: `get_nodes_within_hours`, `get_edges_within_hours`, `get_top_nodes_by_edge_count`, `get_collisions_within_hours`, `get_source_logs_for_node`
+- `created_at` indexes on nodes, edges, occurrences, and raw_ingestion_log for efficient time-range queries
+- `DigestPipeline` that curates a daily markdown digest from 24h of graph activity using LLMClient, writes to Obsidian, and sends a Feishu summary
+- `DailyDigestScheduler` with APScheduler `CronTrigger` for configurable daily digest enqueueing
+- Job dispatcher in `main.py` supporting both `url_fetch` and `daily_digest` job types via `JobWorker`
+- New settings: `llm_api_key`, `llm_base_url`, `llm_model`, `aily_digest_enabled`, `aily_digest_hour`, `aily_digest_minute`, `aily_digest_feishu_open_id`
+- Comprehensive test coverage for graph queries, queue helpers, digest pipeline, daily scheduler, and job dispatcher (66 tests total)
+
 ## [0.2.0.0] - 2026-04-05
 
 ### Added

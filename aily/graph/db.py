@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +63,15 @@ class GraphDB:
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_occurrences_log ON occurrences(raw_log_id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nodes_created_at ON nodes(created_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_edges_created_at ON edges(created_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_occurrences_created_at ON occurrences(created_at)"
             )
             await db.commit()
 
@@ -138,6 +148,148 @@ class GraphDB:
                 "label": row[2],
                 "source": row[3],
                 "created_at": row[4],
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _cutoff(hours: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+
+    async def get_nodes_within_hours(self, hours: int) -> list[dict]:
+        cutoff = self._cutoff(hours)
+        rows = await self._fetchall(
+            """
+            SELECT id, type, label, source, created_at
+            FROM nodes
+            WHERE created_at >= ?
+            """,
+            (cutoff,),
+        )
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+            }
+            for row in rows
+        ]
+
+    async def get_edges_within_hours(self, hours: int) -> list[dict]:
+        cutoff = self._cutoff(hours)
+        rows = await self._fetchall(
+            """
+            SELECT id, source_node_id, target_node_id, relation_type, weight, source, created_at
+            FROM edges
+            WHERE created_at >= ?
+            """,
+            (cutoff,),
+        )
+        return [
+            {
+                "id": row[0],
+                "source_node_id": row[1],
+                "target_node_id": row[2],
+                "relation_type": row[3],
+                "weight": row[4],
+                "source": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
+    async def get_top_nodes_by_edge_count(
+        self, hours: int | None = None, limit: int = 10
+    ) -> list[dict]:
+        if hours is not None:
+            cutoff = self._cutoff(hours)
+            sql = """
+                SELECT n.id, n.type, n.label, n.source, n.created_at,
+                       COUNT(e.id) AS edge_count,
+                       COALESCE(SUM(e.weight), 0) AS total_weight
+                FROM nodes n
+                JOIN edges e ON n.id = e.source_node_id OR n.id = e.target_node_id
+                WHERE e.created_at >= ?
+                GROUP BY n.id
+                ORDER BY edge_count DESC, total_weight DESC
+                LIMIT ?
+            """
+            params = (cutoff, limit)
+        else:
+            sql = """
+                SELECT n.id, n.type, n.label, n.source, n.created_at,
+                       COUNT(e.id) AS edge_count,
+                       COALESCE(SUM(e.weight), 0) AS total_weight
+                FROM nodes n
+                JOIN edges e ON n.id = e.source_node_id OR n.id = e.target_node_id
+                GROUP BY n.id
+                ORDER BY edge_count DESC, total_weight DESC
+                LIMIT ?
+            """
+            params = (limit,)
+        rows = await self._fetchall(sql, params)
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+                "edge_count": row[5],
+                "total_weight": row[6],
+            }
+            for row in rows
+        ]
+
+    async def get_collisions_within_hours(self, hours: int, min_occurrences: int = 2) -> list[dict]:
+        cutoff = self._cutoff(hours)
+        rows = await self._fetchall(
+            """
+            SELECT o.node_id, n.type, n.label, COUNT(DISTINCT o.raw_log_id) AS occurrence_count
+            FROM occurrences o
+            JOIN nodes n ON n.id = o.node_id
+            WHERE o.created_at >= ?
+            GROUP BY o.node_id
+            HAVING occurrence_count >= ?
+            """,
+            (cutoff, min_occurrences),
+        )
+        return [
+            {
+                "node_id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "occurrence_count": row[3],
+            }
+            for row in rows
+        ]
+
+    async def get_source_logs_for_node(
+        self, node_id: str, hours: int | None = None
+    ) -> list[dict]:
+        if hours is not None:
+            cutoff = self._cutoff(hours)
+            sql = """
+                SELECT raw_log_id, created_at
+                FROM occurrences
+                WHERE node_id = ?
+                  AND created_at >= ?
+            """
+            params = (node_id, cutoff)
+        else:
+            sql = """
+                SELECT raw_log_id, created_at
+                FROM occurrences
+                WHERE node_id = ?
+            """
+            params = (node_id,)
+        rows = await self._fetchall(sql, params)
+        return [
+            {
+                "raw_log_id": row[0],
+                "created_at": row[1],
             }
             for row in rows
         ]

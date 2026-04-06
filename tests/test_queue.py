@@ -80,3 +80,30 @@ async def test_complete_job_with_error(queue_db: QueueDB):
     job = await queue_db.get_job(job_id)
     assert job["status"] == "failed"
     assert job["error_message"] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_get_raw_logs_within_hours(queue_db: QueueDB):
+    log_id = await queue_db.insert_raw_log("https://example.com", "test")
+    assert log_id is not None
+    logs = await queue_db.get_raw_logs_within_hours(24)
+    assert len(logs) == 1
+    assert logs[0]["id"] == log_id
+    assert logs[0]["url"] == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_urls_for_raw_logs(queue_db: QueueDB):
+    log_id1 = await queue_db.insert_raw_log("https://first.com", "test")
+    log_id2 = await queue_db.insert_raw_log("https://second.com", "test")
+    urls = await queue_db.get_urls_for_raw_logs([log_id1, log_id2])
+    assert urls == {
+        log_id1: "https://first.com",
+        log_id2: "https://second.com",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_urls_for_raw_logs_empty(queue_db: QueueDB):
+    urls = await queue_db.get_urls_for_raw_logs([])
+    assert urls == {}

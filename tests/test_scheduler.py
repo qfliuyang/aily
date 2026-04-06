@@ -1,11 +1,11 @@
 import asyncio
 import random
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aily.scheduler.jobs import PassiveCaptureScheduler, BASE_INTERVAL, MAX_INTERVAL, JITTER_MAX
+from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler, BASE_INTERVAL, MAX_INTERVAL, JITTER_MAX
 
 
 @pytest.fixture
@@ -127,3 +127,40 @@ async def test_reschedule_exception_logged():
                     messages = [call.args[0] for call in mock_logger.exception.call_args_list]
                     assert any("Failed to reschedule" in m for m in messages)
     sched.stop()
+
+
+@pytest.mark.asyncio
+async def test_daily_digest_scheduler_cron_trigger():
+    mock_enqueue = AsyncMock()
+    sched = DailyDigestScheduler(enqueue_digest_fn=mock_enqueue, hour=8, minute=30)
+    try:
+        sched.start()
+        job = sched.scheduler.get_job("daily_digest")
+        assert job is not None
+        trigger = job.trigger
+        fields = {f.name: str(f) for f in trigger.fields}
+        assert fields["hour"] == "8"
+        assert fields["minute"] == "30"
+    finally:
+        sched.stop()
+
+
+@pytest.mark.asyncio
+async def test_daily_digest_job_calls_enqueue():
+    mock_enqueue = AsyncMock()
+    sched = DailyDigestScheduler(enqueue_digest_fn=mock_enqueue)
+    try:
+        sched.start()
+        await sched._daily_digest_job()
+        mock_enqueue.assert_awaited_once()
+    finally:
+        sched.stop()
+
+
+@pytest.mark.asyncio
+async def test_daily_digest_job_logs_exception():
+    mock_enqueue = AsyncMock(side_effect=RuntimeError("boom"))
+    sched = DailyDigestScheduler(enqueue_digest_fn=mock_enqueue)
+    with patch("aily.scheduler.jobs.logger") as mock_logger:
+        await sched._daily_digest_job()
+        mock_logger.exception.assert_called_once()
