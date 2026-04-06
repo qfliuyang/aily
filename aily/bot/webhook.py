@@ -75,12 +75,15 @@ async def feishu_webhook(request: Request) -> dict:
     text = content.get("text", "")
     url = _extract_url(text)
 
-    if url is None:
-        return {"status": "ok"}
-
     db = QueueDB(SETTINGS.queue_db_path)
     await db.initialize()
     open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
+
+    if url is None:
+        await db.enqueue("agent_request", {"request": text, "open_id": open_id})
+        logger.info("Enqueued agent request from Feishu: %s", text[:50])
+        return {"status": "ok"}
+
     log_id = await db.insert_raw_log(url, source="manual")
     if log_id is None:
         logger.info("Deduplicated URL from Feishu: %s", url)

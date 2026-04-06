@@ -2,6 +2,19 @@
 
 All notable changes to Aily will be documented in this file.
 
+## [0.4.0.0] - 2026-04-06
+
+### Added
+- `AgentRegistry` for registering and dispatching named agents (`summarizer`, `researcher`, `connector`, `zettel_suggester`)
+- `PlannerPipeline` that reads GraphDB context, prompts an LLM for a JSON execution plan, and runs agent steps sequentially
+- `agent_request` job type routed through `JobWorker` with `_process_agent_job` in `main.py`
+- Feishu webhook extension: non-URL text messages now enqueue `agent_request` jobs
+- `aily/agent/` package with `registry.py`, `agents.py`, `pipeline.py`
+- Comprehensive test coverage for agent registry, planner pipeline, dispatcher routing, and webhook text handling (77 tests total)
+
+### Fixed
+- SQL injection in `GraphDB` and `QueueDB` time-window queries replaced with Python-computed cutoff timestamps and parameterized queries
+
 ## [0.3.0.0] - 2026-04-05
 
 ### Added

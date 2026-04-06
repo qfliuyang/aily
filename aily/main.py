@@ -26,6 +26,14 @@ from aily.graph.db import GraphDB
 from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler
 from aily.llm.client import LLMClient
 from aily.digest.pipeline import DigestPipeline
+from aily.agent.registry import AgentRegistry
+from aily.agent.agents import (
+    summarizer_agent,
+    researcher_agent,
+    connector_agent,
+    zettel_suggester_agent,
+)
+from aily.agent.pipeline import PlannerPipeline
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +55,7 @@ llm_client = LLMClient(
     model=SETTINGS.llm_model,
 )
 digest_scheduler: DailyDigestScheduler | None = None
+agent_registry = AgentRegistry()
 
 ERROR_MESSAGES = {
     "FETCH_FAILED": "Could not fetch the page. The link may be expired or require login.",
@@ -71,6 +80,8 @@ async def _dispatch_job(job: dict) -> None:
         await _process_url_job(job)
     elif job["type"] == "daily_digest":
         await _process_digest_job(job)
+    elif job["type"] == "agent_request":
+        await _process_agent_job(job)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 
@@ -107,6 +118,13 @@ async def _process_digest_job(job: dict) -> None:
     await pipeline.run(open_id=open_id)
 
 
+async def _process_agent_job(job: dict) -> None:
+    request = job["payload"]["request"]
+    open_id = job["payload"].get("open_id", "")
+    pipeline = PlannerPipeline(graph_db, llm_client, agent_registry, writer, pusher)
+    await pipeline.run(request=request, open_id=open_id)
+
+
 async def _notify_failure(open_id: str, code: str) -> None:
     if not open_id:
         return
@@ -134,6 +152,10 @@ async def lifespan(app: FastAPI):
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
     registry.register(r"^https://github\.com/", parse_github)
     registry.register(r"^https://(www\.)?youtube\.com/watch", parse_youtube)
+    agent_registry.register("summarizer", summarizer_agent, "Summarize a piece of text into bullets.")
+    agent_registry.register("researcher", researcher_agent, "Answer a research question.")
+    agent_registry.register("connector", connector_agent, "Find graph connections for a node.")
+    agent_registry.register("zettel_suggester", zettel_suggester_agent, "Suggest Zettelkasten links for a note.")
     worker = JobWorker(db, _dispatch_job)
     await worker.start()
     scheduler = PassiveCaptureScheduler(enqueue_fn=_enqueue_url)

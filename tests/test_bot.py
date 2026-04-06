@@ -136,3 +136,28 @@ def test_missing_url_returns_ok(client: TestClient):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+def test_text_message_enqueues_agent_request(client: TestClient):
+    dedup_cache.clear()
+    payload = {
+        "header": {"event_id": "evt_agent"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "u1"}},
+            "message": {
+                "message_type": "text",
+                "content": json.dumps({"text": "summarize yesterday"}),
+            },
+        },
+    }
+    body = json.dumps(payload).encode()
+    resp = client.post(
+        "/webhook/feishu",
+        content=body,
+        headers={
+            "X-Lark-Request-Timestamp": "1234567890",
+            "X-Lark-Signature": _sign(body),
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
