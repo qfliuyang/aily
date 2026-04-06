@@ -60,7 +60,7 @@ class BrowserUseManager:
             if self._proc is None or self._proc.poll() is not None:
                 await self._spawn()
             try:
-                return await self._send({"type": "fetch", "url": url, "timeout": timeout})
+                return await self._send({"type": "fetch", "url": url, "timeout": timeout}, timeout=timeout + 5)
             except (ConnectionRefusedError, ConnectionResetError, EOFError, OSError) as exc:
                 logger.warning("Subprocess connection lost (attempt %s): %s", attempt + 1, exc)
                 self._proc = None
@@ -74,7 +74,7 @@ class BrowserUseManager:
                 raise BrowserFetchError(str(exc)) from exc
         raise BrowserFetchError("Browser subprocess unavailable")
 
-    async def _send(self, msg: dict) -> str:
+    async def _send(self, msg: dict, timeout: float = 65) -> str:
         if self._port is None:
             raise BrowserFetchError("Browser subprocess not started")
 
@@ -86,7 +86,7 @@ class BrowserUseManager:
                 return conn.recv()
 
         try:
-            response = await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=65)
+            response = await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise BrowserFetchError("IPC timeout waiting for browser subprocess") from exc
 
@@ -103,6 +103,8 @@ class BrowserUseManager:
             str(script),
             "--profile-dir",
             str(self.profile_dir),
+            "--authkey",
+            self.authkey.decode(),
         ]
         self._proc = subprocess.Popen(
             cmd,

@@ -185,3 +185,23 @@ class QueueDB:
             cursor = await db.execute(query, raw_log_ids)
             rows = await cursor.fetchall()
             return {row[0]: row[1] for row in rows}
+
+    async def enqueue_url(self, url: str, open_id: str = "", source: str = "manual") -> bool:
+        url_hash = self._hash_url(url)
+        log_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+        payload = json.dumps({"url": url, "open_id": open_id})
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO raw_ingestion_log (id, url_hash, url, source) VALUES (?, ?, ?, ?)",
+                    (log_id, url_hash, url, source),
+                )
+            except aiosqlite.IntegrityError:
+                return False
+            await db.execute(
+                "INSERT INTO jobs (id, type, payload, status) VALUES (?, ?, ?, ?)",
+                (job_id, "url_fetch", payload, "pending"),
+            )
+            await db.commit()
+        return True

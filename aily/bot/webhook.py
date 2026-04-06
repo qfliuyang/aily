@@ -84,10 +84,9 @@ async def feishu_webhook(request: Request) -> dict:
         logger.info("Enqueued agent request from Feishu: %s", text[:50])
         return {"status": "ok"}
 
-    log_id = await db.insert_raw_log(url, source="manual")
-    if log_id is None:
+    enqueued = await db.enqueue_url(url, open_id=open_id, source="manual")
+    if not enqueued:
         logger.info("Deduplicated URL from Feishu: %s", url)
         return {"status": "ok"}
-    await db.enqueue("url_fetch", {"url": url, "open_id": open_id})
     logger.info("Enqueued URL from Feishu: %s", url)
     return {"status": "ok"}

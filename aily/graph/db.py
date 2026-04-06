@@ -77,11 +77,13 @@ class GraphDB:
 
     async def _execute(self, sql: str, params: tuple | None = None) -> None:
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys=ON")
             await db.execute(sql, params or ())
             await db.commit()
 
     async def _fetchall(self, sql: str, params: tuple | None = None) -> list[tuple]:
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys=ON")
             cursor = await db.execute(sql, params or ())
             return await cursor.fetchall()
 

@@ -67,11 +67,11 @@ ERROR_MESSAGES = {
 
 
 async def _enqueue_url(url: str, open_id: str = "") -> None:
-    log_id = await db.insert_raw_log(url, source="passive" if not open_id else "manual")
-    if log_id is None:
+    source = "passive" if not open_id else "manual"
+    enqueued = await db.enqueue_url(url, open_id=open_id, source=source)
+    if not enqueued:
         logger.info("Deduplicated URL: %s", url)
         return
-    await db.enqueue("url_fetch", {"url": url, "open_id": open_id})
     logger.info("Enqueued URL: %s", url)
 
 
