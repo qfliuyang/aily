@@ -1,6 +1,7 @@
 import hashlib
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +46,9 @@ class QueueDB:
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_ingestion_log(url_hash)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_raw_log_created_at ON raw_ingestion_log(created_at)"
             )
             await db.commit()
 
@@ -149,3 +153,55 @@ class QueueDB:
                 )
             await db.commit()
         return retry_count < max_retries
+
+    @staticmethod
+    def _cutoff(hours: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+
+    async def get_raw_logs_within_hours(self, hours: int) -> list[dict]:
+        cutoff = self._cutoff(hours)
+        query = "SELECT id, url_hash, url, source, created_at FROM raw_ingestion_log WHERE created_at >= ?"
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, (cutoff,))
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "url_hash": row["url_hash"],
+                    "url": row["url"],
+                    "source": row["source"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
+
+    async def get_urls_for_raw_logs(self, raw_log_ids: list[str]) -> dict[str, str]:
+        if not raw_log_ids:
+            return {}
+        placeholders = ",".join("?" for _ in raw_log_ids)
+        query = f"SELECT id, url FROM raw_ingestion_log WHERE id IN ({placeholders})"
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(query, raw_log_ids)
+            rows = await cursor.fetchall()
+            return {row[0]: row[1] for row in rows}
+
+    async def enqueue_url(self, url: str, open_id: str = "", source: str = "manual") -> bool:
+        url_hash = self._hash_url(url)
+        log_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+        payload = json.dumps({"url": url, "open_id": open_id})
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO raw_ingestion_log (id, url_hash, url, source) VALUES (?, ?, ?, ?)",
+                    (log_id, url_hash, url, source),
+                )
+            except aiosqlite.IntegrityError:
+                return False
+            await db.execute(
+                "INSERT INTO jobs (id, type, payload, status) VALUES (?, ?, ?, ?)",
+                (job_id, "url_fetch", payload, "pending"),
+            )
+            await db.commit()
+        return True

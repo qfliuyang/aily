@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     obsidian_rest_api_key: str = ""
     obsidian_vault_path: str = ""
     obsidian_rest_api_port: int = 27123
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_model: str = "gpt-4o-mini"
+    aily_digest_enabled: bool = True
+    aily_digest_hour: int = 9
+    aily_digest_minute: int = 0
+    aily_digest_feishu_open_id: str = ""
     aily_data_dir: Path = Path.home() / ".aily"
 
     model_config = {"env_file": ".env", "extra": "ignore"}

@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 
 from aily.queue.db import QueueDB
 from aily.queue.worker import JobWorker
-from aily.main import process_job
+from aily.main import _process_url_job as process_job
 
 
 @pytest.fixture
