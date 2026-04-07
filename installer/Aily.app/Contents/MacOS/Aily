@@ -1,0 +1,54 @@
+#!/bin/bash
+#
+# Aily macOS Launcher
+# Starts the Aily server and opens the web interface
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+RESOURCES_DIR="$APP_ROOT/Resources"
+AILY_ROOT="$(dirname "$APP_ROOT")"
+
+echo "Starting Aily..."
+
+# Check if running from installed location or development
+if [[ -d "$RESOURCES_DIR/.venv" ]]; then
+    VENV_DIR="$RESOURCES_DIR/.venv"
+    AILY_SRC="$RESOURCES_DIR"
+elif [[ -d "$AILY_ROOT/.venv" ]]; then
+    VENV_DIR="$AILY_ROOT/.venv"
+    AILY_SRC="$AILY_ROOT"
+else
+    echo "Error: Aily virtual environment not found"
+    osascript -e 'display notification "Virtual environment not found" with title "Aily Error"'
+    exit 1
+fi
+
+# Load environment from keychain if available
+export AILY_USE_KEYCHAIN=1
+
+# Start the server
+cd "$AILY_SRC"
+"$VENV_DIR/bin/python" -m aily.main &
+SERVER_PID=$!
+
+# Wait for server to start
+sleep 2
+
+# Check if server is running
+if ! kill -0 $SERVER_PID 2>/dev/null; then
+    echo "Error: Aily server failed to start"
+    osascript -e 'display notification "Server failed to start" with title "Aily Error"'
+    exit 1
+fi
+
+# Open browser
+open "http://127.0.0.1:8000"
+
+# Show menu bar icon (optional - would need additional setup)
+osascript -e 'display notification "Aily is running at http://127.0.0.1:8000" with title "Aily Started"'
+
+# Keep script running to track server
+wait $SERVER_PID

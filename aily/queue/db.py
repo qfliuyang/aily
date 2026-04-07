@@ -50,6 +50,19 @@ class QueueDB:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_raw_log_created_at ON raw_ingestion_log(created_at)"
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_snapshots (
+                    id TEXT PRIMARY KEY,
+                    vault_path TEXT UNIQUE NOT NULL,
+                    original_markdown TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_path ON note_snapshots(vault_path)"
+            )
             await db.commit()
 
     @staticmethod
@@ -205,3 +218,29 @@ class QueueDB:
             )
             await db.commit()
         return True
+
+    async def save_note_snapshot(self, vault_path: str, markdown: str) -> None:
+        snapshot_id = str(uuid.uuid4())
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO note_snapshots (id, vault_path, original_markdown) VALUES (?, ?, ?)",
+                (snapshot_id, vault_path, markdown),
+            )
+            await db.commit()
+
+    async def get_note_snapshot(self, vault_path: str) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, vault_path, original_markdown, created_at FROM note_snapshots WHERE vault_path = ?",
+                (vault_path,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row["id"],
+                "vault_path": row["vault_path"],
+                "original_markdown": row["original_markdown"],
+                "created_at": row["created_at"],
+            }

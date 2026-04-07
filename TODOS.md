@@ -33,13 +33,14 @@
 - **Depends on:** SQLite queue schema defined.
 - **Completed:** v0.2.0.0 (2026-04-05)
 
-### Verify Feishu voice message webhook payload (BUILD NOW)
+### Verify Feishu voice message webhook payload (DONE)
 - **What:** Confirm that Feishu bot webhooks deliver voice messages as audio file URLs, and document the payload format and download auth.
 - **Why:** Voice memo quick-capture was accepted into scope but depends on an unverified Feishu API capability.
-- **Context:** During Day 1–2 Feishu validation, send a voice message to the test bot and inspect the webhook payload. If Feishu does not support voice messages via webhook, pivot voice memos to text-only or use a different entry point.
+- **Context:** Feishu bot webhooks DO support voice messages. The payload contains `event.message.message_type: "voice"` with `content.file_key` and `content.file_name`. Audio files can be downloaded via the Feishu Drive API using the file_key. See `/docs/feishu-voice-webhook.md` for full payload schema and download flow.
 - **Effort:** S → S
 - **Priority:** P1
 - **Depends on:** Feishu test app registered.
+- **Completed:** v0.2.0.0 (2026-04-05)
 
 ### Build BrowserUseManager with subprocess queue (BUILD NOW)
 - **What:** Create a single `BrowserUseManager` that runs Browser Use in a dedicated subprocess/queue. Both the queue worker and passive capture cron enqueue fetch tasks to this subprocess rather than launching Playwright directly.

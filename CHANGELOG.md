@@ -2,6 +2,27 @@
 
 All notable changes to Aily will be documented in this file.
 
+## [0.5.0.0] - 2026-04-07
+
+### Added
+- **Week 2**: BrowserUseManager subprocess IPC, SQLite GraphDB schema (nodes/edges/occurrences), LLMClient, passive capture scheduler with backoff
+- **Week 3**: GraphDB query engine with time-windowed reads, DigestPipeline for daily markdown digests, DailyDigestScheduler, job dispatcher for url_fetch and daily_digest
+- **Week 4**: AgentRegistry and PlannerPipeline with multi-agent dispatch (summarizer, researcher, connector, zettel_suggester)
+- **Week 5-6**: Learning Loop with Obsidian vault watching, snapshot tracking, LLM-driven diff extraction, preference persistence
+- **Week 7-8**: Claude Code session capture, voice memo transcription (Feishu voice downloader + Whisper), Feishu voice webhook support
+- **Week 9**: macOS DMG installer with LaunchAgent auto-start, keychain-based credential storage
+- **Week 10**: Tailscale integration for remote access with status endpoint
+
+### Changed
+- Refactored job worker to support multiple job types (url_fetch, daily_digest, agent_request, voice_message, claude_session)
+- Enhanced ObsidianWriter with draft folder support and aily_generated frontmatter
+- Expanded test suite from 5 to 105 tests covering all new modules
+
+### Infrastructure
+- Added 16 new test modules covering graph DB, LLM client, voice processing, learning loop, and capture systems
+- New modules: aily/network/, aily/learning/, aily/capture/, aily/voice/, aily/security/
+- Installer scripts: installer/build-dmg.sh, install.sh, uninstall.sh
+
 ## [0.4.0.0] - 2026-04-06
 
 ### Added
@@ -51,7 +72,7 @@ All notable changes to Aily will be documented in this file.
 ## [0.1.0.0] - 2026-04-05
 
 ### Added
-- Week 1 reactive pipeline: Feishu bot webhook → SQLite queue → Browser Use fetcher → Obsidian writer
+- Week 1 reactive pipeline: Feishu bot webhook -> SQLite queue -> Browser Use fetcher -> Obsidian writer
 - FastAPI webhook endpoint at `/webhook/feishu` with HMAC signature verification and event deduplication
 - SQLite job queue (`QueueDB`) with enqueue, dequeue, retry, and completion tracking
 - `BrowserFetcher` using Playwright with serialized access via `asyncio.Semaphore(1)`
@@ -60,7 +81,7 @@ All notable changes to Aily will be documented in this file.
 - Parser registry with URL-pattern detection for Kimi, Monica, arXiv, GitHub, YouTube, and generic fallback
 - `JobWorker` async background worker for processing queued URL fetch jobs
 - pytest-asyncio test suite covering webhook handling, queue operations, browser fetching, Obsidian writing, and end-to-end pipeline flow
-- Week 2 implementation plan (`.omc/plans/week2.md`) covering BrowserUseManager subprocess queue, passive capture scheduler, entity graph schema, URL dedup hash, and LLM client wrapper
+- Week 2 implementation plan (`.omc/plans/week2.md`) covering BrowserUseManager subprocess queue, passive capture scheduler, entity graph schema, URL dup hash, and LLM client wrapper
 
 ### Fixed
 - Escape `source_url` in Obsidian frontmatter to prevent malformed YAML from URLs containing quotes

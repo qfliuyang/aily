@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"python3 -c \\\"\\nfrom lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1Data\\n\\nd = P2ImMessageReceiveV1Data({'message': {'content': '{\\\\\\\"text\\\\\\\": \\\\\\\"hello\\\\\\\"...",
-  "error": "Exit code 1\n/Users/luzi/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020\n  warnings.warn(\nTraceback (most recent call last):\n  File \"<string>\", line 7, in <module>\nAttributeError: 'P2ImMessageReceiveV1Data' object has no attribute 'message_id'\nd.message: <lark_oapi.api.im.v1.model.event_message.EventMessag...",
-  "timestamp": "2026-04-04T23:55:51.856Z",
+  "tool_input_preview": "{\"command\":\".venv/bin/python -m pytest tests/test_voice_downloader.py tests/test_voice_transcriber.py -v 2>&1\",\"timeout\":60000,\"description\":\"Run voice pipeline tests\"}",
+  "error": "Exit code 1\n============================= test session starts ==============================\nplatform darwin -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0 -- /Users/luzi/code/aily/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /Users/luzi/code/aily\nconfigfile: pytest.ini\nplugins: anyio-4.12.1, asyncio-1.3.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollecting ... collected 10 items\n\ntests/test_voice_downloader.py::t...",
+  "timestamp": "2026-04-07T04:24:59.678Z",
   "retry_count": 1
 }

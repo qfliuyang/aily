@@ -73,6 +73,16 @@ class GraphDB:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_occurrences_created_at ON occurrences(created_at)"
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    id TEXT PRIMARY KEY,
+                    preference TEXT NOT NULL,
+                    source_note_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             await db.commit()
 
     async def _execute(self, sql: str, params: tuple | None = None) -> None:
@@ -115,6 +125,12 @@ class GraphDB:
         await self._execute(
             "INSERT INTO occurrences (id, node_id, raw_log_id) VALUES (?, ?, ?)",
             (occurrence_id, node_id, raw_log_id),
+        )
+
+    async def insert_preference(self, preference_id: str, preference: str, source_note_path: str) -> None:
+        await self._execute(
+            "INSERT INTO user_preferences (id, preference, source_note_path) VALUES (?, ?, ?)",
+            (preference_id, preference, source_note_path),
         )
 
     async def get_nodes_by_type(self, node_type: str) -> list[dict]:

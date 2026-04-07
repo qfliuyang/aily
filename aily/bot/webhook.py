@@ -13,9 +13,11 @@ from fastapi import APIRouter, Request, HTTPException
 
 from aily.config import SETTINGS
 from aily.queue.db import QueueDB
+from aily.network.tailscale import TailscaleClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+tailscale_client = TailscaleClient()
 
 dedup_cache: dict[str, float] = {}
 DEDUP_TTL = 60.0
@@ -68,16 +70,37 @@ async def feishu_webhook(request: Request) -> dict:
 
     event = data.get("event", {})
     message = event.get("message", {})
-    if message.get("message_type") != "text":
+    msg_type = message.get("message_type", "")
+
+    db = QueueDB(SETTINGS.queue_db_path)
+    await db.initialize()
+    open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
+
+    # Handle voice messages
+    if msg_type == "voice":
+        content = json.loads(message.get("content", "{}"))
+        file_key = content.get("file_key")
+        file_name = content.get("file_name", "voice.mp3")
+        if file_key and SETTINGS.feishu_voice_enabled:
+            await db.enqueue(
+                "voice_message",
+                {
+                    "file_key": file_key,
+                    "file_name": file_name,
+                    "open_id": open_id,
+                    "message_id": message.get("message_id", ""),
+                },
+            )
+            logger.info("Enqueued voice message: %s", file_key)
+        return {"status": "ok"}
+
+    # Only handle text messages from here
+    if msg_type != "text":
         return {"status": "ok"}
 
     content = json.loads(message.get("content", "{}"))
     text = content.get("text", "")
     url = _extract_url(text)
-
-    db = QueueDB(SETTINGS.queue_db_path)
-    await db.initialize()
-    open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
 
     if url is None:
         await db.enqueue("agent_request", {"request": text, "open_id": open_id})
@@ -90,3 +113,20 @@ async def feishu_webhook(request: Request) -> dict:
         return {"status": "ok"}
     logger.info("Enqueued URL from Feishu: %s", url)
     return {"status": "ok"}
+
+
+@router.get("/status")
+async def status() -> dict:
+    """Get Aily status including Tailscale connectivity."""
+    ts_status = await tailscale_client.get_status()
+    return {
+        "aily_version": "0.9.0",
+        "tailscale": {
+            "is_running": ts_status.is_running,
+            "is_logged_in": ts_status.is_logged_in,
+            "tailnet_name": ts_status.tailnet_name,
+            "ip_addresses": ts_status.ip_addresses,
+            "magic_dns_name": ts_status.magic_dns_name,
+            "aily_url": tailscale_client.get_aily_url(ts_status),
+        },
+    }

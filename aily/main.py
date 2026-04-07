@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 import uvicorn
@@ -23,7 +24,7 @@ from aily.parser.parsers import (
     parse_youtube,
 )
 from aily.graph.db import GraphDB
-from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler
+from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler, ClaudeCodeCaptureScheduler
 from aily.llm.client import LLMClient
 from aily.digest.pipeline import DigestPipeline
 from aily.agent.registry import AgentRegistry
@@ -34,6 +35,10 @@ from aily.agent.agents import (
     zettel_suggester_agent,
 )
 from aily.agent.pipeline import PlannerPipeline
+from aily.learning.loop import LearningLoop
+from aily.voice.downloader import FeishuVoiceDownloader, FeishuVoiceError
+from aily.voice.transcriber import WhisperTranscriber, TranscriptionError
+from aily.network.tailscale import TailscaleClient
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +51,7 @@ writer = ObsidianWriter(
     SETTINGS.obsidian_rest_api_key,
     SETTINGS.obsidian_vault_path,
     SETTINGS.obsidian_rest_api_port,
+    queue_db=db,
 )
 worker: JobWorker | None = None
 scheduler: PassiveCaptureScheduler | None = None
@@ -55,7 +61,10 @@ llm_client = LLMClient(
     model=SETTINGS.llm_model,
 )
 digest_scheduler: DailyDigestScheduler | None = None
+learning_loop: LearningLoop | None = None
+claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 agent_registry = AgentRegistry()
+tailscale_client = TailscaleClient()
 
 ERROR_MESSAGES = {
     "FETCH_FAILED": "Could not fetch the page. The link may be expired or require login.",
@@ -82,6 +91,10 @@ async def _dispatch_job(job: dict) -> None:
         await _process_digest_job(job)
     elif job["type"] == "agent_request":
         await _process_agent_job(job)
+    elif job["type"] == "voice_message":
+        await _process_voice_job(job)
+    elif job["type"] == "claude_session":
+        await _process_claude_session_job(job)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 
@@ -125,6 +138,126 @@ async def _process_agent_job(job: dict) -> None:
     await pipeline.run(request=request, open_id=open_id)
 
 
+async def _process_voice_job(job: dict) -> None:
+    """Process a voice message: download, transcribe, and create note."""
+    payload = job["payload"]
+    file_key = payload["file_key"]
+    file_name = payload.get("file_name", "voice.mp3")
+    open_id = payload.get("open_id", "")
+
+    # Get Whisper API key (fallback to LLM API key for OpenAI)
+    whisper_key = SETTINGS.whisper_api_key or SETTINGS.llm_api_key
+    if not whisper_key:
+        logger.error("No Whisper API key configured")
+        if open_id:
+            await pusher.send_message(open_id, "Voice transcription not configured.")
+        return
+
+    downloader = FeishuVoiceDownloader(
+        app_id=SETTINGS.feishu_app_id,
+        app_secret=SETTINGS.feishu_app_secret,
+        temp_dir=SETTINGS.voice_temp_dir,
+    )
+    transcriber = WhisperTranscriber(
+        api_key=whisper_key,
+        model=SETTINGS.whisper_model,
+    )
+
+    try:
+        # Download voice file
+        download_result = await downloader.download_voice(file_key, file_name)
+
+        # Transcribe
+        transcription = await transcriber.transcribe(download_result.file_path)
+
+        if not transcription.text:
+            if open_id:
+                await pusher.send_message(open_id, "Could not transcribe voice message.")
+            return
+
+        # Create note from transcription
+        note_title = f"Voice Memo {job['id'][:8]}"
+        note_content = f"""# Voice Memo
+
+**Transcribed:** {transcription.text}
+
+**Language:** {transcription.language or "unknown"}
+**Duration:** {transcription.duration_seconds or "unknown"}s
+
+**Original file:** {file_name}
+"""
+        note_path = await writer.write_note(
+            note_title,
+            note_content,
+            f"feishu://voice/{file_key}",
+        )
+
+        if open_id:
+            await pusher.send_message(
+                open_id,
+                f"Voice memo transcribed and saved: {note_path}\n\nPreview: {transcription.text[:100]}..."
+            )
+
+        logger.info("Voice message processed: %s -> %s", file_key, note_path)
+
+    except FeishuVoiceError as e:
+        logger.exception("Failed to download voice message")
+        if open_id:
+            await pusher.send_message(open_id, f"Failed to download voice: {e}")
+        raise
+    except TranscriptionError as e:
+        logger.exception("Failed to transcribe voice message")
+        if open_id:
+            await pusher.send_message(open_id, f"Failed to transcribe: {e}")
+        raise
+    finally:
+        await transcriber.close()
+
+
+async def _process_claude_session_job(job: dict) -> None:
+    """Process a Claude Code session capture job."""
+    from aily.capture.claude_code import ClaudeCodeSessionCapture, SessionMetadata
+    from datetime import datetime, timezone
+
+    file_path = Path(job["payload"]["file_path"])
+
+    try:
+        capture = ClaudeCodeSessionCapture()
+        entries = await capture.parse_session(file_path)
+
+        if not entries:
+            logger.warning("No entries found in session: %s", file_path)
+            return
+
+        # Get title from first user message
+        title = await capture.get_session_title(entries)
+
+        # Create metadata for formatting
+        stat = file_path.stat()
+        mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        session_id = capture._extract_session_id(file_path.name)
+
+        metadata = SessionMetadata(
+            session_id=session_id,
+            project=None,  # Could extract from first entry
+            started_at=mtime,
+            file_path=file_path,
+        )
+
+        markdown = await capture.format_as_markdown(entries, metadata)
+        note_path = await writer.write_note(
+            title=f"Claude: {title[:60]}",
+            markdown=markdown,
+            source_url=f"claude://session/{session_id}",
+        )
+
+        logger.info("Claude session captured: %s -> %s", file_path, note_path)
+
+    except Exception:
+        logger.exception("Failed to capture Claude session: %s", file_path)
+        raise
+
+
 async def _notify_failure(open_id: str, code: str) -> None:
     if not open_id:
         return
@@ -142,11 +275,37 @@ async def _enqueue_digest() -> None:
     logger.info("Enqueued daily digest")
 
 
+async def _enqueue_claude_session(file_path: Path) -> None:
+    await db.enqueue("claude_session", {"file_path": str(file_path)})
+    logger.info("Enqueued Claude session capture: %s", file_path)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker, scheduler, digest_scheduler
+    global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler
     await db.initialize()
     await graph_db.initialize()
+
+    # Check Tailscale status
+    try:
+        ts_status = await tailscale_client.get_status()
+        if ts_status.is_running and ts_status.is_logged_in:
+            url = tailscale_client.get_aily_url(ts_status)
+            logger.info("Tailscale connected: %s (%s)", ts_status.magic_dns_name or ts_status.ip_addresses[0], url)
+        elif ts_status.is_running:
+            logger.info("Tailscale running but not logged in")
+        else:
+            logger.info("Tailscale not running - remote access unavailable")
+    except Exception:
+        logger.debug("Tailscale status check failed", exc_info=True)
+    if SETTINGS.obsidian_vault_path:
+        learning_loop = LearningLoop(
+            vault_path=Path(SETTINGS.obsidian_vault_path),
+            queue_db=db,
+            graph_db=graph_db,
+            llm=llm_client,
+        )
+        await learning_loop.start()
     registry.register(r"^https://kimi\.moonshot\.cn/share/", parse_kimi)
     registry.register(r"^https://monica\.im/", parse_monica)
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
@@ -166,8 +325,14 @@ async def lifespan(app: FastAPI):
         minute=SETTINGS.aily_digest_minute,
     )
     digest_scheduler.start()
+    claude_capture_scheduler = ClaudeCodeCaptureScheduler(enqueue_session_fn=_enqueue_claude_session)
+    claude_capture_scheduler.start()
     logger.info("Aily startup complete")
     yield
+    if learning_loop:
+        await learning_loop.stop()
+    if claude_capture_scheduler:
+        claude_capture_scheduler.stop()
     if digest_scheduler:
         digest_scheduler.stop()
     if scheduler:

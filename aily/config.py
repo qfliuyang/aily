@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     aily_digest_feishu_open_id: str = ""
     aily_data_dir: Path = Path.home() / ".aily"
 
+    # Voice memo settings
+    feishu_voice_enabled: bool = False  # Disabled by default until configured
+    whisper_api_key: str = ""  # Falls back to llm_api_key if empty
+    whisper_model: str = "whisper-1"
+    voice_temp_dir: Path = Path("/tmp/aily_voice")
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property

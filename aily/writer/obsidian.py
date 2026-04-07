@@ -8,6 +8,8 @@ from typing import Optional
 
 import aiohttp
 
+from aily.queue.db import QueueDB
+
 
 class ObsidianAPIError(Exception):
     pass
@@ -20,11 +22,13 @@ class ObsidianWriter:
         vault_path: str,
         port: int = 27123,
         draft_folder: str = "Aily Drafts",
+        queue_db: Optional[QueueDB] = None,
     ) -> None:
         self.api_key = api_key
         self.vault_path = Path(vault_path)
         self.base_url = f"http://127.0.0.1:{port}"
         self.draft_folder = draft_folder
+        self.queue_db = queue_db
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -61,6 +65,8 @@ class ObsidianWriter:
                     ) from exc
             except Exception as exc:
                 raise ObsidianAPIError(str(exc)) from exc
+        if self.queue_db is not None:
+            await self.queue_db.save_note_snapshot(path, payload)
         return path
 
     async def _put_with_retry(
