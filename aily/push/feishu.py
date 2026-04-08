@@ -19,6 +19,7 @@ class FeishuPusher:
         )
 
     async def send_message(self, receive_id: str, content: str) -> bool:
+        import asyncio
         body = (
             CreateMessageRequestBodyBuilder()
             .receive_id(receive_id)
@@ -32,5 +33,7 @@ class FeishuPusher:
             .request_body(body)
             .build()
         )
-        resp = await self.client.im.v1.message.create.arequest(req)
+        # Run synchronous client in thread pool
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(None, lambda: self.client.im.v1.message.create(req))
         return resp.success()

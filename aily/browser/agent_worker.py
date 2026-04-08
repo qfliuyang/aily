@@ -117,20 +117,20 @@ async def _fetch_with_agent(url: str, timeout: int, profile_dir: str, llm_config
     login_hint = "You are already logged in. " if is_logged_in else ""
 
     extraction_task = f"""
-    Navigate to {url} and extract the main content.
+    Navigate to {url} and extract all visible content.
 
     Instructions:
     1. Navigate to the URL and wait for page to fully load (up to 30 seconds)
-    2. If you see a chat interface, explore it and extract visible conversations
-    3. If you see a history/sidebar, click through recent items to gather content
-    4. {login_hint}If logged in, access the user's content directly
-    5. If there's a login modal and you're not logged in, report "AUTH_REQUIRED"
-    6. Extract the main readable content (chat, article, or document)
-    7. Preserve the structure (headings, lists, code blocks, chat messages)
-    8. Add small delays (1-2 seconds) between actions to avoid rate limiting
-    9. Return the content in markdown format
+    2. {login_hint}Look for the main content area (chat messages, article text, or document content)
+    3. Use the extract_content action to capture the visible text from the main content area
+    4. If you see a chat interface, scroll to load more messages, then extract all conversation
+    5. If content is in a sidebar or requires clicking, explore and extract from those areas too
+    6. Preserve the structure - keep chat message order, code blocks, and formatting
+    7. Add small delays (1-2 seconds) between scroll/actions to let content load
+    8. Your final action should be 'done' with the extracted content as the answer
 
-    Be thorough but focus on the main content area, not navigation or ads.
+    IMPORTANT: You MUST use the extract_content tool/action to capture the actual page content.
+    Do not just navigate and stop - actively extract the text content.
     """
 
     agent = Agent(
@@ -146,8 +146,16 @@ async def _fetch_with_agent(url: str, timeout: int, profile_dir: str, llm_config
             timeout=timeout
         )
 
-        # Extract content from agent result
-        extracted_text = result.extracted_content() if hasattr(result, 'extracted_content') else str(result)
+        # Extract content from agent result using final_result() method
+        extracted_text = None
+        if hasattr(result, 'final_result'):
+            extracted_text = result.final_result()
+        if not extracted_text and hasattr(result, 'extracted_content'):
+            # Fallback to extracted_content list
+            content_list = result.extracted_content()
+            extracted_text = '\n'.join(content_list) if content_list else None
+        if not extracted_text:
+            extracted_text = str(result) if result else 'No content extracted'
 
         # Get page info if available
         page_title = "Untitled"

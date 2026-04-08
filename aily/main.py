@@ -15,6 +15,7 @@ from aily.browser.fetcher import BrowserFetcher, FetchError
 from aily.push.feishu import FeishuPusher
 from aily.writer.obsidian import ObsidianWriter, ObsidianAPIError
 from aily.bot import webhook
+from aily.bot.ws_client import get_ws_client
 from aily.parser import registry
 from aily.parser.parsers import (
     parse_kimi,
@@ -63,6 +64,7 @@ llm_client = LLMClient(
 digest_scheduler: DailyDigestScheduler | None = None
 learning_loop: LearningLoop | None = None
 claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
+ws_client = None
 agent_registry = AgentRegistry()
 tailscale_client = TailscaleClient()
 
@@ -282,9 +284,14 @@ async def _enqueue_claude_session(file_path: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler
+    global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
     await db.initialize()
     await graph_db.initialize()
+
+    # Start Feishu WebSocket client for receiving messages
+    ws_client = get_ws_client(db)
+    ws_client.start()
+    logger.info("Feishu WebSocket client started")
 
     # Check Tailscale status
     try:
@@ -329,6 +336,8 @@ async def lifespan(app: FastAPI):
     claude_capture_scheduler.start()
     logger.info("Aily startup complete")
     yield
+    if ws_client:
+        ws_client.stop()
     if learning_loop:
         await learning_loop.stop()
     if claude_capture_scheduler:
