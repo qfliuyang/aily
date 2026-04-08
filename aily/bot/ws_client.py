@@ -75,6 +75,25 @@ class FeishuWSClient:
                 logger.info("[FeishuWS] Voice message: %s", file_key)
                 asyncio.create_task(self._enqueue_voice(file_key, file_name, open_id))
 
+        # Handle file attachments (PDFs, documents, etc)
+        elif msg_type == "file":
+            content = json.loads(message.content)
+            file_key = content.get("file_key")
+            file_name = content.get("file_name", "document")
+
+            if file_key:
+                logger.info("[FeishuWS] File attachment: %s (%s)", file_name, file_key)
+                asyncio.create_task(self._enqueue_file(file_key, file_name, open_id))
+
+        # Handle images (for OCR)
+        elif msg_type == "image":
+            content = json.loads(message.content)
+            image_key = content.get("image_key")
+
+            if image_key:
+                logger.info("[FeishuWS] Image message: %s", image_key)
+                asyncio.create_task(self._enqueue_image(image_key, open_id))
+
     async def _enqueue_url(self, url: str, open_id: str) -> None:
         """Enqueue URL fetch job."""
         try:
@@ -101,6 +120,37 @@ class FeishuWSClient:
             logger.info("[FeishuWS] Voice enqueued: %s", file_key)
         except Exception as e:
             logger.exception("[FeishuWS] Failed to enqueue voice: %s", e)
+
+    async def _enqueue_file(self, file_key: str, file_name: str, open_id: str) -> None:
+        """Enqueue file attachment job (PDF, document, etc)."""
+        try:
+            await self.db.enqueue(
+                "file_attachment",
+                {
+                    "file_key": file_key,
+                    "file_name": file_name,
+                    "open_id": open_id,
+                    "source": "feishu_file",
+                },
+            )
+            logger.info("[FeishuWS] File enqueued: %s (%s)", file_name, file_key)
+        except Exception as e:
+            logger.exception("[FeishuWS] Failed to enqueue file: %s", e)
+
+    async def _enqueue_image(self, image_key: str, open_id: str) -> None:
+        """Enqueue image for OCR processing."""
+        try:
+            await self.db.enqueue(
+                "image_ocr",
+                {
+                    "image_key": image_key,
+                    "open_id": open_id,
+                    "source": "feishu_image",
+                },
+            )
+            logger.info("[FeishuWS] Image enqueued for OCR: %s", image_key)
+        except Exception as e:
+            logger.exception("[FeishuWS] Failed to enqueue image: %s", e)
 
     def start(self) -> None:
         """Start the WebSocket client."""

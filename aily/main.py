@@ -97,6 +97,10 @@ async def _dispatch_job(job: dict) -> None:
         await _process_voice_job(job)
     elif job["type"] == "claude_session":
         await _process_claude_session_job(job)
+    elif job["type"] == "file_attachment":
+        await _process_file_job(job)
+    elif job["type"] == "image_ocr":
+        await _process_image_job(job)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 
@@ -257,6 +261,125 @@ async def _process_claude_session_job(job: dict) -> None:
 
     except Exception:
         logger.exception("Failed to capture Claude session: %s", file_path)
+        raise
+
+
+async def _process_file_job(job: dict) -> None:
+    """Process file attachment (PDF, document, etc) using universal processor."""
+    from aily.processing.router import ProcessingRouter
+    from aily.voice.downloader import FeishuVoiceDownloader
+
+    payload = job["payload"]
+    file_key = payload["file_key"]
+    file_name = payload.get("file_name", "document")
+    open_id = payload.get("open_id", "")
+
+    logger.info("Processing file attachment: %s (%s)", file_name, file_key)
+
+    # Download file from Feishu
+    downloader = FeishuVoiceDownloader(
+        app_id=SETTINGS.feishu_app_id,
+        app_secret=SETTINGS.feishu_app_secret,
+        temp_dir=SETTINGS.voice_temp_dir,
+    )
+
+    try:
+        # Reuse voice downloader for file download (same API)
+        download_result = await downloader.download_voice(file_key, file_name)
+        file_bytes = Path(download_result.file_path).read_bytes()
+
+        # Process with universal router
+        router = ProcessingRouter()
+        result = await router.process(file_bytes, filename=file_name)
+
+        if not result.text or result.text.startswith("["):
+            logger.warning("No text extracted from file: %s", file_name)
+            if open_id:
+                await pusher.send_message(open_id, f"Could not extract text from {file_name}")
+            return
+
+        # Create note from extracted content
+        safe_title = "".join(c for c in file_name if c.isalnum() or c in " -_").rstrip()
+        note_path = await writer.write_note(
+            title=f"File: {safe_title[:80]}",
+            markdown=result.text,
+            source_url=f"feishu://file/{file_key}",
+        )
+
+        logger.info("File processed: %s -> %s", file_name, note_path)
+
+        if open_id:
+            await pusher.send_message(
+                open_id,
+                f"Processed {file_name} ({result.source_type}): {note_path}\n\nPreview: {result.text[:100]}..."
+            )
+
+    except Exception as e:
+        logger.exception("Failed to process file: %s", file_name)
+        if open_id:
+            await pusher.send_message(open_id, f"Failed to process {file_name}: {e}")
+        raise
+
+
+async def _process_image_job(job: dict) -> None:
+    """Process image with OCR."""
+    from aily.processing.router import ProcessingRouter
+    from aily.voice.downloader import FeishuVoiceDownloader
+
+    payload = job["payload"]
+    image_key = payload["image_key"]
+    open_id = payload.get("open_id", "")
+
+    logger.info("Processing image for OCR: %s", image_key)
+
+    # Download image from Feishu
+    downloader = FeishuVoiceDownloader(
+        app_id=SETTINGS.feishu_app_id,
+        app_secret=SETTINGS.feishu_app_secret,
+        temp_dir=SETTINGS.voice_temp_dir,
+    )
+
+    try:
+        download_result = await downloader.download_voice(image_key, "image.png")
+        image_bytes = Path(download_result.file_path).read_bytes()
+
+        # Process with universal router (will use ImageProcessor)
+        router = ProcessingRouter()
+        result = await router.process(image_bytes, filename="image.png")
+
+        if not result.text:
+            logger.warning("No text found in image: %s", image_key)
+            if open_id:
+                await pusher.send_message(open_id, "No text detected in image")
+            return
+
+        # Create note from OCR text
+        note_path = await writer.write_note(
+            title=f"Image OCR {job['id'][:8]}",
+            markdown=f"""# Image OCR
+
+**OCR Confidence:** {result.metadata.get('ocr_confidence', 'unknown')}
+**Text Blocks:** {result.metadata.get('text_blocks', 0)}
+
+## Extracted Text
+
+{result.text}
+""",
+            source_url=f"feishu://image/{image_key}",
+        )
+
+        logger.info("Image OCR complete: %s -> %s", image_key, note_path)
+
+        if open_id:
+            await pusher.send_message(
+                open_id,
+                f"OCR complete! Found {result.metadata.get('text_blocks', 0)} text blocks.\n\nPreview: {result.text[:100]}..."
+            )
+
+    except Exception as e:
+        logger.exception("Failed to process image: %s", image_key)
+        if open_id:
+            await pusher.send_message(open_id, f"Failed to process image: {e}")
         raise
 
 
