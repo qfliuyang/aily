@@ -2,11 +2,12 @@
 
 **Review Date:** 2026-04-08
 **Scope:** Week 5 Implementation — Neuroscience-based knowledge processing
+**Vision:** Aily as conversational knowledge curator that excites memory like a master/guru
 **Components Reviewed:**
-- `aily/processing/atomicizer.py` — Atomic Note Generator
-- `aily/learning/srs.py` — Spaced Repetition Scheduler
-- `aily/learning/recall.py` — Active Recall Question Generator
-- `aily/learning/loop.py` — Learning Loop (vault watcher)
+- `aily/processing/atomicizer.py` — Atomic Note Generator (encoding)
+- `aily/learning/srs.py` — Spaced Repetition Scheduler (consolidation)
+- `aily/learning/recall.py` — Active Recall Question Generator (retrieval)
+- `aily/learning/loop.py` — Learning Loop (vault watcher for elaboration)
 
 **Test Results:** 51 passed, 0 failed
 
@@ -14,11 +15,22 @@
 
 ## Decision: ACCEPT with logging fix required
 
-The implementation successfully delivers the four-phase memory model based on neuroscience research. Architecture is clean, separation of concerns is good, and test coverage is comprehensive.
+The implementation successfully delivers the four-phase memory model based on neuroscience research. Aily now supports the complete knowledge cycle: **encoding → elaboration → consolidation → retrieval**. Architecture is clean, separation of concerns is good, and test coverage is comprehensive.
+
+This brings Aily closer to its vision: not just saving links, but engaging the user in conversation like a thoughtful master—surfacing connections, testing recall, and exciting memory at optimal moments.
 
 ---
 
 ## Key Findings
+
+### Vision Alignment (Excellent)
+The implementation moves Aily from "link saver" toward "conversational knowledge curator":
+- **Atomic notes** force the user to engage with one idea at a time (encoding quality)
+- **Connection suggestions** surface patterns the user might miss (master's insight)
+- **Spaced repetition** ensures knowledge compounds rather than decays
+- **Active recall** transforms passive consumption into active learning
+
+This enables the core experience: *Aily messages you at the right moment with the right provocation—like a master who knows what you've learned and what you're ready to integrate.*
 
 ### Architecture (Good)
 - Clean separation across encoding (atomicizer), elaboration (connections), consolidation (SRS), and retrieval (recall)
@@ -80,10 +92,26 @@ The implementation successfully delivers the four-phase memory model based on ne
 ## Completion Status
 
 All acceptance criteria from Week 5 plan are met:
-- Atomic notes with single-idea constraint
-- Spaced repetition with Ebbinghaus intervals
-- Active recall with three question types
-- Connection suggestions via keyword similarity
-- 51 tests with zero failures
+- ✅ Atomic notes with single-idea constraint (encoding)
+- ✅ Spaced repetition with Ebbinghaus intervals (consolidation)
+- ✅ Active recall with three question types (retrieval)
+- ✅ Connection suggestions via keyword similarity (elaboration)
+- ✅ 51 tests with zero failures
 
 **Ship condition:** Add logging, then proceed.
+
+---
+
+## Next: The "Guru Mode" Vision
+
+With the learning loop complete, Aily can now evolve toward its ultimate form: **conversational knowledge companion**.
+
+### Immediate Next Steps
+1. Proactive Feishu messages when collisions detected
+2. "Can you explain X?" recall prompts at scheduled intervals
+3. Weekly insight synthesis: "3 ideas formed a pattern..."
+
+### Future: Accumulating Queries
+Following Karpathy's pattern—user questions and Aily's answers feed back into the knowledge base, enriching it for future queries. Each conversation makes Aily wiser about what the user knows and what they're ready to learn.
+
+**The goal:** Aily becomes a presence that understands your knowledge graph so well, it feels like chatting with a master who has been studying alongside you all along.
