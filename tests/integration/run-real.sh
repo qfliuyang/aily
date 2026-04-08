@@ -137,6 +137,8 @@ case "$COMMAND" in
         echo "  test       Run all real service tests (default)"
         echo "  e2e        Run E2E MVP tests (core value validation)"
         echo "  visual     Run Visual tests (screenshots + video)"
+        echo "  tavily     Run Tavily Search API tests"
+        echo "  verify     Run Claim Verification tests"
         echo "  feishu     Run Feishu tests only"
         echo "  obsidian   Run Obsidian tests only"
         echo "  browser    Run Browser tests only"
@@ -147,7 +149,8 @@ case "$COMMAND" in
         echo "  ./run-real.sh              # Run all tests"
         echo "  ./run-real.sh e2e          # Test core value (link → note)"
         echo "  ./run-real.sh visual       # Capture visual artifacts"
-        echo "  ./run-real.sh feishu       # Test Feishu only"
+        echo "  ./run-real.sh tavily       # Test AI search"
+        echo "  ./run-real.sh verify       # Test claim verification"
         echo "  ./run-real.sh test -x      # Stop on first failure"
         ;;
 esac

@@ -81,6 +81,75 @@ Each visual test generates:
 | `test_docker_browser_capabilities` | Font rendering, CSS support |
 | `test_video_recording_quality` | Recording integrity, frame capture |
 
+## Tavily Search Tests (AI-Optimized Search)
+
+Tavily provides clean, structured search results via API - no browser automation needed.
+
+### Running Tavily Tests
+
+```bash
+# Run Tavily search tests
+./run-real.sh tavily
+
+# Or directly
+pytest tests/integration/test_tavily_search.py -v -s
+```
+
+### Prerequisites
+
+```bash
+export TAVILY_API_KEY="tvly-dev-xxxxxxxx"
+export TAVILY_SEARCH_DEPTH="basic"  # or "advanced"
+```
+
+Get your API key at [tavily.com](https://tavily.com)
+
+### Tavily Tests
+
+| Test | What It Proves |
+|------|----------------|
+| `test_tavily_basic_search` | API connectivity, response structure |
+| `test_tavily_to_markdown` | Markdown formatting for Obsidian |
+
+### Why Tavily Instead of Google
+
+| Google Search | Tavily API |
+|---------------|------------|
+| reCAPTCHA blocks automation | Clean API, no anti-bot |
+| Unstructured HTML results | Structured JSON with summaries |
+| Brittle scraping | Reliable, documented API |
+| Slow (page loads) | Fast (direct API response) |
+
+## Verification Tests (Source Fact-Checking)
+
+Like a human researcher clicking source links to verify claims.
+
+### Running Verification Tests
+
+```bash
+# Run claim verification tests
+./run-real.sh verify
+
+# Or directly
+pytest tests/integration/test_verification.py -v -s
+```
+
+### Verification Tests
+
+| Test | What It Proves |
+|------|----------------|
+| `test_claim_extraction` | Finds verifiable facts in markdown |
+| `test_keyword_verification` | Fallback verification without LLM |
+| `test_verification_end_to_end` | Full pipeline with real sources |
+
+### How It Works
+
+1. AI generates digest with claims
+2. **Extractor** finds: "Transformer achieves 27.5 BLEU"
+3. **Verifier** fetches arXiv source
+4. **Comparator** confirms claim matches source
+5. Results: ✅ verified or ⚠️ flagged
+
 ### Docker Visual Testing
 
 In Docker environments, visual tests verify:

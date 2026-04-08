@@ -1,5 +1,22 @@
 # Aily TODOS
 
+## Recently Completed
+
+### Tavily Search API Integration (COMPLETED 2026-04-08)
+- **What:** Add Tavily AI search API as alternative to Google scraping (which triggers anti-bot)
+- **Implementation:** `aily/search/tavily.py` with `TavilyClient`, `search_to_notes()` markdown export
+- **Config:** `tavily_api_key`, `tavily_search_depth` (basic/advanced)
+- **Why:** Google's reCAPTCHA blocks browser automation. Tavily provides structured, LLM-optimized search results via clean API.
+- **Tests:** NO MOCK integration tests with real API calls, sample markdown output in evidence/
+
+### Claim Verification Layer (COMPLETED 2026-04-08)
+- **What:** Auto-verify AI-generated claims by fetching sources and comparing content - like a human clicking links
+- **Implementation:** `aily/verify/verifier.py` with `ClaimExtractor` and `ClaimVerifier`
+- **Integration:** `DigestPipeline` auto-verifies all claims, adds verification section to notes
+- **Output:** Feishu notifications show "✅ X claims verified / ⚠️ Y need review"
+- **Why:** When AI writes reports, humans naturally check sources. Now Aily does this automatically.
+- **Tests:** NO MOCK tests for extraction, keyword verification, and E2E with arXiv
+
 ## Deferred from Eng Review
 
 ### Evaluate SQLite connection pooling for GraphDB and QueueDB
@@ -102,4 +119,22 @@
 - **Priority:** P1
 - **Depends on:** BrowserUseManager implemented.
 - **Completed:** v0.2.0.0 (2026-04-05)
+
+## P0 Items from CEO Review (Query Layer) - COMPLETED
+
+### P0-1: Define content storage strategy (COMPLETED 2026-04-07)
+- **What:** Create `node_content` table separate from `nodes` to store searchable content and embeddings
+- **Schema:** `node_id TEXT PRIMARY KEY, content TEXT, content_hash TEXT, embedding BLOB, embedding_model TEXT, embedded_at TIMESTAMP, source_type TEXT, source_ref TEXT`
+- **Rationale:** Clean separation between graph structure and searchable content; embeddings can be regenerated without affecting graph topology
+- **Content Resolution:** Obsidian notes → `note_snapshots.original_markdown`, URL sources → parsed content, Voice memos → transcription text
+
+### P0-2: Make sqlite-vss vs pgvector decision (COMPLETED 2026-04-07)
+- **Decision:** Store embeddings as BLOBs in SQLite, use brute-force cosine similarity in Python
+- **Rationale:** sqlite-vss requires custom SQLite build (risky with aiosqlite), pgvector requires PostgreSQL (overkill for personal use). 10K nodes × 6KB = 60MB fits in memory. 10 QPM means O(N) search is acceptable (~50ms for 10K nodes).
+- **Migration Path:** Phase 1: BLOBs + brute-force (now). Phase 2: pgvector if >50K nodes (future).
+
+### P0-3: Add tiktoken to LLM client (COMPLETED 2026-04-07)
+- **What:** Add token counting capability to LLMClient for RAG pipeline token management
+- **Implementation:** Add `tiktoken>=0.5.0` to requirements, implement `count_tokens()` and `count_message_tokens()` methods
+- **Usage:** Enforce 4000 token limit in RAG synthesis pipeline
 

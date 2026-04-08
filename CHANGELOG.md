@@ -2,6 +2,28 @@
 
 All notable changes to Aily will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Tavily Search API integration** (`aily/search/`) - AI-optimized search without browser automation
+  - `TavilyClient` with async search and markdown export
+  - `search_to_notes()` method formats results as Obsidian-ready markdown
+  - Config: `tavily_api_key`, `tavily_search_depth` (basic/advanced)
+- **Claim Verification layer** (`aily/verify/`) - Like a human clicking source links to check claims
+  - `ClaimExtractor` finds verifiable facts in markdown (bold text, numbers, versions)
+  - `ClaimVerifier` fetches sources and validates claims using LLM or keyword matching
+  - Integrated into `DigestPipeline` - auto-verifies all claims before saving
+  - Verification section added to daily digests with ✅ verified / ⚠️ flagged status
+  - Feishu notifications include verification summary
+- **NO MOCK integration tests** for search and verification
+  - `test_tavily_search.py` - Real Tavily API calls with markdown output
+  - `test_verification.py` - Claim extraction, keyword verification, E2E with arXiv
+  - `./run-real.sh tavily` and `./run-real.sh verify` commands
+
+### Why These Changes
+- **Tavily**: Google's anti-bot protection makes browser automation unreliable. Tavily provides clean, structured search results via API - perfect for AI workflows.
+- **Verification**: When AI generates reports, humans naturally click source links to verify. Now Aily does this automatically, flagging unsupported claims before they reach your vault.
+
 ## [0.5.0.0] - 2026-04-07
 
 ### Added
