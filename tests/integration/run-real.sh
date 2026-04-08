@@ -108,6 +108,22 @@ case "$COMMAND" in
         pytest tests/integration/test_e2e_visual.py -v -s "$@"
         ;;
 
+    tavily)
+        echo -e "${BLUE}Running Tavily Search tests...${NC}"
+        echo ""
+        echo "Testing AI search API..."
+        echo ""
+        pytest tests/integration/test_tavily_search.py -v -s
+        ;;
+
+    verify)
+        echo -e "${BLUE}Running Claim Verification tests...${NC}"
+        echo ""
+        echo "Testing source verification like a human researcher..."
+        echo ""
+        pytest tests/integration/test_verification.py -v -s
+        ;;
+
     check)
         echo -e "${GREEN}Configuration check complete${NC}"
         ;;
