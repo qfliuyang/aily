@@ -293,6 +293,74 @@ Feishu (capture) → Aily (process) → Obsidian (Zettelkasten) → Your Brain
 
 ---
 
+## Case Study: Andrej Karpathy's LLM Knowledge Base
+
+Andrej Karpathy ([tweet](https://x.com/karpathy/status/2039805659525644595)) uses a workflow that validates our brain-aligned design. His system demonstrates how LLM + Obsidian can mirror the brain's memory processes:
+
+### Karpathy's Architecture
+
+```
+Raw Data (raw/)
+    ↓ LLM "compiles"
+Compiled Wiki (.md files with structure)
+    ↓ Obsidian as IDE
+Human queries and explores
+    ↓ LLM outputs
+New markdown/slides/visualizations
+    ↓ Feed back
+Enhanced Wiki
+```
+
+### Key Principles
+
+**1. Raw vs. Compiled Distinction**
+- `raw/` directory: Source documents (articles, papers, repos, images)
+- Wiki directory: LLM-processed, linked, categorized knowledge
+- *Brain parallel:* Sensory memory → Consolidated long-term memory
+
+**2. LLM-Maintained Wiki**
+- Karpathy: "I rarely touch it directly, it's the domain of the LLM"
+- LLM writes summaries, categorizes, finds connections, suggests articles
+- *Brain parallel:* Elaborative encoding and schema building automated
+
+**3. Accumulating Queries**
+- Outputs get "filed back into the wiki to enhance it for further queries"
+- Explorations "add up" in the knowledge base
+- *Brain parallel:* Each retrieval strengthens the memory trace
+
+**4. No Fancy RAG Required**
+- At ~100 articles, ~400K words, LLM can read all relevant data
+- Auto-maintained index files help navigation
+- *Brain parallel:* Working memory can hold 4-7 chunks; the wiki structure creates scaffolds
+
+**5. Linting/Health Checks**
+- LLM checks for: inconsistent data, missing data, interesting connections
+- Suggests new article candidates
+- *Brain parallel:* Similar to our verification layer—checking for accuracy
+
+### Tools Karpathy Uses
+
+| Tool | Purpose |
+|------|---------|
+| Obsidian Web Clipper | Capture web articles to `raw/` |
+| Hotkey for image download | Local images for LLM reference |
+| Obsidian | IDE frontend for viewing data |
+| Marp plugin | Slide rendering |
+| Custom CLI tools | Search engine for LLM queries |
+
+### What This Means for Aily
+
+Karpathy's system validates our research but adds crucial implementation details:
+
+| Brain Science | Aily Implementation | Karpathy's Approach |
+|---------------|---------------------|---------------------|
+| Encoding | Feishu webhook capture | Obsidian Web Clipper |
+| Elaboration | Connection suggester | LLM auto-compiles wiki |
+| Consolidation | Spaced repetition | Accumulating queries |
+| Retrieval | Active recall | Q&A with LLM agent |
+
+**Key insight:** The separation between **raw capture** and **compiled knowledge** is essential. Raw is messy; compiled is structured. The LLM bridges them.
+
 ## Conclusion
 
 The brain receives knowledge through a multi-phase process: **encoding → elaboration → consolidation → retrieval**. Each phase has specific requirements that Aily can support.
@@ -303,10 +371,19 @@ The brain receives knowledge through a multi-phase process: **encoding → elabo
 - Storage (Obsidian writer) ✓
 - Verification (claim checking) ✓
 
-**Key additions needed:**
-1. **Atomic note generation** (break captures into single ideas)
-2. **Elaborative linking** (suggest connections to existing notes)
-3. **Spaced repetition** (schedule reviews at optimal intervals)
-4. **Active recall generation** (create questions from notes)
+**Key additions needed (validated by both neuroscience AND Karpathy's workflow):**
+1. **Raw/Compiled separation** - `Aily Drafts/` = raw, compiled wiki = structured
+2. **LLM-maintained wiki** - Atomic notes auto-generated and linked
+3. **Accumulating queries** - Q&A outputs feed back into knowledge base
+4. **Health check/linting** - Automated verification of consistency
 
-The goal: Your Feishu captures become properly encoded, elaborated, consolidated, and retrievable knowledge—not just a pile of bookmarks.
+**Karpathy's validation:** "I think there is room here for an incredible new product instead of a hacky collection of scripts."
+
+The goal: Your Feishu captures become a **living knowledge base** that compounds over time—just like Karpathy's system, but automated from your IM messages.
+
+---
+
+## Additional Sources
+
+### Karpathy's Workflow
+- [Karpathy on LLM Knowledge Bases](https://x.com/karpathy/status/2039805659525644595)
