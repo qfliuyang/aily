@@ -302,22 +302,26 @@ def cleanup_obsidian_tests(service_availability: dict) -> Generator[None, None, 
 # =============================================================================
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright_stealth import Stealth
 
 
 @pytest_asyncio.fixture
 async def browser_page() -> AsyncGenerator[Page, None]:
     """
-    REAL browser page using actual Playwright.
+    REAL browser page using actual Playwright with stealth mode.
 
-    Fetches real websites over real network.
+    Fetches real websites over real network with anti-bot evasion.
     """
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=True)
     context = await browser.new_context(
         viewport={"width": 1920, "height": 1080},
-        user_agent="Mozilla/5.0 (Aily-Test/1.0)"
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     page = await context.new_page()
+
+    # Apply stealth to evade bot detection
+    await Stealth().apply_stealth_async(page)
 
     try:
         yield page
@@ -476,6 +480,7 @@ async def visual_browser_page(test_id: str) -> AsyncGenerator[tuple[Page, Path],
     Browser with video recording and screenshot capabilities.
 
     Yields (page, artifacts_dir) for visual test verification.
+    Uses stealth mode to evade bot detection.
     """
     from playwright.async_api import async_playwright
 
@@ -486,15 +491,18 @@ async def visual_browser_page(test_id: str) -> AsyncGenerator[tuple[Page, Path],
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=True)
 
-    # Enable video recording
+    # Enable video recording with realistic user agent
     context = await browser.new_context(
         viewport={"width": 1920, "height": 1080},
-        user_agent="Mozilla/5.0 (Aily-Visual-Test/1.0)",
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         record_video_dir=str(artifacts_dir),
         record_video_size={"width": 1920, "height": 1080},
     )
 
     page = await context.new_page()
+
+    # Apply stealth to evade bot detection
+    await Stealth().apply_stealth_async(page)
 
     try:
         yield page, artifacts_dir
