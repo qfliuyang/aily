@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
+
+    # Tavily search API
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"  # "basic" or "advanced"
     aily_digest_enabled: bool = True
     aily_digest_hour: int = 9
     aily_digest_minute: int = 0
