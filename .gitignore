@@ -12,3 +12,4 @@ venv/
 .omc/state/*
 .claude/
 
+test-artifacts/

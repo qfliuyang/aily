@@ -1,0 +1,110 @@
+version: "3.8"
+
+services:
+  # Test runner - main pytest container
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile.test
+    depends_on:
+      - feishu-mock
+      - obsidian-mock
+      - browser-service
+      - redis
+    environment:
+      - AILY_TEST_MODE=integration
+      - FEISHU_MOCK_URL=http://feishu-mock:8001
+      - OBSIDIAN_MOCK_URL=http://obsidian-mock:8002
+      - BROWSER_SERVICE_URL=http://browser-service:8003
+      - REDIS_URL=redis://redis:6379
+      - QUEUE_DB_PATH=/data/queue.db
+      - GRAPH_DB_PATH=/data/graph.db
+      - LLM_API_KEY=${LLM_API_KEY:-test-key}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+    volumes:
+      - test-data:/data
+      - ./fixtures:/fixtures:ro
+      - ../../aily:/app/aily:ro
+      - ../../tests:/app/tests:ro
+    networks:
+      - aily-test
+    command: ["pytest", "tests/integration/", "-v", "--tb=short", "-x"]
+
+  # Feishu Mock - simulates Feishu bot webhooks
+  feishu-mock:
+    build:
+      context: ./services/feishu-mock
+    ports:
+      - "8001:8001"
+    environment:
+      - LOG_LEVEL=debug
+      - WEBHOOK_SECRET=test-secret
+    volumes:
+      - feishu-logs:/logs
+    networks:
+      - aily-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Obsidian Mock - simulates Obsidian Local REST API
+  obsidian-mock:
+    build:
+      context: ./services/obsidian-mock
+    ports:
+      - "8002:8002"
+    environment:
+      - VAULT_PATH=/vault
+      - API_KEY=test-api-key
+    volumes:
+      - obsidian-vault:/vault
+      - obsidian-logs:/logs
+    networks:
+      - aily-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Browser Service - real Playwright in container
+  browser-service:
+    build:
+      context: ./services/browser-service
+    ports:
+      - "8003:8003"
+    environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - PYTHONUNBUFFERED=1
+    shm_size: "2gb"
+    networks:
+      - aily-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - for any caching/session needs
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - aily-test
+    volumes:
+      - redis-data:/data
+
+volumes:
+  test-data:
+  feishu-logs:
+  obsidian-vault:
+  obsidian-logs:
+  redis-data:
+
+networks:
+  aily-test:
+    driver: bridge

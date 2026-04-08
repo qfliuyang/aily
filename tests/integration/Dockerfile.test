@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy test requirements
+COPY tests/integration/requirements.test.txt ./tests/integration/
+RUN pip install --no-cache-dir -r tests/integration/requirements.test.txt
+
+# Copy application code
+COPY aily/ ./aily/
+COPY tests/ ./tests/
+
+# Set Python path
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Default command (can be overridden)
+CMD ["pytest", "tests/integration/", "-v", "--tb=short"]
