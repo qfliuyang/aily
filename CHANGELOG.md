@@ -19,10 +19,16 @@ All notable changes to Aily will be documented in this file.
   - `test_tavily_search.py` - Real Tavily API calls with markdown output
   - `test_verification.py` - Claim extraction, keyword verification, E2E with arXiv
   - `./run-real.sh tavily` and `./run-real.sh verify` commands
+- **Brain-Aligned Learning Loop** - Implementation of neuroscience research on memory formation
+  - **Atomic Note Generator** (`aily/processing/atomicizer.py`) - Breaks captures into single-idea notes (elaborative encoding)
+  - **Spaced Repetition Scheduler** (`aily/learning/srs.py`) - Ebbinghaus-based review intervals (1d → 3d → 7d → 21d → 60d)
+  - **Active Recall Generator** (`aily/learning/recall.py`) - Generates questions from notes (testing effect)
+  - Auto-suggests connections between related notes (schema building)
 
 ### Why These Changes
 - **Tavily**: Google's anti-bot protection makes browser automation unreliable. Tavily provides clean, structured search results via API - perfect for AI workflows.
 - **Verification**: When AI generates reports, humans naturally click source links to verify. Now Aily does this automatically, flagging unsupported claims before they reach your vault.
+- **Learning Loop**: Based on neuroscience research (encoding → elaboration → consolidation → retrieval), Aily now mimics how the brain actually forms permanent memories. Each phase of memory formation is supported: atomic notes for encoding, connection suggestions for elaboration, spaced repetition for consolidation, active recall for retrieval.
 
 ## [0.5.0.0] - 2026-04-07
 

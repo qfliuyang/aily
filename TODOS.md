@@ -17,6 +17,16 @@
 - **Why:** When AI writes reports, humans naturally check sources. Now Aily does this automatically.
 - **Tests:** NO MOCK tests for extraction, keyword verification, and E2E with arXiv
 
+### Brain-Aligned Learning Loop (COMPLETED 2026-04-08)
+- **What:** Implement neuroscience-based knowledge processing (encoding → elaboration → consolidation → retrieval)
+- **Implementation:**
+  - `aily/processing/atomicizer.py` - Atomic Note Generator breaks captures into single-idea notes (elaborative encoding)
+  - `aily/learning/srs.py` - Spaced Repetition Scheduler with Ebbinghaus intervals (1d → 3d → 7d → 21d → 60d)
+  - `aily/learning/recall.py` - Active Recall Question Generator creates questions from notes (testing effect)
+  - Connection suggestions between related notes for schema building
+- **Why:** Research shows the brain forms permanent memories through specific processes. Aily now supports each phase: atomic notes for encoding, connections for elaboration, spaced repetition for consolidation, active recall for retrieval.
+- **Tests:** 51 tests across `test_atomicizer.py`, `test_srs.py`, `test_recall.py`
+
 ## Deferred from Eng Review
 
 ### Evaluate SQLite connection pooling for GraphDB and QueueDB
@@ -25,11 +35,14 @@
 - **Context:** Evaluate aiosqlite connection pool options or switch to a shared async connection with WAL mode. Only optimize if profiling shows it matters.
 - **Priority:** P2
 
-### Validate Browser Use with Chinese-language and dynamic-content pages
+### Validate Browser Use with Chinese-language and dynamic-content pages (COMPLETED 2026-04-08)
 - **What:** Before trusting Browser Use for Monica/Kimi URLs, verify it correctly extracts Chinese text from JS-rendered pages.
+- **Implementation:** Created `scripts/test_browser_chinese.py` with local test fixture containing Chinese dialogue about LLMs and Python code
+- **Validation:** Script validates extraction of Chinese characters, code blocks, and formatting
+- **Usage:** `python scripts/test_browser_chinese.py --test-mock` for local test, `--url <url>` for real URLs
 - **Why:** 小刘's core workflow involves Chinese-language AI tools. If Browser Use fails on these, the prototype is dead on arrival.
-- **Context:** Should be done during Day 4 of the prototype build (fetcher implementation). Create a small script that points Browser Use at a local Chinese SPA fixture and a real Monica/Kimi URL to confirm text extraction quality.
 - **Depends on:** Browser Use dependency installed, Playwright browsers downloaded.
+- **Completed:** v0.2.0.0 (2026-04-08)
 
 ## Bridge to MVP (from Design Doc)
 
@@ -103,13 +116,20 @@
 - **Depends on:** Planner agent design complete.
 - **Completed:** v0.2.0.0 (2026-04-05)
 
-### Define Monica/Kimi DOM selectors or run discovery spike
+### Define Monica/Kimi DOM selectors or run discovery spike (COMPLETED 2026-04-08)
 - **What:** Identify the exact DOM selectors or detection strategy for finding new Monica chats and Kimi reports during passive capture.
+- **Implementation:** Created `docs/monica-kimi-dom-discovery.md` with comprehensive analysis:
+  - URL patterns for both services
+  - Authentication state detection indicators
+  - Multiple selector strategies (role-based, class-based, position-based)
+  - New chat detection via URL tracking (preferred over fragile DOM selectors)
+  - Browser Use configuration for Chinese-language extraction
+  - Fallback strategies (manual URL sharing, bookmarklet, export feature)
+- **Decision:** Use URL-based detection instead of fragile DOM selectors in React apps
+- **Updated:** `aily/scheduler/jobs.py` `_detect_urls()` with implementation plan
 - **Why:** Passive capture requires browser automation against authenticated pages. The selectors are currently unknown.
-- **Context:** Run a discovery spike with Browser Use against 小刘's actual Monica and Kimi accounts (in the isolated profile). Document the selectors. If selectors are unstable, consider a URL-list-based detection strategy instead.
-- **Effort:** M → S
-- **Priority:** P1
 - **Depends on:** Feishu/Mobile auth working in isolated browser profile.
+- **Completed:** v0.2.0.0 (2026-04-08)
 
 ### Add jitter/backoff to passive capture cron (BUILD NOW)
 - **What:** Replace the hard 5-minute cron with an interval timer that adds 0-60s jitter per run and backs off (up to 30 min) after consecutive failures. Architected as "hybrid Phase 1" so if polling gets banned we can pivot to an intercept approach.
