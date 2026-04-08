@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Tavily search API
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # "basic" or "advanced"
+
+    # Browser Use commercial API
+    browser_use_api_key: str = ""
+
     aily_digest_enabled: bool = True
     aily_digest_hour: int = 9
     aily_digest_minute: int = 0

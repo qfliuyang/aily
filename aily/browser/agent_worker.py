@@ -17,6 +17,11 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any
 
+# Add virtualenv site-packages to path for subprocess
+venv_site_packages = Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+if venv_site_packages.exists():
+    sys.path.insert(0, str(venv_site_packages))
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +40,7 @@ async def _fetch_with_agent(url: str, timeout: int, profile_dir: str, llm_config
     """
     from browser_use import Agent, BrowserSession
     from browser_use.llm.openai.chat import ChatOpenAI
+    from browser_use.llm.openai.like import ChatOpenAILike
     from browser_use.llm.google.chat import ChatGoogle
     from browser_use.llm.anthropic.chat import ChatAnthropic
 
@@ -46,7 +52,22 @@ async def _fetch_with_agent(url: str, timeout: int, profile_dir: str, llm_config
 
     # Initialize LLM based on provider
     if provider == 'openai':
-        llm = ChatOpenAI(model=model, api_key=api_key)
+        # Check if using a custom base_url (OpenAI-compatible API like Zhipu)
+        base_url = llm_config.get('base_url')
+        if base_url and 'openai.com' not in base_url:
+            # Use ChatOpenAILike for OpenAI-compatible providers (Zhipu, etc.)
+            # with compatibility settings for providers that don't support strict json_schema
+            llm = ChatOpenAILike(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                add_schema_to_system_prompt=True,  # Add schema to prompt instead of response_format
+                remove_min_items_from_schema=True,  # Remove minItems for compatibility
+                remove_defaults_from_schema=True,   # Remove defaults for compatibility
+                dont_force_structured_output=False,  # Still try structured output
+            )
+        else:
+            llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url)
     elif provider == 'google':
         llm = ChatGoogle(model=model, api_key=api_key)
     elif provider == 'anthropic':
@@ -55,22 +76,59 @@ async def _fetch_with_agent(url: str, timeout: int, profile_dir: str, llm_config
         # Default to OpenAI
         llm = ChatOpenAI(model='gpt-4o-mini', api_key=api_key)
 
+    # Support using Chrome profile with existing logins
+    chrome_profile = llm_config.get('chrome_profile_dir', profile_dir)
+    headless = llm_config.get('headless', True)
+    use_personal_profile = llm_config.get('use_personal_profile', False)
+
+    if use_personal_profile:
+        # Use user's actual Chrome profile where they're logged in
+        import platform
+        system = platform.system()
+        if system == 'Darwin':  # macOS
+            chrome_profile = llm_config.get(
+                'chrome_profile_dir',
+                str(Path.home() / 'Library/Application Support/Google/Chrome')
+            )
+        elif system == 'Windows':
+            chrome_profile = llm_config.get(
+                'chrome_profile_dir',
+                str(Path.home() / 'AppData/Local/Google/Chrome/User Data')
+            )
+        else:  # Linux
+            chrome_profile = llm_config.get(
+                'chrome_profile_dir',
+                str(Path.home() / '.config/google-chrome')
+            )
+        headless = False  # Must be visible to use personal profile
+        logger.info("Using personal Chrome profile: %s", chrome_profile)
+
     # Create browser session with profile
-    browser = BrowserSession(
-        headless=True,
-        user_data_dir=profile_dir,
-    )
+    browser_kwargs = {
+        'headless': headless,
+    }
+    if chrome_profile and Path(chrome_profile).exists():
+        browser_kwargs['user_data_dir'] = chrome_profile
+
+    browser = BrowserSession(**browser_kwargs)
 
     # Create agent with extraction task
+    is_logged_in = llm_config.get('use_personal_profile', False) if llm_config else False
+    login_hint = "You are already logged in. " if is_logged_in else ""
+
     extraction_task = f"""
     Navigate to {url} and extract the main content.
 
     Instructions:
-    1. Navigate to the URL and wait for page to fully load
-    2. If there's a login modal or auth wall, report "AUTH_REQUIRED"
-    3. Extract the main readable content (article, chat, or document)
-    4. Preserve the structure (headings, lists, code blocks)
-    5. Return the content in markdown format
+    1. Navigate to the URL and wait for page to fully load (up to 30 seconds)
+    2. If you see a chat interface, explore it and extract visible conversations
+    3. If you see a history/sidebar, click through recent items to gather content
+    4. {login_hint}If logged in, access the user's content directly
+    5. If there's a login modal and you're not logged in, report "AUTH_REQUIRED"
+    6. Extract the main readable content (chat, article, or document)
+    7. Preserve the structure (headings, lists, code blocks, chat messages)
+    8. Add small delays (1-2 seconds) between actions to avoid rate limiting
+    9. Return the content in markdown format
 
     Be thorough but focus on the main content area, not navigation or ads.
     """
@@ -206,13 +264,26 @@ async def _run_custom_task(
     """Run a custom agent task on a URL."""
     from browser_use import Agent, BrowserSession
     from browser_use.llm.openai.chat import ChatOpenAI
+    from browser_use.llm.openai.like import ChatOpenAILike
 
     llm_config = llm_config or {}
     provider = llm_config.get('provider', 'openai')
     model = llm_config.get('model', 'gpt-4o-mini')
     api_key = llm_config.get('api_key') or _get_api_key(provider)
+    base_url = llm_config.get('base_url')
 
-    llm = ChatOpenAI(model=model, api_key=api_key)
+    # Use ChatOpenAILike for non-OpenAI providers with compatibility settings
+    if base_url and 'openai.com' not in base_url:
+        llm = ChatOpenAILike(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            add_schema_to_system_prompt=True,
+            remove_min_items_from_schema=True,
+            remove_defaults_from_schema=True,
+        )
+    else:
+        llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url)
 
     browser = BrowserSession(
         headless=True,

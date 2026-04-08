@@ -58,14 +58,30 @@ class BrowserUseManager:
             self._proc = None
             self._port = None
 
-    async def fetch(self, url: str, timeout: int = 60) -> str:
+    async def fetch(self, url: str, timeout: int = 60, use_personal_profile: bool = False) -> str:
+        """
+        Fetch content from a URL using browser automation.
+
+        Args:
+            url: The URL to fetch
+            timeout: Maximum time to spend on the task
+            use_personal_profile: If True, use the user's Chrome profile with existing logins
+
+        Returns:
+            Extracted text content
+        """
         async with self._lock:
-            result = await self._fetch_with_retry(url, timeout)
+            # Pass authentication options via llm_config
+            fetch_config = self.llm_config.copy()
+            if use_personal_profile:
+                fetch_config['use_personal_profile'] = True
+                fetch_config['headless'] = False
+            result = await self._fetch_with_retry(url, timeout, fetch_config)
             if isinstance(result, dict):
                 return result.get("text", "")
             return result
 
-    async def _fetch_with_retry(self, url: str, timeout: int):
+    async def _fetch_with_retry(self, url: str, timeout: int, fetch_config: dict | None = None):
         for attempt in range(2):
             if self._proc is None or self._proc.poll() is not None:
                 await self._spawn()
@@ -77,7 +93,8 @@ class BrowserUseManager:
                     "profile_dir": str(self.profile_dir),
                 }
                 if self.worker_type == "agent":
-                    msg["llm_config"] = self.llm_config
+                    # Use provided fetch_config or fall back to default llm_config
+                    msg["llm_config"] = fetch_config if fetch_config is not None else self.llm_config
                 return await self._send(msg, timeout=timeout + 5)
             except (ConnectionRefusedError, ConnectionResetError, EOFError, OSError) as exc:
                 logger.warning("Subprocess connection lost (attempt %s): %s", attempt + 1, exc)
@@ -123,8 +140,13 @@ class BrowserUseManager:
             "--profile-dir", str(self.profile_dir),
             "--authkey", self.authkey.decode(),
         ]
+        # Set up environment with virtualenv site-packages for subprocess
+        env = dict(subprocess.os.environ)
+        venv_site = Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+        if venv_site.exists():
+            env["PYTHONPATH"] = str(venv_site) + (":" + env.get("PYTHONPATH", ""))
         self._proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
         )
         assert self._proc.stdout is not None
         try:
