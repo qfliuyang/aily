@@ -41,8 +41,8 @@ from aily.voice.downloader import FeishuVoiceDownloader, FeishuVoiceError
 from aily.voice.transcriber import WhisperTranscriber, TranscriptionError
 from aily.network.tailscale import TailscaleClient
 from aily.sessions.dikiwi_mind import DikiwiMind
-from aily.sessions.innovation_scheduler import InnovationScheduler
-from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
+from aily.sessions.innovation_react_scheduler import InnovationReactScheduler
+from aily.sessions.entrepreneur_react_scheduler import EntrepreneurReactScheduler
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -71,8 +71,8 @@ ws_client = None
 
 # Three-Mind System schedulers
 dikiwi_mind: DikiwiMind | None = None
-innovation_scheduler: InnovationScheduler | None = None
-entrepreneur_scheduler: EntrepreneurScheduler | None = None
+innovation_scheduler: InnovationReactScheduler | None = None
+entrepreneur_scheduler: EntrepreneurReactScheduler | None = None
 agent_registry = AgentRegistry()
 tailscale_client = TailscaleClient()
 
@@ -496,8 +496,8 @@ async def lifespan(app: FastAPI):
     # Initialize and start Innovation and Entrepreneur Minds
     # (DIKIWI Mind was already initialized earlier for WebSocket routing)
     try:
-        # Innovation Mind - 8am daily TRIZ analysis
-        innovation_scheduler = InnovationScheduler(
+        # Innovation Mind - 8am daily TRIZ analysis with ReAct reasoning
+        innovation_scheduler = InnovationReactScheduler(
             llm_client=llm_client,
             graph_db=graph_db,
             obsidian_writer=writer,
@@ -511,10 +511,10 @@ async def lifespan(app: FastAPI):
         )
         if SETTINGS.minds.innovation_enabled:
             innovation_scheduler.start()
-            logger.info("Innovation Mind started (8am daily TRIZ)")
+            logger.info("Innovation Mind (ReAct) started (8am daily TRIZ)")
 
-        # Entrepreneur Mind - 9am daily GStack analysis
-        entrepreneur_scheduler = EntrepreneurScheduler(
+        # Entrepreneur Mind - 9am daily GStack analysis with ReAct reasoning
+        entrepreneur_scheduler = EntrepreneurReactScheduler(
             llm_client=llm_client,
             graph_db=graph_db,
             innovation_scheduler=innovation_scheduler,
@@ -529,7 +529,7 @@ async def lifespan(app: FastAPI):
         )
         if SETTINGS.minds.entrepreneur_enabled:
             entrepreneur_scheduler.start()
-            logger.info("Entrepreneur Mind started (9am daily GStack)")
+            logger.info("Entrepreneur Mind (ReAct) started (9am daily GStack)")
 
         logger.info("Three-Mind System initialized")
     except Exception:
