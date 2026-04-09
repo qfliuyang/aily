@@ -81,6 +81,8 @@ class FeishuVoiceDownloader:
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as resp:
+                if resp.status == 404:
+                    raise FeishuVoiceError(f"File not found or was deleted: {file_key}")
                 resp.raise_for_status()
 
                 mime_type = resp.headers.get("Content-Type", "audio/mpeg")

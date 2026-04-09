@@ -314,6 +314,11 @@ async def _process_file_job(job: dict) -> None:
                 f"Processed {file_name} ({result.source_type}): {note_path}\n\nPreview: {result.text[:100]}..."
             )
 
+    except FeishuVoiceError as e:
+        logger.warning("File download failed: %s - %s", file_name, e)
+        if open_id:
+            await pusher.send_message(open_id, f"Could not download {file_name}: {e}")
+        raise
     except Exception as e:
         logger.exception("Failed to process file: %s", file_name)
         if open_id:

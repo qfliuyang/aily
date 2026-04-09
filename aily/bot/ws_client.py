@@ -49,7 +49,11 @@ class FeishuWSClient:
 
         # Handle text messages
         if msg_type == "text":
-            content = json.loads(message.content)
+            try:
+                content = json.loads(message.content)
+            except json.JSONDecodeError:
+                logger.error("[FeishuWS] Failed to parse text message JSON")
+                return
             text = content.get("text", "")
 
             # Extract URL if present
@@ -67,7 +71,11 @@ class FeishuWSClient:
 
         # Handle voice messages
         elif msg_type == "voice":
-            content = json.loads(message.content)
+            try:
+                content = json.loads(message.content)
+            except json.JSONDecodeError:
+                logger.error("[FeishuWS] Failed to parse voice message JSON")
+                return
             file_key = content.get("file_key")
             file_name = content.get("file_name", "voice.mp3")
 
@@ -77,7 +85,11 @@ class FeishuWSClient:
 
         # Handle file attachments (PDFs, documents, etc)
         elif msg_type == "file":
-            content = json.loads(message.content)
+            try:
+                content = json.loads(message.content)
+            except json.JSONDecodeError:
+                logger.error("[FeishuWS] Failed to parse file message JSON")
+                return
             file_key = content.get("file_key")
             file_name = content.get("file_name", "document")
 
@@ -87,7 +99,11 @@ class FeishuWSClient:
 
         # Handle images (for OCR)
         elif msg_type == "image":
-            content = json.loads(message.content)
+            try:
+                content = json.loads(message.content)
+            except json.JSONDecodeError:
+                logger.error("[FeishuWS] Failed to parse image message JSON")
+                return
             image_key = content.get("image_key")
 
             if image_key:

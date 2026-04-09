@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_title_from_filename(filename: str | None) -> str | None:
+    """Extract title from filename, returning None if filename is empty."""
+    return Path(filename).stem if filename else None
+
+
 @dataclass
 class ExtractedContent:
     """Unified output format for all processors."""
@@ -103,7 +108,7 @@ class PDFProcessor(ContentProcessor):
 
             return ExtractedContent(
                 text=full_text.strip(),
-                title=Path(filename).stem if filename else None,
+                title=_get_title_from_filename(filename),
                 source_type="pdf",
                 metadata={
                     "page_count": page_count,
@@ -165,8 +170,8 @@ class ImageProcessor(ContentProcessor):
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            # Run OCR
-            results = self._reader.readtext(data)
+            # Run OCR in thread pool to avoid blocking event loop
+            results = await asyncio.to_thread(self._reader.readtext, data)
 
             # Extract text (results are [(bbox, text, confidence), ...])
             text_parts = [result[1] for result in results]
@@ -178,7 +183,7 @@ class ImageProcessor(ContentProcessor):
 
             return ExtractedContent(
                 text=full_text.strip(),
-                title=Path(filename).stem if filename else None,
+                title=_get_title_from_filename(filename),
                 source_type="image",
                 metadata={
                     "ocr_confidence": round(avg_confidence, 3),
@@ -246,7 +251,7 @@ class MarkdownProcessor(ContentProcessor):
             if heading_match:
                 title = heading_match.group(1).strip()
             else:
-                title = Path(filename).stem if filename else None
+                title = _get_title_from_filename(filename)
 
         return ExtractedContent(
             text=content.strip(),
@@ -289,7 +294,7 @@ class DocxProcessor(ContentProcessor):
 
             return ExtractedContent(
                 text=full_text.strip(),
-                title=Path(filename).stem if filename else None,
+                title=_get_title_from_filename(filename),
                 source_type="docx",
                 metadata={
                     "paragraph_count": len(text_parts),
@@ -319,7 +324,7 @@ class TextProcessor(ContentProcessor):
 
         return ExtractedContent(
             text=text.strip(),
-            title=Path(filename).stem if filename else None,
+            title=_get_title_from_filename(filename),
             source_type="text",
             metadata={"filename": filename},
         )
