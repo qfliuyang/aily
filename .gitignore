@@ -13,3 +13,4 @@ venv/
 .claude/
 
 test-artifacts/
+.omc/

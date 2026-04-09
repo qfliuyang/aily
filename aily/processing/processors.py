@@ -372,3 +372,133 @@ class WebProcessor(ContentProcessor):
             source_type="web",
             metadata={"filename": filename},
         )
+
+
+class CSVProcessor(ContentProcessor):
+    """Extract text from CSV files."""
+
+    SUPPORTED_TYPES = ["text/csv"]
+
+    async def process(self, data: bytes, filename: str | None = None) -> ExtractedContent:
+        """Extract text from CSV using the csv module."""
+        try:
+            import csv
+            import io
+
+            # Decode the CSV data
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = data.decode("utf-8", errors="ignore")
+
+            # Parse CSV
+            reader = csv.reader(io.StringIO(text))
+            rows = list(reader)
+
+            if not rows:
+                return ExtractedContent(
+                    text="[Empty CSV file]",
+                    title=_get_title_from_filename(filename),
+                    source_type="csv",
+                    metadata={"filename": filename, "row_count": 0},
+                )
+
+            # Format as markdown table
+            lines = []
+            for i, row in enumerate(rows):
+                # Escape pipe characters in cells
+                escaped = [cell.replace("|", "\\|") for cell in row]
+                lines.append("| " + " | ".join(escaped) + " |")
+                # Add separator after header
+                if i == 0:
+                    lines.append("|" + "|".join(" --- " for _ in row) + "|")
+
+            full_text = "\n".join(lines)
+
+            return ExtractedContent(
+                text=full_text,
+                title=_get_title_from_filename(filename),
+                source_type="csv",
+                metadata={
+                    "filename": filename,
+                    "row_count": len(rows),
+                    "column_count": len(rows[0]) if rows else 0,
+                },
+            )
+
+        except Exception as e:
+            logger.exception("CSV extraction failed")
+            return ExtractedContent(
+                text=f"[CSV extraction failed: {e}]",
+                source_type="csv",
+            )
+
+
+class XLSXProcessor(ContentProcessor):
+    """Extract text from Excel files (.xlsx)."""
+
+    SUPPORTED_TYPES = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ]
+
+    async def process(self, data: bytes, filename: str | None = None) -> ExtractedContent:
+        """Extract text from XLSX using openpyxl."""
+        try:
+            import openpyxl
+        except ImportError:
+            logger.error("openpyxl not installed. Run: pip install openpyxl")
+            return ExtractedContent(
+                text="[XLSX processing unavailable - openpyxl not installed]",
+                source_type="xlsx",
+            )
+
+        try:
+            workbook = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+
+            all_sheets = []
+            total_rows = 0
+
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+                rows = []
+
+                for row in sheet.iter_rows(values_only=True):
+                    # Convert None to empty string, ensure all values are strings
+                    cell_values = [str(cell) if cell is not None else "" for cell in row]
+                    if any(cell_values):  # Skip completely empty rows
+                        # Escape pipe characters
+                        escaped = [cell.replace("|", "\\|") for cell in cell_values]
+                        rows.append("| " + " | ".join(escaped) + " |")
+                        total_rows += 1
+
+                if rows:
+                    # Add separator after header (first row)
+                    if len(rows) > 0:
+                        # Calculate column count from first row
+                        col_count = len(rows[0].split("|")) - 2  # Remove empty splits
+                        separator = "|" + "|".join(" --- " for _ in range(col_count)) + "|"
+                        rows.insert(1, separator)
+
+                    all_sheets.append(f"## Sheet: {sheet_name}\n")
+                    all_sheets.append("\n".join(rows))
+                    all_sheets.append("\n")
+
+            full_text = "\n".join(all_sheets)
+
+            return ExtractedContent(
+                text=full_text.strip(),
+                title=_get_title_from_filename(filename),
+                source_type="xlsx",
+                metadata={
+                    "filename": filename,
+                    "sheet_count": len(workbook.sheetnames),
+                    "total_rows": total_rows,
+                },
+            )
+
+        except Exception as e:
+            logger.exception("XLSX extraction failed")
+            return ExtractedContent(
+                text=f"[XLSX extraction failed: {e}]",
+                source_type="xlsx",
+            )

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from aily.processing.detector import ContentType, ContentTypeDetector
 from aily.processing.processors import (
     ContentProcessor,
+    CSVProcessor,
     DocxProcessor,
     ExtractedContent,
     ImageProcessor,
@@ -18,6 +19,7 @@ from aily.processing.processors import (
     PDFProcessor,
     TextProcessor,
     WebProcessor,
+    XLSXProcessor,
 )
 
 if TYPE_CHECKING:
@@ -47,6 +49,8 @@ class ProcessingRouter:
             ImageProcessor(languages=["en", "ch_sim", "ch_tra"]),  # English + Chinese
             MarkdownProcessor(),
             DocxProcessor(),
+            CSVProcessor(),
+            XLSXProcessor(),
             WebProcessor(browser_manager=self.browser_manager),
             TextProcessor(),  # Fallback for text/*
         ]
