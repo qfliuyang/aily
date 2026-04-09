@@ -74,45 +74,48 @@ async def feishu_webhook(request: Request) -> dict:
 
     db = QueueDB(SETTINGS.queue_db_path)
     await db.initialize()
-    open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
+    try:
+        open_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
 
-    # Handle voice messages
-    if msg_type == "voice":
+        # Handle voice messages
+        if msg_type == "voice":
+            content = json.loads(message.get("content", "{}"))
+            file_key = content.get("file_key")
+            file_name = content.get("file_name", "voice.mp3")
+            if file_key and SETTINGS.feishu_voice_enabled:
+                await db.enqueue(
+                    "voice_message",
+                    {
+                        "file_key": file_key,
+                        "file_name": file_name,
+                        "open_id": open_id,
+                        "message_id": message.get("message_id", ""),
+                    },
+                )
+                logger.info("Enqueued voice message: %s", file_key)
+            return {"status": "ok"}
+
+        # Only handle text messages from here
+        if msg_type != "text":
+            return {"status": "ok"}
+
         content = json.loads(message.get("content", "{}"))
-        file_key = content.get("file_key")
-        file_name = content.get("file_name", "voice.mp3")
-        if file_key and SETTINGS.feishu_voice_enabled:
-            await db.enqueue(
-                "voice_message",
-                {
-                    "file_key": file_key,
-                    "file_name": file_name,
-                    "open_id": open_id,
-                    "message_id": message.get("message_id", ""),
-                },
-            )
-            logger.info("Enqueued voice message: %s", file_key)
-        return {"status": "ok"}
+        text = content.get("text", "")
+        url = _extract_url(text)
 
-    # Only handle text messages from here
-    if msg_type != "text":
-        return {"status": "ok"}
+        if url is None:
+            await db.enqueue("agent_request", {"request": text, "open_id": open_id})
+            logger.info("Enqueued agent request from Feishu: %s", text[:50])
+            return {"status": "ok"}
 
-    content = json.loads(message.get("content", "{}"))
-    text = content.get("text", "")
-    url = _extract_url(text)
-
-    if url is None:
-        await db.enqueue("agent_request", {"request": text, "open_id": open_id})
-        logger.info("Enqueued agent request from Feishu: %s", text[:50])
+        enqueued = await db.enqueue_url(url, open_id=open_id, source="manual")
+        if not enqueued:
+            logger.info("Deduplicated URL from Feishu: %s", url)
+            return {"status": "ok"}
+        logger.info("Enqueued URL from Feishu: %s", url)
         return {"status": "ok"}
-
-    enqueued = await db.enqueue_url(url, open_id=open_id, source="manual")
-    if not enqueued:
-        logger.info("Deduplicated URL from Feishu: %s", url)
-        return {"status": "ok"}
-    logger.info("Enqueued URL from Feishu: %s", url)
-    return {"status": "ok"}
+    finally:
+        await db.close()
 
 
 @router.get("/status")
