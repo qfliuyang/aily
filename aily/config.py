@@ -1,8 +1,100 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings
+
+from aily.thinking.config import ThinkingConfig
+
+
+@dataclass
+class MindsConfig:
+    """Configuration for Aily Three-Mind System.
+
+    Controls the DIKIWI Mind (continuous), Innovation Mind (8am daily),
+    and Entrepreneur Mind (9am daily).
+    """
+
+    # Feature toggles
+    dikiwi_enabled: bool = True
+    innovation_enabled: bool = True
+    entrepreneur_enabled: bool = True
+
+    # Schedule times (24-hour format)
+    innovation_time: time = field(default_factory=lambda: time(8, 0))
+    entrepreneur_time: time = field(default_factory=lambda: time(9, 0))
+
+    # Quality thresholds
+    proposal_min_confidence: float = 0.7  # Raised from 0.5 per eng review
+    proposal_max_per_session: int = 10
+
+    # Circuit breaker settings
+    circuit_breaker_threshold: int = 3
+    circuit_breaker_recovery_minutes: int = 30
+
+    # LLM batching/caching
+    enable_caching: bool = True
+    cache_ttl_seconds: int = 3600
+    batch_proposals: bool = True
+
+    @classmethod
+    def from_settings(cls, settings: dict[str, Any]) -> "MindsConfig":
+        """Create MindsConfig from settings dict (e.g., from env vars)."""
+        config = cls()
+
+        # Parse boolean flags
+        config.dikiwi_enabled = settings.get("aily_dikiwi_enabled", "true").lower() == "true"
+        config.innovation_enabled = settings.get("aily_innovation_enabled", "true").lower() == "true"
+        config.entrepreneur_enabled = settings.get("aily_entrepreneur_enabled", "true").lower() == "true"
+
+        # Parse times
+        innovation_time_str = settings.get("aily_innovation_time", "08:00")
+        entrepreneur_time_str = settings.get("aily_entrepreneur_time", "09:00")
+        config.innovation_time = cls._parse_time(innovation_time_str)
+        config.entrepreneur_time = cls._parse_time(entrepreneur_time_str)
+
+        # Parse floats/ints
+        config.proposal_min_confidence = float(settings.get("aily_proposal_min_confidence", "0.7"))
+        config.proposal_max_per_session = int(settings.get("aily_proposal_max_per_session", "10"))
+        config.circuit_breaker_threshold = int(settings.get("aily_circuit_breaker_threshold", "3"))
+
+        return config
+
+    @staticmethod
+    def _parse_time(time_str: str) -> time:
+        """Parse time string like '08:00' or '8:30'."""
+        try:
+            parts = time_str.strip().split(":")
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            return time(hour, minute)
+        except (ValueError, IndexError):
+            return time(8, 0)  # Default fallback
+
+    def validate(self) -> list[str]:
+        """Validate configuration and return list of errors (empty if valid)."""
+        errors = []
+
+        if not 0.0 <= self.proposal_min_confidence <= 1.0:
+            errors.append(f"proposal_min_confidence must be between 0 and 1, got {self.proposal_min_confidence}")
+
+        if self.proposal_max_per_session < 1:
+            errors.append(f"proposal_max_per_session must be >= 1, got {self.proposal_max_per_session}")
+
+        if self.circuit_breaker_threshold < 1:
+            errors.append(f"circuit_breaker_threshold must be >= 1, got {self.circuit_breaker_threshold}")
+
+        # Check that innovation and entrepreneur times don't overlap
+        innovation_end = self.innovation_time.replace(minute=self.innovation_time.minute + 30)
+        if self.innovation_enabled and self.entrepreneur_enabled:
+            if innovation_end.hour > self.entrepreneur_time.hour or \
+               (innovation_end.hour == self.entrepreneur_time.hour and innovation_end.minute >= self.entrepreneur_time.minute):
+                errors.append("Innovation and Entrepreneur times may overlap (need 30 min gap)")
+
+        return errors
 
 
 class Settings(BaseSettings):
@@ -49,6 +141,30 @@ class Settings(BaseSettings):
     @property
     def graph_db_path(self) -> Path:
         return self.aily_data_dir / "aily_graph.db"
+
+    # Thinking system configuration
+    thinking: ThinkingConfig = ThinkingConfig()
+
+    # Three-Mind System configuration
+    minds: MindsConfig = field(default_factory=MindsConfig)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Initialize minds config from environment after main init."""
+        # Parse minds config from env vars
+        import os
+        env_vars = {
+            k.lower().replace("aily_", ""): v
+            for k, v in os.environ.items()
+            if k.startswith("AILY_")
+        }
+        self.minds = MindsConfig.from_settings(env_vars)
+
+        # Validate and log any errors
+        errors = self.minds.validate()
+        if errors:
+            import logging
+            for error in errors:
+                logging.getLogger(__name__).warning("MindsConfig validation: %s", error)
 
 
 SETTINGS = Settings()

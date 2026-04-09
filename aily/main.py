@@ -40,6 +40,9 @@ from aily.learning.loop import LearningLoop
 from aily.voice.downloader import FeishuVoiceDownloader, FeishuVoiceError
 from aily.voice.transcriber import WhisperTranscriber, TranscriptionError
 from aily.network.tailscale import TailscaleClient
+from aily.sessions.dikiwi_mind import DikiwiMind
+from aily.sessions.innovation_scheduler import InnovationScheduler
+from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +68,11 @@ digest_scheduler: DailyDigestScheduler | None = None
 learning_loop: LearningLoop | None = None
 claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 ws_client = None
+
+# Three-Mind System schedulers
+dikiwi_mind: DikiwiMind | None = None
+innovation_scheduler: InnovationScheduler | None = None
+entrepreneur_scheduler: EntrepreneurScheduler | None = None
 agent_registry = AgentRegistry()
 tailscale_client = TailscaleClient()
 
@@ -413,11 +421,28 @@ async def _enqueue_claude_session(file_path: Path) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
+    global dikiwi_mind, innovation_scheduler, entrepreneur_scheduler
     await db.initialize()
     await graph_db.initialize()
 
+    # Initialize Three-Mind System FIRST (needed for WebSocket routing)
+    try:
+        # DIKIWI Mind - continuous knowledge processing
+        dikiwi_mind = DikiwiMind(
+            llm_client=llm_client,
+            graph_db=graph_db,
+            enabled=SETTINGS.minds.dikiwi_enabled,
+            obsidian_writer=writer,
+        )
+        logger.info("DIKIWI Mind initialized (enabled=%s)", SETTINGS.minds.dikiwi_enabled)
+    except Exception:
+        logger.exception("Failed to initialize DIKIWI Mind")
+        dikiwi_mind = None
+
     # Start Feishu WebSocket client for receiving messages
-    ws_client = get_ws_client(db)
+    # Pass dikiwi_mind for Three-Mind message routing
+    # Note: feishu_input_channel is None here (legacy gating system), we use DIKIWI now
+    ws_client = get_ws_client(db, pusher, None, dikiwi_mind)
     ws_client.start()
     logger.info("Feishu WebSocket client started")
 
@@ -433,6 +458,11 @@ async def lifespan(app: FastAPI):
             logger.info("Tailscale not running - remote access unavailable")
     except Exception:
         logger.debug("Tailscale status check failed", exc_info=True)
+
+    # Three-Mind System is the primary architecture
+    # All inputs flow through DIKIWI Mind (WebSocket -> _route_to_dikiwi -> process_input)
+    logger.info("Three-Mind System active: DIKIWI (continuous) + Innovation (8am) + Entrepreneur (9am)")
+
     if SETTINGS.obsidian_vault_path:
         learning_loop = LearningLoop(
             vault_path=Path(SETTINGS.obsidian_vault_path),
@@ -441,7 +471,7 @@ async def lifespan(app: FastAPI):
             llm=llm_client,
         )
         await learning_loop.start()
-    registry.register(r"^https://kimi\.moonshot\.cn/share/", parse_kimi)
+    registry.register(r"^https://(www\.)?kimi\.(moonshot\.cn|com)/share/", parse_kimi)
     registry.register(r"^https://monica\.im/", parse_monica)
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
     registry.register(r"^https://github\.com/", parse_github)
@@ -462,6 +492,50 @@ async def lifespan(app: FastAPI):
     digest_scheduler.start()
     claude_capture_scheduler = ClaudeCodeCaptureScheduler(enqueue_session_fn=_enqueue_claude_session)
     claude_capture_scheduler.start()
+
+    # Initialize and start Innovation and Entrepreneur Minds
+    # (DIKIWI Mind was already initialized earlier for WebSocket routing)
+    try:
+        # Innovation Mind - 8am daily TRIZ analysis
+        innovation_scheduler = InnovationScheduler(
+            llm_client=llm_client,
+            graph_db=graph_db,
+            obsidian_writer=writer,
+            feishu_pusher=pusher,
+            schedule_hour=SETTINGS.minds.innovation_time.hour,
+            schedule_minute=SETTINGS.minds.innovation_time.minute,
+            proposal_min_confidence=SETTINGS.minds.proposal_min_confidence,
+            proposal_max_per_session=SETTINGS.minds.proposal_max_per_session,
+            circuit_breaker_threshold=SETTINGS.minds.circuit_breaker_threshold,
+            enabled=SETTINGS.minds.innovation_enabled,
+        )
+        if SETTINGS.minds.innovation_enabled:
+            innovation_scheduler.start()
+            logger.info("Innovation Mind started (8am daily TRIZ)")
+
+        # Entrepreneur Mind - 9am daily GStack analysis
+        entrepreneur_scheduler = EntrepreneurScheduler(
+            llm_client=llm_client,
+            graph_db=graph_db,
+            innovation_scheduler=innovation_scheduler,
+            obsidian_writer=writer,
+            feishu_pusher=pusher,
+            schedule_hour=SETTINGS.minds.entrepreneur_time.hour,
+            schedule_minute=SETTINGS.minds.entrepreneur_time.minute,
+            proposal_min_confidence=SETTINGS.minds.proposal_min_confidence,
+            proposal_max_per_session=SETTINGS.minds.proposal_max_per_session,
+            circuit_breaker_threshold=SETTINGS.minds.circuit_breaker_threshold,
+            enabled=SETTINGS.minds.entrepreneur_enabled,
+        )
+        if SETTINGS.minds.entrepreneur_enabled:
+            entrepreneur_scheduler.start()
+            logger.info("Entrepreneur Mind started (9am daily GStack)")
+
+        logger.info("Three-Mind System initialized")
+    except Exception:
+        logger.exception("Failed to initialize Three-Mind System")
+        # Don't raise - system can work without minds
+
     logger.info("Aily startup complete")
     yield
     if ws_client:
@@ -474,6 +548,11 @@ async def lifespan(app: FastAPI):
         digest_scheduler.stop()
     if scheduler:
         scheduler.stop()
+    # Shutdown Three-Mind System
+    if innovation_scheduler:
+        innovation_scheduler.stop()
+    if entrepreneur_scheduler:
+        entrepreneur_scheduler.stop()
     if worker:
         await worker.stop()
     await fetcher.stop()

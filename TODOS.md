@@ -158,3 +158,160 @@
 - **Implementation:** Add `tiktoken>=0.5.0` to requirements, implement `count_tokens()` and `count_message_tokens()` methods
 - **Usage:** Enforce 4000 token limit in RAG synthesis pipeline
 
+## Critical Gaps from Three-Mind CEO Review (2026-04-09)
+
+**Review Reference:** `docs/THREE_MIND_ARCHITECTURE_CEO_REVIEW.md`
+
+**Verdict:** CONDITIONAL APPROVE — Proceed with DIKIWI Mind only. Defer Innovation/Entrepreneur minds until DIKIWI proves value retention.
+
+**User Decision:** Selected full Three-Mind architecture despite recommendation for incremental approach.
+
+### CG-1: Add circuit breaker for mind failures (COMPLETED 2026-04-09)
+- **What:** Implement circuit breaker pattern that disables a mind after 3 consecutive failures
+- **Why:** Prevents cascading failures and spam from broken sessions
+- **Scope:** `aily/sessions/base.py` - CircuitBreakerMixin with `can_execute()`, `record_failure()`, `reset()`
+- **Implementation:** Mixin class used by BaseMindScheduler, tracks failures, trips after threshold, supports manual reset via Feishu
+- **Priority:** P0
+- **Effort:** S
+
+### CG-2: Implement proposal quality gate (0.7 confidence threshold) (COMPLETED 2026-04-09)
+- **What:** Raise minimum confidence for Feishu notifications from 0.5 to 0.7
+- **Why:** 0.5 produces too much noise; user will ignore all proposals
+- **Scope:** `aily/sessions/models.py` Proposal dataclass with auto-reject logic
+- **Implementation:** Confidence < 0.7 auto-sets status to REJECTED, MindsConfig.proposal_min_confidence = 0.7
+- **Priority:** P0
+- **Effort:** XS
+
+### CG-3: Add session replay logging (COMPLETED 2026-04-09)
+- **What:** Complete session logs (input → processing → output) for debugging
+- **Why:** When proposals are bad, need to trace why
+- **Scope:** `aily/sessions/models.py` SessionState class
+- **Implementation:** SessionState with log_event() and to_replay_log() methods, used by BaseMindScheduler
+- **Priority:** P1
+- **Effort:** M
+
+### CG-4: Build manual override commands (COMPLETED 2026-04-09)
+- **What:** Feishu commands to enable/disable each mind: "disable innovation mind"
+- **Why:** User needs escape hatch when minds are noisy
+- **Scope:** `aily/bot/message_intent.py` + `aily/bot/ws_client.py`
+- **Implementation:** MIND_CONTROL intent type, _handle_mind_control() with enable/disable/status actions for all three minds
+- **Commands:** "disable/enable innovation mind", "disable/enable entrepreneur mind", "disable/enable dikiwi mind", "mind status"
+- **Priority:** P1
+- **Effort:** S
+
+### CG-5: Implement proposal auto-archive (30 days) (BUILD BEFORE WEEK 4)
+- **What:** Auto-move proposals older than 30 days to archive folder
+- **Why:** Prevents Obsidian vault clutter
+- **Scope:** `aily/proposals/storage.py` archival logic
+- **Priority:** P2
+- **Effort:** S
+
+### CG-6: Add mind-specific observability metrics (BUILD BEFORE WEEK 3)
+- **What:** Track proposals generated, read rate, action rate per mind
+- **Why:** Validate that minds are actually useful
+- **Scope:** New metrics module or integration with existing analytics
+- **Priority:** P1
+- **Effort:** M
+
+### CG-7: Design Feishu thread management for proposals (BUILD BEFORE WEEK 2)
+- **What:** Collapse daily proposals into threaded messages instead of spam
+- **Why:** 10 proposals/day × 2 minds = 20 messages. Unacceptable noise.
+- **Scope:** `aily/push/feishu.py` threading support
+- **Priority:** P0
+- **Effort:** M
+
+## Engineering Review Outcomes (2026-04-09)
+
+**Review Reference:** `docs/THREE_MIND_ARCHITECTURE_ENG_REVIEW.md`
+
+**Scope Decision:** REDUCED — 19 files → 3 schedulers + infrastructure
+
+### ER-1: Create BaseMindScheduler base class (COMPLETED 2026-04-09)
+- **What:** Abstract base for all mind schedulers with common start/stop/schedule logic
+- **Why:** DRY — existing schedulers duplicate AsyncIOScheduler boilerplate
+- **Scope:** `aily/sessions/base.py` with `BaseMindScheduler` ABC
+- **Implementation:** `BaseMindScheduler` with APScheduler cron trigger, circuit breaker integration, session tracking, `enable()`/`disable()` methods
+- **Priority:** P1
+- **Effort:** S
+- **Depends on:** None
+
+### ER-2: Create CircuitBreakerMixin (COMPLETED 2026-04-09)
+- **What:** Reusable circuit breaker for mind failure handling
+- **Why:** Requirement from CEO review CG-1, should be shared component
+- **Scope:** `aily/sessions/base.py` mixin class
+- **Implementation:** `CircuitBreakerMixin` with `can_execute()`, `record_success()`, `record_failure()`, `reset()`, states: closed/open/half-open
+- **Priority:** P0
+- **Effort:** S
+- **Depends on:** ER-1
+
+### ER-3: Add MindsConfig to config.py (COMPLETED 2026-04-09)
+- **What:** Structured configuration for all mind settings with validation
+- **Why:** Centralize config, avoid env var sprawl, validate times/confidence values
+- **Scope:** `aily/config.py` — `MindsConfig` dataclass
+- **Implementation:** `MindsConfig` with `from_settings()`, `validate()`, env var parsing, time overlap checking
+- **Priority:** P1
+- **Effort:** S
+- **Depends on:** None
+
+### ER-4: Create Proposal dataclass (COMPLETED 2026-04-09)
+- **What:** Typed proposal model following existing patterns (like FrameworkInsight)
+- **Why:** Type safety, consistency with codebase patterns
+- **Scope:** `aily/sessions/models.py` — `Proposal` dataclass
+- **Implementation:** `Proposal` with auto ID generation, confidence clamping, auto-reject < 0.7, `to_markdown()`, `to_feishu_summary()`
+- **Priority:** P1
+- **Effort:** XS
+- **Depends on:** None
+
+### ER-5: Add GraphDB indexes for time-range queries (ALREADY EXISTS)
+- **What:** CREATE INDEX on nodes.created_at and nodes.type
+- **Why:** Innovation/Entrepreneur minds query "last 24h knowledge" — needs index
+- **Scope:** `aily/graph/db.py` schema init
+- **Implementation:** Indexes already present in schema, verified working
+- **Priority:** P1
+- **Effort:** S
+- **Depends on:** None
+
+### ER-6: Implement DikiwiMind (Week 1) (COMPLETED 2026-04-09)
+- **What:** Continuous DIKIWI pipeline integrating with DrainageSystem
+- **Why:** Core of Three-Mind architecture — every input flows through here
+- **Scope:** `aily/sessions/dikiwi_mind.py` — atomization + GraphDB storage
+- **Implementation:** `DikiwiMind` with 6-stage pipeline (DATA → INFORMATION → KNOWLEDGE → INSIGHT → WISDOM → IMPACT), `DikiwiStage` enum
+- **Priority:** P0
+- **Effort:** M
+- **Depends on:** ER-1, ER-3
+
+### ER-7: Implement InnovationScheduler (Week 2) (COMPLETED 2026-04-09)
+- **What:** 8am daily TRIZ-based insight generation
+- **Why:** Scheduled mind for innovation proposals
+- **Scope:** `aily/sessions/innovation_scheduler.py`
+- **Implementation:** `InnovationScheduler` with TRIZ analyzer, contradiction/principle/insight proposal generation, `get_current_proposals()` for Entrepreneur dependency
+- **Priority:** P0
+- **Effort:** M
+- **Depends on:** ER-1, ER-2, ER-3, ER-4
+
+### ER-8: Implement EntrepreneurScheduler (Week 3) (COMPLETED 2026-04-09)
+- **What:** 9am daily GStack-based business evaluation
+- **Why:** Scheduled mind for business proposals
+- **Scope:** `aily/sessions/entrepreneur_scheduler.py` with dependency on Innovation
+- **Implementation:** `EntrepreneurScheduler` with GStack analyzer, Innovation dependency with 30-min timeout, PMF/growth loop proposals
+- **Priority:** P0
+- **Effort:** M
+- **Depends on:** ER-1, ER-2, ER-3, ER-4, ER-7
+
+### ER-9: Add session test suite (COMPLETED 2026-04-09)
+- **What:** 5 test files covering 76 paths (schedulers, circuit breaker, quality)
+- **Why:** Zero coverage for new functionality — requirement from eng review
+- **Scope:** `tests/sessions/test_*.py` (5 files)
+- **Implementation:** `test_base.py` (14 tests), `test_dikiwi_mind.py` (11 tests), `test_innovation_scheduler.py` (15 tests), `test_entrepreneur_scheduler.py` (16 tests), `test_models.py` (20 tests)
+- **Priority:** P0
+- **Effort:** M
+- **Depends on:** ER-6, ER-7, ER-8
+
+### ER-10: Add LLM batching and caching
+- **What:** Content-hash cache + batch proposal generation
+- **Why:** Reduce LLM calls from 6+/day to ~3/day, avoid rate limits
+- **Scope:** `aily/sessions/innovation_scheduler.py` + `entrepreneur_scheduler.py`
+- **Priority:** P2
+- **Effort:** M
+- **Depends on:** ER-7, ER-8
+
