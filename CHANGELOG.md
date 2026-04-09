@@ -30,6 +30,40 @@ All notable changes to Aily will be documented in this file.
 - **Verification**: When AI generates reports, humans naturally click source links to verify. Now Aily does this automatically, flagging unsupported claims before they reach your vault.
 - **Learning Loop**: Based on neuroscience research (encoding → elaboration → consolidation → retrieval), Aily now mimics how the brain actually forms permanent memories. Each phase of memory formation is supported: atomic notes for encoding, connection suggestions for elaboration, spaced repetition for consolidation, active recall for retrieval.
 
+## [0.6.0.0] - 2026-04-09
+
+### Added
+- **Universal Content Processor** (`aily/processing/`) - Handle any file type with intelligent content extraction
+  - `ProcessingRouter` - Central router that detects content type and dispatches to appropriate processor
+  - `ContentTypeDetector` - Magic bytes detection for accurate file type identification (PDF, images, CSV, XLSX, DOCX, markdown, HTML)
+  - `CSVProcessor` - Converts CSV files to markdown tables with proper formatting
+  - `XLSXProcessor` - Extracts Excel sheets as markdown tables, one per sheet
+  - `DocxProcessor` - Extracts text from Word documents preserving structure
+  - `ImageProcessor` - OCR text extraction using EasyOCR (English + Chinese support)
+  - `PDFProcessor` - PDF text extraction with layout preservation
+  - `MarkdownProcessor` - Markdown parsing with frontmatter extraction
+  - `TextProcessor` - Fallback for any text-based content
+- **File size limits** with configurable thresholds
+  - Default: 50MB for general files, 10MB for images (OCR memory limit)
+  - Configurable via `max_file_size` and `max_image_size` settings
+  - Human-readable size formatting in error messages
+- **Connection pooling** for SQLite databases
+  - Persistent `self._db` connection pattern in `QueueDB` and `GraphDB`
+  - Proper cleanup with `close()` methods
+  - Eliminates database lock issues from repeated open/close cycles
+
+### Changed
+- **Processor architecture** - CPU-bound operations (OCR) now use `asyncio.to_thread()` to prevent event loop blocking
+- **Webhook handler** - Fixed database connection cleanup with try/finally blocks to prevent locks under load
+- **Test coverage** - Expanded from 66 to 105+ tests covering all processors, content detection, and router logic
+
+### Engineering Review Fixes
+- P0: SQL injection prevention via parameterized queries throughout
+- P0: Proper resource cleanup for all database connections
+- P1: CPU-bound OCR offloaded to threads via `asyncio.to_thread()`
+- P1: HTTP client mocking fixed in router tests (correct patch path)
+- P2: Comprehensive test suite (41 detector tests, 26 processor tests, 20 router tests)
+
 ## [0.5.0.0] - 2026-04-07
 
 ### Added
