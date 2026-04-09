@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     whisper_model: str = "whisper-1"
     voice_temp_dir: Path = Path("/tmp/aily_voice")
 
+    # File processing limits (bytes)
+    max_file_size: int = 50 * 1024 * 1024  # 50MB default limit
+    max_image_size: int = 10 * 1024 * 1024  # 10MB for images (OCR memory limit)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property

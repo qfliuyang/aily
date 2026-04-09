@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1775478211201,
+  "lastScanned": 1775614761992,
   "projectRoot": "/Users/luzi/code/aily",
   "techStack": {
     "languages": [
@@ -46,6 +46,7 @@
     "isMonorepo": false,
     "workspaces": [],
     "mainDirectories": [
+      "docs",
       "tests"
     ],
     "gitBranches": null
@@ -56,320 +57,354 @@
       "path": "aily",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1775478211149,
+      "lastAccessed": 1775614761939,
       "keyFiles": [
         "__init__.py",
         "config.py",
         "main.py"
       ]
     },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1775614761939,
+      "keyFiles": [
+        "feishu-voice-webhook.md"
+      ]
+    },
+    "installer": {
+      "path": "installer",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1775614761940,
+      "keyFiles": [
+        "build-dmg.sh",
+        "com.aily.app.plist",
+        "install.sh",
+        "uninstall.sh"
+      ]
+    },
+    "test-artifacts": {
+      "path": "test-artifacts",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775614761940,
+      "keyFiles": []
+    },
     "tests": {
       "path": "tests",
       "purpose": "Test files",
-      "fileCount": 15,
-      "lastAccessed": 1775478211149,
+      "fileCount": 21,
+      "lastAccessed": 1775614761940,
       "keyFiles": [
         "__init__.py",
+        "test_agent_pipeline.py",
+        "test_agent_registry.py",
         "test_bot.py",
-        "test_browser_manager.py",
-        "test_digest_pipeline.py",
-        "test_e2e.py"
+        "test_browser_manager.py"
       ]
     }
   },
   "hotPaths": [
     {
-      "path": "aily/main.py",
-      "accessCount": 43,
-      "lastAccessed": 1775543326055,
+      "path": "aily/browser/agent_worker.py",
+      "accessCount": 19,
+      "lastAccessed": 1775658224698,
       "type": "file"
     },
     {
-      "path": "aily/bot/webhook.py",
-      "accessCount": 9,
-      "lastAccessed": 1775543377341,
+      "path": "aily/browser/manager.py",
+      "accessCount": 14,
+      "lastAccessed": 1775657355184,
+      "type": "file"
+    },
+    {
+      "path": "aily/digest/pipeline.py",
+      "accessCount": 13,
+      "lastAccessed": 1775665215936,
+      "type": "file"
+    },
+    {
+      "path": "TODOS.md",
+      "accessCount": 12,
+      "lastAccessed": 1775690554331,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 12,
+      "lastAccessed": 1775695752846,
+      "type": "directory"
+    },
+    {
+      "path": "aily/learning/recall.py",
+      "accessCount": 10,
+      "lastAccessed": 1775620502659,
       "type": "file"
     },
     {
       "path": "aily/graph/db.py",
       "accessCount": 8,
-      "lastAccessed": 1775524280455,
+      "lastAccessed": 1775694692263,
       "type": "file"
     },
     {
-      "path": "aily/queue/db.py",
+      "path": "aily/config.py",
+      "accessCount": 8,
+      "lastAccessed": 1775695775106,
+      "type": "file"
+    },
+    {
+      "path": "aily/learning/srs.py",
       "accessCount": 7,
-      "lastAccessed": 1775524261651,
+      "lastAccessed": 1775620454738,
+      "type": "file"
+    },
+    {
+      "path": "CEO_SUMMARY.md",
+      "accessCount": 7,
+      "lastAccessed": 1775661004271,
+      "type": "file"
+    },
+    {
+      "path": "aily/processing/atomicizer.py",
+      "accessCount": 7,
+      "lastAccessed": 1775690415292,
+      "type": "file"
+    },
+    {
+      "path": "tests/integration/conftest.py",
+      "accessCount": 6,
+      "lastAccessed": 1775614924343,
       "type": "file"
     },
     {
       "path": "CHANGELOG.md",
-      "accessCount": 7,
-      "lastAccessed": 1775544200894,
+      "accessCount": 6,
+      "lastAccessed": 1775655438969,
       "type": "file"
     },
     {
-      "path": "aily/browser/manager.py",
+      "path": "tests/integration/run-real.sh",
       "accessCount": 5,
-      "lastAccessed": 1775482953439,
+      "lastAccessed": 1775617341317,
       "type": "file"
     },
     {
-      "path": "aily/capture/claude_code.py",
-      "accessCount": 4,
-      "lastAccessed": 1775525027111,
+      "path": "aily/scheduler/jobs.py",
+      "accessCount": 5,
+      "lastAccessed": 1775621070783,
       "type": "file"
     },
     {
-      "path": "aily/parser/parsers.py",
-      "accessCount": 4,
-      "lastAccessed": 1775525109438,
+      "path": "docs/brain-knowledge-research.md",
+      "accessCount": 5,
+      "lastAccessed": 1775659904524,
       "type": "file"
     },
     {
-      "path": "",
+      "path": "tests/test_atomicizer.py",
       "accessCount": 4,
-      "lastAccessed": 1775525114323,
-      "type": "directory"
-    },
-    {
-      "path": "TODOS.md",
-      "accessCount": 4,
-      "lastAccessed": 1775543472226,
+      "lastAccessed": 1775618814395,
       "type": "file"
     },
     {
-      "path": "aily/writer/obsidian.py",
+      "path": "tests/test_srs.py",
+      "accessCount": 4,
+      "lastAccessed": 1775620271626,
+      "type": "file"
+    },
+    {
+      "path": "aily/llm/client.py",
+      "accessCount": 4,
+      "lastAccessed": 1775654510179,
+      "type": "file"
+    },
+    {
+      "path": "tests/browser_use_kimi_results.md",
+      "accessCount": 4,
+      "lastAccessed": 1775655566276,
+      "type": "file"
+    },
+    {
+      "path": "aily/verify/verifier.py",
       "accessCount": 3,
-      "lastAccessed": 1775524363826,
+      "lastAccessed": 1775617000260,
       "type": "file"
     },
     {
-      "path": "aily/learning/loop.py",
+      "path": "scripts/test_browser_chinese.py",
       "accessCount": 3,
-      "lastAccessed": 1775524507537,
-      "type": "file"
-    },
-    {
-      "path": "tests/test_capture_claude_code.py",
-      "accessCount": 3,
-      "lastAccessed": 1775525041778,
+      "lastAccessed": 1775640022868,
       "type": "file"
     },
     {
       "path": "requirements.txt",
       "accessCount": 3,
-      "lastAccessed": 1775525123573,
+      "lastAccessed": 1775665757730,
       "type": "file"
     },
     {
-      "path": "aily/scheduler/jobs.py",
+      "path": "aily/processing/__init__.py",
       "accessCount": 3,
-      "lastAccessed": 1775535755507,
+      "lastAccessed": 1775695767259,
       "type": "file"
     },
     {
-      "path": "tests/test_worker.py",
+      "path": "tests/integration/evidence/GOOGLE_SEARCH_TEST.md",
       "accessCount": 2,
-      "lastAccessed": 1775482764535,
+      "lastAccessed": 1775615010895,
       "type": "file"
     },
     {
-      "path": "docs/feishu-voice-webhook.md",
+      "path": "tests/integration/README.md",
       "accessCount": 2,
-      "lastAccessed": 1775524790807,
+      "lastAccessed": 1775617310393,
       "type": "file"
     },
     {
-      "path": "aily/config.py",
+      "path": "tests/test_learning_loop.py",
       "accessCount": 2,
-      "lastAccessed": 1775525228344,
+      "lastAccessed": 1775618595207,
       "type": "file"
     },
     {
-      "path": "tests/test_voice_transcriber.py",
+      "path": "tests/test_graph_db.py",
       "accessCount": 2,
-      "lastAccessed": 1775535910355,
+      "lastAccessed": 1775618827168,
       "type": "file"
     },
     {
-      "path": "tests/test_voice_downloader.py",
+      "path": "tests/test_recall.py",
       "accessCount": 2,
-      "lastAccessed": 1775535928879,
+      "lastAccessed": 1775618831471,
       "type": "file"
     },
     {
-      "path": "aily/network/tailscale.py",
+      "path": "aily/learning/loop.py",
       "accessCount": 2,
-      "lastAccessed": 1775543254171,
+      "lastAccessed": 1775620283218,
       "type": "file"
     },
     {
-      "path": "aily/digest/__init__.py",
-      "accessCount": 1,
-      "lastAccessed": 1775478306133,
+      "path": "tests/test_browser_manager.py",
+      "accessCount": 2,
+      "lastAccessed": 1775640045040,
       "type": "file"
     },
     {
-      "path": "aily/digest/pipeline.py",
-      "accessCount": 1,
-      "lastAccessed": 1775478383891,
+      "path": "tests/browser_use_kimi_test.py",
+      "accessCount": 2,
+      "lastAccessed": 1775640171109,
       "type": "file"
     },
     {
-      "path": "aily/parser/registry.py",
-      "accessCount": 1,
-      "lastAccessed": 1775478388013,
+      "path": "tests/test_monica_browser_use_api.py",
+      "accessCount": 2,
+      "lastAccessed": 1775640478700,
       "type": "file"
     },
     {
-      "path": "aily/queue/worker.py",
+      "path": "aily",
+      "accessCount": 2,
+      "lastAccessed": 1775650178250,
+      "type": "directory"
+    },
+    {
+      "path": "tests/integration/test_google_stealth.py",
       "accessCount": 1,
-      "lastAccessed": 1775482637241,
+      "lastAccessed": 1775614881153,
       "type": "file"
     },
     {
-      "path": "aily/agent/__init__.py",
+      "path": "aily/search/__init__.py",
       "accessCount": 1,
-      "lastAccessed": 1775482654589,
+      "lastAccessed": 1775615237676,
       "type": "file"
     },
     {
-      "path": "aily/agent/registry.py",
+      "path": "aily/search/tavily.py",
       "accessCount": 1,
-      "lastAccessed": 1775482654721,
+      "lastAccessed": 1775615270740,
       "type": "file"
     },
     {
-      "path": "aily/agent/agents.py",
+      "path": "tests/integration/test_tavily_search.py",
       "accessCount": 1,
-      "lastAccessed": 1775482654855,
+      "lastAccessed": 1775615305596,
       "type": "file"
     },
     {
-      "path": "aily/agent/pipeline.py",
+      "path": "aily/verify/__init__.py",
       "accessCount": 1,
-      "lastAccessed": 1775482681987,
+      "lastAccessed": 1775616692407,
       "type": "file"
     },
     {
-      "path": "tests/test_agent_registry.py",
+      "path": "tests/integration/test_verification.py",
       "accessCount": 1,
-      "lastAccessed": 1775482739271,
-      "type": "file"
-    },
-    {
-      "path": "tests/test_agent_pipeline.py",
-      "accessCount": 1,
-      "lastAccessed": 1775482754450,
-      "type": "file"
-    },
-    {
-      "path": "tests/test_bot.py",
-      "accessCount": 1,
-      "lastAccessed": 1775482776363,
-      "type": "file"
-    },
-    {
-      "path": "VERSION",
-      "accessCount": 1,
-      "lastAccessed": 1775482799458,
+      "lastAccessed": 1775616954011,
       "type": "file"
     },
     {
       "path": "aily/learning/__init__.py",
       "accessCount": 1,
-      "lastAccessed": 1775524398175,
+      "lastAccessed": 1775618815909,
       "type": "file"
     },
     {
-      "path": "tests/test_learning_loop.py",
+      "path": "aily/learning",
       "accessCount": 1,
-      "lastAccessed": 1775524592519,
+      "lastAccessed": 1775620283250,
+      "type": "directory"
+    },
+    {
+      "path": "aily/graph",
+      "accessCount": 1,
+      "lastAccessed": 1775620292300,
+      "type": "directory"
+    },
+    {
+      "path": "monica_response.png",
+      "accessCount": 1,
+      "lastAccessed": 1775620857017,
       "type": "file"
     },
     {
-      "path": "aily/capture/__init__.py",
+      "path": "monica_main.png",
       "accessCount": 1,
-      "lastAccessed": 1775524990626,
+      "lastAccessed": 1775620857102,
       "type": "file"
     },
     {
-      "path": "tests/test_parser.py",
+      "path": "docs/monica-kimi-dom-discovery.md",
       "accessCount": 1,
-      "lastAccessed": 1775525069897,
+      "lastAccessed": 1775620924023,
       "type": "file"
     },
     {
-      "path": "aily/voice/downloader.py",
+      "path": "aily/browser/subprocess_worker.py",
       "accessCount": 1,
-      "lastAccessed": 1775525183064,
+      "lastAccessed": 1775628561166,
       "type": "file"
     },
     {
-      "path": "aily/voice/transcriber.py",
+      "path": "aily/browser/__init__.py",
       "accessCount": 1,
-      "lastAccessed": 1775525183197,
+      "lastAccessed": 1775640014497,
       "type": "file"
     },
     {
-      "path": "aily/voice/__init__.py",
+      "path": ".venv/lib/python3.11/site-packages/browser_use/browser/cloud/cloud.py",
       "accessCount": 1,
-      "lastAccessed": 1775525194743,
+      "lastAccessed": 1775640029120,
       "type": "file"
     },
     {
-      "path": "aily/security/__init__.py",
+      "path": "test_browser_use_api.py",
       "accessCount": 1,
-      "lastAccessed": 1775535732316,
-      "type": "file"
-    },
-    {
-      "path": "aily/security/keychain.py",
-      "accessCount": 1,
-      "lastAccessed": 1775535732449,
-      "type": "file"
-    },
-    {
-      "path": "installer/Aily.app/Contents/Info.plist",
-      "accessCount": 1,
-      "lastAccessed": 1775542242916,
-      "type": "file"
-    },
-    {
-      "path": "installer/Aily.app/Contents/MacOS/Aily",
-      "accessCount": 1,
-      "lastAccessed": 1775542243058,
-      "type": "file"
-    },
-    {
-      "path": "installer/com.aily.app.plist",
-      "accessCount": 1,
-      "lastAccessed": 1775542327542,
-      "type": "file"
-    },
-    {
-      "path": "installer/install.sh",
-      "accessCount": 1,
-      "lastAccessed": 1775542327692,
-      "type": "file"
-    },
-    {
-      "path": "installer/uninstall.sh",
-      "accessCount": 1,
-      "lastAccessed": 1775542327883,
-      "type": "file"
-    },
-    {
-      "path": "aily/__init__.py",
-      "accessCount": 1,
-      "lastAccessed": 1775543262049,
-      "type": "file"
-    },
-    {
-      "path": "aily/network/__init__.py",
-      "accessCount": 1,
-      "lastAccessed": 1775543271388,
+      "lastAccessed": 1775640238162,
       "type": "file"
     }
   ],

@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\".venv/bin/python -m pytest tests/test_voice_downloader.py tests/test_voice_transcriber.py -v 2>&1\",\"timeout\":60000,\"description\":\"Run voice pipeline tests\"}",
-  "error": "Exit code 1\n============================= test session starts ==============================\nplatform darwin -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0 -- /Users/luzi/code/aily/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /Users/luzi/code/aily\nconfigfile: pytest.ini\nplugins: anyio-4.12.1, asyncio-1.3.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollecting ... collected 10 items\n\ntests/test_voice_downloader.py::t...",
-  "timestamp": "2026-04-07T04:24:59.678Z",
+  "tool_input_preview": "{\"command\":\".venv/bin/python -m pytest tests/test_router.py -v --tb=short 2>&1\",\"description\":\"Run test_router.py tests\"}",
+  "error": "Exit code 1\n============================= test session starts ==============================\nplatform darwin -- Python 3.11.15, pytest-9.0.2, pluggy-1.6.0 -- /Users/luzi/code/aily/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /Users/luzi/code/aily\nconfigfile: pytest.ini\nplugins: anyio-4.12.1, asyncio-1.3.0\nasyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollecting ... collected 20 items\n\ntests/test_router.py::TestFormatS...",
+  "timestamp": "2026-04-09T00:51:27.962Z",
   "retry_count": 1
 }

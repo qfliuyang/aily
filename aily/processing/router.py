@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from aily.config import SETTINGS
 from aily.processing.detector import ContentType, ContentTypeDetector
 from aily.processing.processors import (
     ContentProcessor,
@@ -26,6 +27,15 @@ if TYPE_CHECKING:
     from aily.browser.manager import BrowserUseManager
 
 logger = logging.getLogger(__name__)
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format byte size to human readable string."""
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f}TB"
 
 
 class ProcessingRouter:
@@ -71,7 +81,23 @@ class ProcessingRouter:
         Returns:
             ExtractedContent with text and metadata
         """
-        # 1. Detect content type
+        # 1. Check file size limits first
+        size_limit = SETTINGS.max_file_size
+        if http_content_type and http_content_type.startswith("image/"):
+            size_limit = SETTINGS.max_image_size
+
+        if len(data) > size_limit:
+            logger.warning(
+                "File too large: %s > %s limit",
+                _format_size(len(data)),
+                _format_size(size_limit),
+            )
+            return ExtractedContent(
+                text=f"[File too large: {_format_size(len(data))} exceeds limit of {_format_size(size_limit)}]",
+                source_type="error",
+            )
+
+        # 2. Detect content type
         content_type = ContentTypeDetector.detect(
             data=data,
             filename=filename,
@@ -85,7 +111,7 @@ class ProcessingRouter:
             filename,
         )
 
-        # 2. Find matching processor
+        # 3. Find matching processor
         processor = self._get_processor(content_type.mime_type)
 
         if processor is None:
