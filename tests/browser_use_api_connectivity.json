@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-04-08T17:24:07.233954",
+  "api_key_prefix": "bu_cr_lbyB...",
+  "base_url": "https://api.browser-use.com/api/v3",
+  "tests": {
+    "sdk_availability": {
+      "name": "SDK Availability",
+      "status": "info",
+      "errors": [
+        "browser-use-sdk not installed"
+      ],
+      "details": {
+        "sdk_available": false
+      }
+    },
+    "connectivity": {
+      "name": "API Connectivity",
+      "status": "passed",
+      "latency_ms": 5370.9,
+      "errors": [],
+      "details": {
+        "status_code": 200,
+        "response": {
+          "sessions": [],
+          "total": 0,
+          "page": 1,
+          "pageSize": 20
+        }
+      }
+    },
+    "create_session": {
+      "name": "Create Session",
+      "status": "passed",
+      "latency_ms": 13087.71,
+      "errors": [],
+      "details": {
+        "status_code": 201,
+        "response": {
+          "id": "c52a0b07-d338-49bc-8c4a-06bf5b7846ae",
+          "status": "running",
+          "model": "bu-max",
+          "title": null,
+          "output": null,
+          "outputSchema": null,
+          "stepCount": 0,
+          "lastStepSummary": null,
+          "isTaskSuccessful": null,
+          "liveUrl": "https://live.browser-use.com/session/c52a0b07-d338-49bc-8c4a-06bf5b7846ae",
+          "recordingUrls": [],
+          "profileId": null,
+          "workspaceId": null,
+          "proxyCountryCode": "us",
+          "maxCostUsd": "20",
+          "totalInputTokens": 0,
+          "totalOutputTokens": 0,
+          "proxyUsedMb": "0",
+          "llmCostUsd": "0",
+          "proxyCostUsd": "0",
+          "browserCostUsd": "0",
+          "totalCostUsd": "0",
+          "screenshotUrl": null,
+          "agentmailEmail": "importantmother431@mail.bu.app",
+          "createdAt": "2026-04-08T09:24:22.079980Z",
+          "updatedAt": "2026-04-08T09:24:25.688381Z"
+        },
+        "session_id": "c52a0b07-d338-49bc-8c4a-06bf5b7846ae"
+      }
+    },
+    "get_results": {
+      "name": "Get Session Results",
+      "status": "timeout",
+      "latency_ms": null,
+      "errors": [
+        "Timeout waiting for task completion"
+      ],
+      "details": {}
+    }
+  }
+}

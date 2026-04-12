@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Monica Homepage Structure",
+    "task": "\nNavigate to monica.im and analyze the website structure.\n\nYour task:\n1. Navigate to https://monica.im\n2. Wait for the page to fully load\n3. Identify the main sections of the site (header, navigation, main content, footer)\n4. Look for any chat-related features or links\n5. Check if there are any public/shared chat examples or demos\n6. Document any login/signup walls you encounter\n7. Return a detailed summary of:\n   - Page title and description\n   - Main navigation items found\n   - Any chat-related features visible\n   - Whether public chats are accessible\n   - Any CAPTCHA or anti-bot detection encountered\n",
+    "start_url": "https://monica.im",
+    "timestamp": "2026-04-08T17:24:41.447246",
+    "success": false,
+    "error": "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)",
+    "task_id": "ee889323-a356-46f2-858c-9fcf093425e1",
+    "output": null,
+    "steps": null,
+    "duration_seconds": 201.22906262497418
+  }
+]

@@ -1,0 +1,1608 @@
+"""DIKIWI Obsidian Integration - Full-Featured Knowledge System.
+
+Leverages Obsidian's advanced features:
+- Dataview: Query-able databases over markdown
+- Canvas: Visual knowledge maps
+- Templates: Structured note formats
+- Graph View: Relationship visualization
+- MOC: Maps of Content for navigation
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
+
+# Import types from dikiwi_mind (main DIKIWI module)
+# These are the actual types used in the pipeline
+if TYPE_CHECKING:
+    from aily.sessions.dikiwi_mind import DataPoint, InformationNode, Insight, Wisdom
+else:
+    # Define minimal type stubs for runtime
+    DataPoint = Any
+    InformationNode = Any
+    Insight = Any
+    Wisdom = Any
+
+logger = logging.getLogger(__name__)
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    """Remove empty/duplicate tags while keeping order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = str(value).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def _slugify_title(title: str, max_length: int = 160) -> str:
+    """Create a readable filesystem-safe slug without aggressively truncating titles."""
+    cleaned = "".join(c for c in str(title) if c.isalnum() or c in " -_").strip()
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return "Untitled"
+    return cleaned[:max_length].rstrip().replace(" ", "-")
+
+
+class DikiwiObsidianWriter:
+    """Full-featured Obsidian integration for DIKIWI knowledge system.
+
+    Creates a hierarchical, query-able, visual knowledge structure:
+    DIKIWI/
+    ├── 00-Input/          # Raw captured inputs
+    ├── 01-Data/           # Extracted facts (Dataview)
+    ├── 02-Information/    # Classified nodes (MOC)
+    ├── 03-Knowledge/      # Relationships (Graph)
+    ├── 04-Insights/       # Patterns (Dashboards)
+    ├── 05-Wisdom/         # Principles (Library)
+    ├── 06-Impact/         # Actions (Tasks)
+    └── Canvas/            # Visual maps
+    """
+
+    STAGE_NAMES = {
+        0: "00-Input",
+        1: "01-Data",
+        2: "02-Information",
+        3: "03-Knowledge",
+        4: "04-Insights",
+        5: "05-Wisdom",
+        6: "06-Impact",
+    }
+
+    def __init__(
+        self,
+        vault_path: str | Path,
+        folder_prefix: str = "DIKIWI",
+        zettelkasten_only: bool = True,
+    ) -> None:
+        self.vault_path = Path(vault_path)
+        self.dikiwi_root = self.vault_path / folder_prefix
+        self.zettelkasten_root = self.vault_path / "3-Resources" / "Zettelkasten"
+        self.zettelkasten_maps_root = self.vault_path / "3-Resources" / "MOCs"
+        self.zettelkasten_only = zettelkasten_only
+        self._ensure_zettelkasten_structure()
+
+        if not zettelkasten_only:
+            self._ensure_structure()
+            logger.info("DikiwiObsidianWriter initialized at %s", self.dikiwi_root)
+        else:
+            logger.info("DikiwiObsidianWriter initialized (Zettelkasten-only mode)")
+
+    def _ensure_zettelkasten_structure(self) -> None:
+        """Create the permanent-note home inside the Obsidian vault."""
+        self.zettelkasten_root.mkdir(parents=True, exist_ok=True)
+        self.zettelkasten_maps_root.mkdir(parents=True, exist_ok=True)
+
+        index_path = self.zettelkasten_root / "00 Zettelkasten Index.md"
+        if not index_path.exists():
+            index_path.write_text(self._build_zettelkasten_index(), encoding="utf-8")
+
+    def _build_zettelkasten_index(self) -> str:
+        """Create the main Obsidian-facing index for permanent notes."""
+        return """---
+note_role: "index"
+index_scope: "zettelkasten"
+---
+
+# Zettelkasten Index
+
+Permanent notes produced by DIKIWI live here. Browse by recency, tags, or Maps of Content.
+
+## Recent Notes
+```dataview
+TABLE dikiwi_level, zettel_id, date_created, source
+FROM "3-Resources/Zettelkasten"
+WHERE note_type = "permanent" AND file.name != "00 Zettelkasten Index"
+SORT date_created DESC
+LIMIT 50
+```
+
+## By Level
+```dataview
+TABLE length(rows) as Notes
+FROM "3-Resources/Zettelkasten"
+WHERE note_type = "permanent" AND dikiwi_level
+GROUP BY dikiwi_level
+SORT dikiwi_level ASC
+```
+
+## Maps Of Content
+```dataview
+LIST
+FROM "3-Resources/MOCs"
+SORT file.name ASC
+```
+
+## Tag Clusters
+```dataview
+TABLE length(rows) as Notes
+FROM "3-Resources/Zettelkasten"
+WHERE note_type = "permanent"
+FLATTEN tags AS tag
+GROUP BY tag
+SORT length(rows) DESC
+```
+"""
+
+    def _build_topic_map(self, tag: str) -> str:
+        """Create a simple Map of Content for a tag cluster."""
+        return f"""---
+note_role: "moc"
+topic: "{tag}"
+tags:
+  - {tag}
+---
+
+# {tag}
+
+## Notes
+```dataview
+TABLE date_created, source
+FROM "3-Resources/Zettelkasten"
+WHERE note_type = "permanent" AND contains(tags, "{tag}")
+SORT date_created DESC
+```
+"""
+
+    def _sanitize_map_name(self, tag: str) -> str:
+        """Make a filesystem-safe MOC filename from a tag."""
+        safe = "".join(c if c.isalnum() or c in " -_" else "-" for c in tag).strip()
+        return safe.replace(" ", "-") or "untagged"
+
+    def _update_topic_maps(self, tags: list[str]) -> None:
+        """Keep simple topic MOCs available for Obsidian navigation."""
+        for tag in tags:
+            tag = str(tag).strip()
+            if not tag or tag == "zettel":
+                continue
+            map_path = self.zettelkasten_maps_root / f"{self._sanitize_map_name(tag)}.md"
+            map_path.write_text(self._build_topic_map(tag), encoding="utf-8")
+
+    def _ensure_structure(self) -> None:
+        """Create full DIKIWI folder structure with MOC files."""
+        # Stage folders
+        for stage_num, stage_name in self.STAGE_NAMES.items():
+            stage_dir = self.dikiwi_root / stage_name
+            stage_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create MOC file for each stage
+            moc_path = stage_dir / f"{stage_name}-MOC.md"
+            if not moc_path.exists():
+                moc_content = self._generate_moc_template(stage_num, stage_name)
+                moc_path.write_text(moc_content, encoding="utf-8")
+
+        # Support folders
+        for folder in ["Canvas", "Templates", "_System"]:
+            (self.dikiwi_root / folder).mkdir(parents=True, exist_ok=True)
+
+        # Create templates
+        self._create_templates()
+
+        # Create overview canvas
+        self._create_overview_canvas()
+
+        logger.info("DIKIWI structure ensured with MOCs and templates")
+
+    def _generate_moc_template(self, stage_num: int, stage_name: str) -> str:
+        """Generate Map of Content for each stage."""
+        stage_type = stage_name.split("-")[1]
+
+        templates = {
+            0: """---
+tags: [MOC, dikiwi, input, inbox]
+---
+
+# Input MOC
+
+## Recent Inputs
+```dataview
+TABLE source, date_created
+FROM "DIKIWI/00-Input"
+WHERE file.name != "00-Input-MOC"
+SORT date_created DESC
+LIMIT 20
+```
+
+## By Source
+```dataview
+TABLE length(rows) as Count
+FROM "DIKIWI/00-Input"
+GROUP BY source
+```
+
+## Navigation
+- [[DIKIWI/01-Data/01-Data-MOC|Data Stage →]]
+""",
+            1: """---
+tags: [MOC, dikiwi, data]
+---
+
+# Data MOC
+
+## Recent Data Points
+```dataview
+TABLE data_type, confidence, source
+FROM "DIKIWI/01-Data"
+WHERE file.name != "01-Data-MOC"
+SORT date_created DESC
+LIMIT 20
+```
+
+## By Type
+```dataview
+LIST
+FROM "DIKIWI/01-Data"
+WHERE data_type
+GROUP BY data_type
+```
+
+## High Confidence Data
+```dataview
+LIST
+FROM "DIKIWI/01-Data"
+WHERE confidence >= 0.9
+SORT confidence DESC
+```
+
+## Navigation
+- [[DIKIWI/00-Input/00-Input-MOC|← Input]]
+- [[DIKIWI/02-Information/02-Information-MOC|Information →]]
+""",
+            2: """---
+tags: [MOC, dikiwi, information]
+---
+
+# Information MOC
+
+## Recent Nodes
+```dataview
+TABLE domain, info_type, confidence
+FROM "DIKIWI/02-Information"
+WHERE file.name != "02-Information-MOC"
+SORT date_created DESC
+LIMIT 20
+```
+
+## By Domain
+```dataview
+LIST
+FROM "DIKIWI/02-Information"
+WHERE domain
+GROUP BY domain
+```
+
+## By Type
+```dataview
+TABLE length(rows) as Count
+FROM "DIKIWI/02-Information"
+WHERE info_type
+GROUP BY info_type
+```
+
+## Navigation
+- [[DIKIWI/01-Data/01-Data-MOC|← Data]]
+- [[DIKIWI/03-Knowledge/03-Knowledge-MOC|Knowledge →]]
+""",
+            3: """---
+tags: [MOC, dikiwi, knowledge, links]
+---
+
+# Knowledge MOC
+
+## Recent Links
+```dataview
+TABLE relation_type, strength
+FROM "DIKIWI/03-Knowledge"
+WHERE file.name != "03-Knowledge-MOC"
+SORT date_created DESC
+LIMIT 20
+```
+
+## Relationship Types
+```dataview
+TABLE length(rows) as Count
+FROM "DIKIWI/03-Knowledge"
+WHERE relation_type
+GROUP BY relation_type
+```
+
+## Strong Connections (≥0.8)
+```dataview
+LIST
+FROM "DIKIWI/03-Knowledge"
+WHERE strength >= 0.8
+SORT strength DESC
+```
+
+## Navigation
+- [[DIKIWI/02-Information/02-Information-MOC|← Information]]
+- [[DIKIWI/04-Insights/04-Insights-MOC|Insights →]]
+""",
+            4: """---
+tags: [MOC, dikiwi, insights, dashboard]
+---
+
+# Insights MOC
+
+## Recent Insights
+```dataview
+TABLE insight_type, confidence, source_message
+FROM "DIKIWI/04-Insights"
+WHERE file.name != "04-Insights-MOC"
+SORT date_created DESC
+LIMIT 20
+```
+
+## By Type
+### Themes
+```dataview
+LIST confidence
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = "theme"
+SORT confidence DESC
+```
+
+### Patterns
+```dataview
+LIST confidence
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = "pattern"
+SORT confidence DESC
+```
+
+### Opportunities
+```dataview
+LIST confidence
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = "opportunity"
+SORT confidence DESC
+```
+
+### Gaps
+```dataview
+LIST confidence
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = "gap"
+SORT confidence DESC
+```
+
+## High Confidence Insights
+```dataview
+LIST
+FROM "DIKIWI/04-Insights"
+WHERE confidence >= 0.8
+SORT confidence DESC
+```
+
+## Dashboard
+→ [[DIKIWI/04-Insights/Insight-Dashboard|View Dashboard]]
+
+## Navigation
+- [[DIKIWI/03-Knowledge/03-Knowledge-MOC|← Knowledge]]
+- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom →]]
+""",
+            5: """---
+tags: [MOC, dikiwi, wisdom, principles]
+---
+
+# Wisdom MOC
+
+## Principles Library
+```dataview
+TABLE confidence, supporting_insights
+FROM "DIKIWI/05-Wisdom"
+WHERE file.name != "05-Wisdom-MOC"
+SORT confidence DESC
+```
+
+## By Domain
+```dataview
+LIST
+FROM "DIKIWI/05-Wisdom"
+WHERE applicable_domain
+GROUP BY applicable_domain
+```
+
+## Actionable Principles
+```dataview
+LIST
+FROM "DIKIWI/05-Wisdom"
+WHERE actionable = true
+SORT confidence DESC
+```
+
+## Navigation
+- [[DIKIWI/04-Insights/04-Insights-MOC|← Insights]]
+- [[DIKIWI/06-Impact/06-Impact-MOC|Impact →]]
+""",
+            6: """---
+tags: [MOC, dikiwi, impact, proposals, tasks]
+---
+
+# Impact MOC
+
+## Active Proposals
+```dataview
+TABLE proposal_type, priority, due_date
+FROM "DIKIWI/06-Impact"
+WHERE status = "active"
+SORT priority DESC
+```
+
+## Tasks
+```tasks
+not done
+path includes DIKIWI/06-Impact
+```
+
+## By Type
+```dataview
+TABLE length(rows) as Count
+FROM "DIKIWI/06-Impact"
+WHERE proposal_type
+GROUP BY proposal_type
+```
+
+## Navigation
+- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|← Wisdom]]
+- [[DIKIWI/Canvas/DIKIWI-Overview|View Overview Canvas]]
+""",
+        }
+
+        return templates.get(stage_num, f"# {stage_name} MOC\n")
+
+    def _create_templates(self) -> None:
+        """Create note templates for each stage."""
+        templates_dir = self.dikiwi_root / "Templates"
+
+        # Data template
+        data_template = """---
+dikiwi_stage: "data"
+pipeline_id: "{{pipeline_id}}"
+data_point_id: "{{data_point_id}}"
+source: "{{source}}"
+source_url: "{{source_url}}"
+date_created: "{{date_created}}"
+confidence: {{confidence}}
+data_type: "{{data_type}}"
+tags: ["dikiwi", "data", "{{source}}"]
+---
+
+# {{title}}
+
+{{content}}
+
+---
+
+## Metadata
+- **Source**: {{source}}
+- **Confidence**: {{confidence}}%
+- **Type**: {{data_type}}
+- **Extracted**: {{date_created}}
+
+## Related
+- [[DIKIWI/01-Data/01-Data-MOC|Data Index]]
+- Next Stage: [[DIKIWI/02-Information/02-Information-MOC|Information]]
+"""
+        (templates_dir / "Data-Template.md").write_text(data_template, encoding="utf-8")
+
+        # Insight template
+        insight_template = """---
+dikiwi_stage: "insight"
+insight_id: "{{insight_id}}"
+insight_type: "{{insight_type}}"
+confidence: {{confidence}}
+source_message: "[[{{source_message}}|{{source_title}}]]"
+date_created: "{{date_created}}"
+tags: ["dikiwi", "insight", "{{insight_type}}"]
+parent_theme: "{{parent_theme}}"
+related_domains: [{{domains}}]
+---
+
+# {{insight_type}}: {{title}}
+
+{{description}}
+
+---
+
+## Analysis
+- **Confidence**: `{{confidence}}`
+- **Type**: #{{insight_type}}
+- **Source**: [[{{source_message}}]]
+- **Theme**: {{parent_theme}}
+
+## Evidence
+{{supporting_evidence}}
+
+## Actionable Implications
+{{implications}}
+
+---
+
+## Related Insights
+```dataview
+TABLE insight_type, confidence, date_created
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = this.insight_type AND confidence > 0.7
+SORT confidence DESC
+LIMIT 10
+```
+
+## Connections
+- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom Stage]]
+- [[DIKIWI/04-Insights/Insight-Dashboard|Dashboard]]
+"""
+        (templates_dir / "Insight-Template.md").write_text(insight_template, encoding="utf-8")
+
+    def _create_overview_canvas(self) -> None:
+        """Create the main DIKIWI overview canvas."""
+        canvas_path = self.dikiwi_root / "Canvas" / "DIKIWI-Overview.canvas"
+
+        canvas_data = {
+            "nodes": [
+                {
+                    "id": "input",
+                    "type": "text",
+                    "text": "# 00-Input\n\n📥 Raw captures\n\n[[DIKIWI/00-Input/00-Input-MOC|View All]]",
+                    "x": 0,
+                    "y": 0,
+                    "width": 220,
+                    "height": 160,
+                    "color": "1"  # Red
+                },
+                {
+                    "id": "data",
+                    "type": "text",
+                    "text": "# 01-Data\n\n📊 Extracted facts\n\n[[DIKIWI/01-Data/01-Data-MOC|View All]]",
+                    "x": 350,
+                    "y": 0,
+                    "width": 220,
+                    "height": 160,
+                    "color": "2"  # Orange
+                },
+                {
+                    "id": "information",
+                    "type": "text",
+                    "text": "# 02-Information\n\n📝 Classified nodes\n\n[[DIKIWI/02-Information/02-Information-MOC|View All]]",
+                    "x": 700,
+                    "y": 0,
+                    "width": 220,
+                    "height": 160,
+                    "color": "3"  # Yellow
+                },
+                {
+                    "id": "knowledge",
+                    "type": "text",
+                    "text": "# 03-Knowledge\n\n🔗 Linked network\n\n[[DIKIWI/03-Knowledge/03-Knowledge-MOC|View All]]",
+                    "x": 1050,
+                    "y": 0,
+                    "width": 220,
+                    "height": 160,
+                    "color": "4"  # Green
+                },
+                {
+                    "id": "insights",
+                    "type": "text",
+                    "text": "# 04-Insights\n\n💡 Pattern detection\n\n[[DIKIWI/04-Insights/04-Insights-MOC|View All]]\n\n[[DIKIWI/04-Insights/Insight-Dashboard|📊 Dashboard]]",
+                    "x": 700,
+                    "y": 350,
+                    "width": 220,
+                    "height": 180,
+                    "color": "5"  # Blue
+                },
+                {
+                    "id": "wisdom",
+                    "type": "text",
+                    "text": "# 05-Wisdom\n\n🧠 Synthesized principles\n\n[[DIKIWI/05-Wisdom/05-Wisdom-MOC|View All]]",
+                    "x": 350,
+                    "y": 350,
+                    "width": 220,
+                    "height": 160,
+                    "color": "6"  # Purple
+                },
+                {
+                    "id": "impact",
+                    "type": "text",
+                    "text": "# 06-Impact\n\n🚀 Actionable proposals\n\n[[DIKIWI/06-Impact/06-Impact-MOC|View All]]",
+                    "x": 0,
+                    "y": 350,
+                    "width": 220,
+                    "height": 160,
+                    "color": "7"  # Pink
+                }
+            ],
+            "edges": [
+                {"id": "e1", "fromNode": "input", "fromSide": "right", "toNode": "data", "toSide": "left"},
+                {"id": "e2", "fromNode": "data", "fromSide": "right", "toNode": "information", "toSide": "left"},
+                {"id": "e3", "fromNode": "information", "fromSide": "right", "toNode": "knowledge", "toSide": "left"},
+                {"id": "e4", "fromNode": "knowledge", "fromSide": "bottom", "toNode": "insights", "toSide": "top"},
+                {"id": "e5", "fromNode": "insights", "fromSide": "left", "toNode": "wisdom", "toSide": "right"},
+                {"id": "e6", "fromNode": "wisdom", "fromSide": "left", "toNode": "impact", "toSide": "right"}
+            ]
+        }
+
+        canvas_path.write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")
+
+    def _get_month_dir(self, stage: str) -> Path:
+        """Get or create month-based directory for a stage."""
+        now = datetime.now(timezone.utc)
+        month_dir = self.dikiwi_root / stage / f"{now.year}-{now.month:02d}"
+        month_dir.mkdir(parents=True, exist_ok=True)
+        return month_dir
+
+    def _format_frontmatter(self, data: dict[str, Any]) -> str:
+        """Format dict as YAML frontmatter."""
+        lines = ["---"]
+        for key, value in data.items():
+            if isinstance(value, list):
+                lines.append(f"{key}:")
+                for item in value:
+                    lines.append(f"  - {item}")
+            elif isinstance(value, str):
+                # Escape quotes in strings
+                escaped = value.replace('"', '\\"')
+                lines.append(f'{key}: "{escaped}"')
+            else:
+                lines.append(f"{key}: {value}")
+        lines.append("---")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _title_short(text: str, fallback: str = "Untitled", max_len: int = 80) -> str:
+        cleaned = " ".join(str(text).replace("\n", " ").split()).strip(" -:")
+        if not cleaned:
+            return fallback
+        sentence = cleaned.split(".")[0].strip()
+        candidate = sentence if 8 <= len(sentence) <= max_len else cleaned
+        return (candidate[:max_len].rstrip() or fallback)
+
+    def _write_dikiwi_note(
+        self,
+        stage_folder: str,
+        dikiwi_id: str,
+        title: str,
+        frontmatter: dict[str, Any],
+        body: str,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write a note to a DIKIWI stage folder. Returns dikiwi_id for linking."""
+        month_dir = self._get_month_dir(stage_folder)
+        safe_title = _slugify_title(title, max_length=80)
+        filename = f"{dikiwi_id}-{safe_title}.md"
+        path = month_dir / filename
+
+        fm: dict[str, Any] = {
+            "dikiwi_id": dikiwi_id,
+            "aliases": [dikiwi_id],
+            "date_created": datetime.now(timezone.utc).isoformat(),
+        }
+        fm.update(frontmatter)
+        if source_paths:
+            fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
+
+        note_content = f"{self._format_frontmatter(fm)}\n\n# {title}\n\n{body}\n"
+        path.write_text(note_content, encoding="utf-8")
+        logger.info("Wrote DIKIWI note: %s", filename)
+        return dikiwi_id
+
+    async def write_data_note(
+        self,
+        drop: Any,
+        pipeline_id: str,
+        source_paths: list[str] | None = None,
+        title: str = "",
+        summary: str = "",
+        concepts: list[str] | None = None,
+    ) -> str:
+        """Write DATA stage note as an organized document summary. Returns dikiwi_id."""
+        source = getattr(drop, "source", "unknown")
+        content = getattr(drop, "content", "")
+
+        dikiwi_id = f"data_{hashlib.sha1(source.encode()).hexdigest()[:8]}"
+        note_title = title or self._title_short(source, fallback="Source Data")
+
+        fm: dict[str, Any] = {
+            "type": "data",
+            "source": source,
+            "content_chars": len(content),
+            "tags": ["data"],
+        }
+
+        body_parts: list[str] = []
+        if summary:
+            body_parts.append(summary)
+            body_parts.append("")
+
+        if concepts:
+            body_parts.append("## Extracted Concepts")
+            for c in concepts:
+                body_parts.append(f"- {c}")
+            body_parts.append("")
+
+        body_parts.append("## Source")
+        body_parts.append(f"- `{source}`")
+        body_parts.append(f"- {len(content):,} characters processed")
+
+        body = "\n".join(body_parts)
+        return self._write_dikiwi_note("01-Data", dikiwi_id, note_title, fm, body, source_paths)
+
+    async def write_information_note(
+        self,
+        node: Any,
+        data_note_id: str,
+        source: str,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write INFORMATION stage note for one classified idea chunk. Returns dikiwi_id."""
+        nid = getattr(node, "id", "")
+        content = getattr(node, "content", "")
+        domain = getattr(node, "domain", "general")
+        info_type = getattr(node, "info_type", "fact")
+        tags = list(getattr(node, "tags", []))
+        confidence = float(getattr(node, "confidence", 0.8) if hasattr(node, "confidence") else 0.8)
+
+        dikiwi_id = f"information_{hashlib.sha1(nid.encode()).hexdigest()[:8]}"
+        title = self._title_short(content, fallback=f"{domain.title()} Concept")
+
+        fm: dict[str, Any] = {
+            "type": "information",
+            "source": f"[[{data_note_id}]]",
+            "domain": domain,
+            "info_type": info_type,
+            "confidence": round(confidence, 2),
+            "tags": _dedupe_preserve_order(["information", domain] + tags),
+        }
+        body = "\n".join([
+            content,
+            "",
+            "## Classification",
+            f"- Domain: {domain}",
+            f"- Type: {info_type}",
+            f"- Confidence: {confidence:.0%}",
+            f"- From: [[{data_note_id}]]",
+        ])
+
+        return self._write_dikiwi_note("02-Information", dikiwi_id, title, fm, body, source_paths)
+
+    async def write_knowledge_note(
+        self,
+        link: Any,
+        src_node: Any,
+        tgt_node: Any,
+        src_info_id: str,
+        tgt_info_id: str,
+        source: str,
+    ) -> str:
+        """Write KNOWLEDGE stage note recording a meaningful relationship. Returns dikiwi_id."""
+        src_id = getattr(link, "source_id", "")
+        tgt_id = getattr(link, "target_id", "")
+        relation = getattr(link, "relation_type", "relates_to")
+        strength = float(getattr(link, "strength", 0.5))
+        reasoning = getattr(link, "reasoning", "")
+
+        src_content = getattr(src_node, "content", "")
+        tgt_content = getattr(tgt_node, "content", "")
+
+        dikiwi_id = f"knowledge_{hashlib.sha1((src_id + tgt_id).encode()).hexdigest()[:8]}"
+        src_title = self._title_short(src_content, "Source Concept", max_len=40)
+        tgt_title = self._title_short(tgt_content, "Target Concept", max_len=40)
+        title = f"{src_title} {relation.replace('_', ' ')} {tgt_title}"
+
+        nodes_list = [f"[[{src_info_id}]]", f"[[{tgt_info_id}]]"] if src_info_id and tgt_info_id else []
+
+        fm: dict[str, Any] = {
+            "type": "knowledge",
+            "nodes": nodes_list,
+            "relation": relation,
+            "strength": round(strength, 2),
+            "tags": ["knowledge", relation],
+        }
+        body_lines: list[str] = []
+        if reasoning:
+            body_lines += [reasoning, ""]
+        body_lines += [
+            "## Connected Ideas",
+            f"**A**: {src_content[:200]}",
+            "",
+            f"**{relation.replace('_', ' ').title()}**",
+            "",
+            f"**B**: {tgt_content[:200]}",
+        ]
+        if nodes_list:
+            body_lines += ["", "## Related", *[f"- {n}" for n in nodes_list]]
+
+        return self._write_dikiwi_note("03-Knowledge", dikiwi_id, title, fm, "\n".join(body_lines))
+
+    async def write_insight_note(
+        self,
+        insight: Any,
+        knowledge_note_ids: list[str],
+        drop: Any,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write INSIGHT stage note for an emergent pattern. Returns dikiwi_id."""
+        insight_id = getattr(insight, "id", "")
+        description = getattr(insight, "description", "")
+        insight_type = getattr(insight, "insight_type", "pattern")
+        confidence = float(getattr(insight, "confidence", 0.5))
+
+        dikiwi_id = f"insight_{hashlib.sha1(insight_id.encode()).hexdigest()[:8]}"
+        title = self._title_short(description, f"{insight_type.title()} Insight")
+
+        from_knowledge = [f"[[{k}]]" for k in knowledge_note_ids if k]
+        fm: dict[str, Any] = {
+            "type": "insight",
+            "from_knowledge": from_knowledge,
+            "insight_type": insight_type,
+            "confidence": round(confidence, 2),
+            "tags": _dedupe_preserve_order(["insight", insight_type]),
+        }
+        body = "\n".join([
+            description,
+            "",
+            "## Type",
+            f"- insight_type: {insight_type}",
+            f"- confidence: {confidence:.0%}",
+            "",
+            "## Source Knowledge",
+            *(([f"- {k}" for k in from_knowledge]) or ["- *(no linked knowledge notes)*"]),
+        ])
+
+        return self._write_dikiwi_note("04-Insights", dikiwi_id, title, fm, body, source_paths)
+
+    async def write_wisdom_note(
+        self,
+        zettel: Any,
+        insight_note_ids: list[str],
+        drop: Any,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write WISDOM stage permanent note with grounded_in links. Returns dikiwi_id."""
+        zettel_id_base = getattr(zettel, "id", hashlib.sha1(str(zettel).encode()).hexdigest()[:6])
+        title = getattr(zettel, "title", "Untitled")
+        content = getattr(zettel, "content", "")
+        tags = list(getattr(zettel, "tags", []))
+        links_to = list(getattr(zettel, "links_to", []))
+        confidence = float(getattr(zettel, "confidence", 0.5))
+        source = getattr(drop, "source", "")
+
+        dikiwi_id = f"wisdom_{zettel_id_base}"
+        grounded_in = [f"[[{iid}]]" for iid in insight_note_ids if iid]
+        deduped_tags = _dedupe_preserve_order(["wisdom"] + tags)
+
+        zettel_dir = self.zettelkasten_root / datetime.now(timezone.utc).strftime("%Y-%m")
+        zettel_dir.mkdir(parents=True, exist_ok=True)
+        safe_title = _slugify_title(title, max_length=80)
+        filename = f"{dikiwi_id}-{safe_title}.md"
+        path = zettel_dir / filename
+
+        fm: dict[str, Any] = {
+            "type": "wisdom",
+            "dikiwi_id": dikiwi_id,
+            "aliases": [dikiwi_id],
+            "title": title,
+            "source": source,
+            "date_created": datetime.now(timezone.utc).isoformat(),
+            "note_type": "permanent",
+            "dikiwi_level": "wisdom",
+            "word_count": len(content.split()),
+            "confidence": round(confidence, 2),
+            "grounded_in": grounded_in,
+            "tags": deduped_tags,
+        }
+        if source_paths:
+            fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
+
+        body_lines: list[str] = [
+            self._format_frontmatter(fm), "",
+            f"# {title}", "",
+            content, "",
+        ]
+        if links_to:
+            body_lines += ["## Related", "", *[f"- [[{link}]]" for link in links_to], ""]
+        if grounded_in:
+            body_lines += ["## Grounded In", "", *[f"- {g}" for g in grounded_in], ""]
+        body_lines += ["---", "", f"*Source: {source}*"]
+
+        path.write_text("\n".join(body_lines), encoding="utf-8")
+        self._update_topic_maps(tags)
+        logger.info("Wrote wisdom note: %s (%d words)", filename, len(content.split()))
+        return dikiwi_id
+
+    async def write_impact_note(
+        self,
+        impact: dict[str, Any],
+        wisdom_note_ids: list[str],
+        drop: Any,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write IMPACT stage action note. Returns dikiwi_id."""
+        description = impact.get("description", "")
+        impact_type = impact.get("type", "action")
+        priority = impact.get("priority", "medium")
+        effort = impact.get("effort_estimate", "medium")
+        rationale = impact.get("rationale", "")
+
+        dikiwi_id = f"impact_{hashlib.sha1(description[:50].encode()).hexdigest()[:8]}"
+        title = self._title_short(description, "Action Item")
+
+        based_on = [f"[[{wid}]]" for wid in wisdom_note_ids if wid]
+        fm: dict[str, Any] = {
+            "type": "impact",
+            "based_on": based_on,
+            "impact_type": impact_type,
+            "priority": priority,
+            "effort": effort,
+            "status": "pending",
+            "tags": _dedupe_preserve_order(["impact", impact_type, priority]),
+        }
+        body = "\n".join([
+            description, "",
+            "## Rationale",
+            rationale or "*(no rationale provided)*", "",
+            "## Based On",
+            *(([f"- {b}" for b in based_on]) or ["- *(no linked wisdom notes)*"]), "",
+            "## Task",
+            f"- [ ] {description[:100]}",
+        ])
+
+        return self._write_dikiwi_note("06-Impact", dikiwi_id, title, fm, body, source_paths)
+
+    async def write_input(self, message_id: str, content: str, source: str) -> Path | None:
+        """Write raw input to 00-Input."""
+        if self.zettelkasten_only:
+            return None
+
+        month_dir = self._get_month_dir("00-Input")
+        note_path = month_dir / f"{datetime.now().strftime('%Y-%m-%d-%H%M%S')}-{message_id}.md"
+
+        frontmatter = {
+            "dikiwi_stage": "input",
+            "message_id": message_id,
+            "source": source,
+            "date_created": datetime.now(timezone.utc).isoformat(),
+            "tags": ["dikiwi", "input", source],
+        }
+
+        content = f"{self._format_frontmatter(frontmatter)}\n\n# Input: {message_id[:8]}\n\n{content}\n\n---\n\n→ [[DIKIWI/01-Data/01-Data-MOC|Process to Data]]"
+
+        note_path.write_text(content, encoding="utf-8")
+        logger.info("Wrote input: %s", note_path)
+        return note_path
+
+    async def write_data_points(
+        self,
+        message_id: str,
+        data_points: list[DataPoint_v2],
+        source: str,
+    ) -> list[Path]:
+        """Write data points to 01-Data with Dataview metadata."""
+        if self.zettelkasten_only:
+            return []
+
+        month_dir = self._get_month_dir("01-Data")
+        paths = []
+
+        for i, dp in enumerate(data_points):
+            note_path = month_dir / f"data-{message_id}-{i}.md"
+
+            frontmatter = {
+                "dikiwi_stage": "data",
+                "pipeline_id": message_id,
+                "data_point_index": i,
+                "source": source,
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "confidence": round(dp.confidence, 2),
+                "data_type": dp.type if hasattr(dp, 'type') else "fact",
+                "tags": ["dikiwi", "data", source],
+            }
+
+            content_lines = [
+                self._format_frontmatter(frontmatter),
+                f"",
+                f"# Data Point {i}",
+                f"",
+                f"{dp.content}",
+                f"",
+                f"---",
+                f"",
+                f"## Metadata",
+                f"- **Confidence**: {dp.confidence:.0%}",
+                f"- **Source**: {source}",
+                f"",
+                f"## Navigation",
+                f"- [[DIKIWI/01-Data/01-Data-MOC|Data Index]]",
+                f"- [[DIKIWI/02-Information/02-Information-MOC|→ Information]]",
+            ]
+
+            note_path.write_text("\n".join(content_lines), encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d data points for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_information_nodes(
+        self,
+        message_id: str,
+        nodes: list[Any],
+    ) -> list[Path]:
+        """Write information nodes to 02-Information."""
+        if self.zettelkasten_only:
+            return []
+
+        month_dir = self._get_month_dir("02-Information")
+        paths = []
+
+        for i, node in enumerate(nodes):
+            note_path = month_dir / f"info-{message_id}-{i}.md"
+
+            # Handle both dataclass objects and dicts
+            if isinstance(node, dict):
+                content = node.get("content", "")
+                domain = node.get("domain", "")
+                info_type = node.get("info_type", "")
+                tags = node.get("tags", [])
+            else:
+                content = getattr(node, "content", "")
+                domain = getattr(node, "domain", "")
+                info_type = getattr(node, "info_type", "")
+                tags = getattr(node, "tags", [])
+
+            frontmatter = {
+                "dikiwi_stage": "information",
+                "message_id": message_id,
+                "domain": domain,
+                "info_type": info_type,
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "tags": ["dikiwi", "information", domain] + tags,
+            }
+
+            note_content = f"""{self._format_frontmatter(frontmatter)}
+
+# Information: {domain}
+
+{content}
+
+---
+
+→ [[DIKIWI/03-Knowledge/03-Knowledge-MOC|Link to Knowledge]]
+"""
+            note_path.write_text(note_content, encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d information nodes for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_knowledge_relations(
+        self,
+        message_id: str,
+        relations: list[Any],
+    ) -> list[Path]:
+        """Write knowledge relations to 03-Knowledge."""
+        if self.zettelkasten_only:
+            return []
+
+        month_dir = self._get_month_dir("03-Knowledge")
+        paths = []
+
+        for i, relation in enumerate(relations):
+            note_path = month_dir / f"knowledge-{message_id}-{i}.md"
+
+            # Handle both dataclass objects and dicts
+            if isinstance(relation, dict):
+                source_id = relation.get("source_id", "")
+                target_id = relation.get("target_id", "")
+                relation_type = relation.get("relation_type", "")
+                strength = relation.get("strength", 0.0)
+            else:
+                source_id = getattr(relation, "source_id", "")
+                target_id = getattr(relation, "target_id", "")
+                relation_type = getattr(relation, "relation_type", "")
+                strength = getattr(relation, "strength", 0.0)
+
+            frontmatter = {
+                "dikiwi_stage": "knowledge",
+                "message_id": message_id,
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": relation_type,
+                "strength": strength,
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "tags": ["dikiwi", "knowledge", relation_type],
+            }
+
+            note_content = f"""{self._format_frontmatter(frontmatter)}
+
+# Knowledge Link
+
+**Source:** {source_id}
+**Target:** {target_id}
+**Relation:** {relation_type}
+**Strength:** {strength}
+
+---
+
+→ [[DIKIWI/04-Insights/04-Insights-MOC|Extract Insights]]
+"""
+            note_path.write_text(note_content, encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d knowledge relations for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_insights(
+        self,
+        message_id: str,
+        insights: list[Insight_v2],
+        source_title: str,
+    ) -> list[Path]:
+        """Write insights to 04-Insights with rich Dataview metadata."""
+        if self.zettelkasten_only:
+            return []
+
+        month_dir = self._get_month_dir("04-Insights")
+        paths = []
+
+        for i, insight in enumerate(insights):
+            note_path = month_dir / f"insight-{message_id}-{i}.md"
+
+            frontmatter = {
+                "dikiwi_stage": "insight",
+                "insight_id": f"{message_id}-{i}",
+                "insight_type": insight.insight_type,
+                "confidence": round(insight.confidence, 2),
+                "source_message": f"DIKIWI/00-Input/{message_id}",
+                "source_title": source_title,
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "tags": [
+                    "dikiwi",
+                    "insight",
+                    insight.insight_type,
+                ],
+            }
+
+            # Add emoji based on type
+            emoji_map = {
+                "theme": "🎯",
+                "contradiction": "⚡",
+                "opportunity": "💡",
+                "gap": "🔗",
+                "pattern": "🔍",
+                "tension": "↔️",
+            }
+            emoji = emoji_map.get(insight.insight_type, "📌")
+
+            content_lines = [
+                self._format_frontmatter(frontmatter),
+                f"",
+                f"# {emoji} {insight.insight_type.title()}: {insight.description[:50]}",
+                f"",
+                f"{insight.description}",
+                f"",
+                f"---",
+                f"",
+                f"## Analysis",
+                f"- **Confidence**: `{insight.confidence:.0%}`",
+                f"- **Type**: #{insight.insight_type}",
+                f"- **Source**: [[{source_title}]]",
+                f"",
+                f"---",
+                f"",
+                f"## Related Insights",
+                f"```dataview",
+                f"TABLE insight_type, confidence",
+                f'FROM "DIKIWI/04-Insights"',
+                f"WHERE insight_type = this.insight_type AND confidence > 0.7",
+                f"SORT confidence DESC",
+                f"LIMIT 10",
+                f"```",
+                f"",
+                f"## Navigation",
+                f"- [[DIKIWI/04-Insights/04-Insights-MOC|Insights Index]]",
+                f"- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|→ Wisdom]]",
+            ]
+
+            note_path.write_text("\n".join(content_lines), encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d insights for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_wisdom(
+        self,
+        message_id: str,
+        wisdom_items: list[Any],
+    ) -> list[Path]:
+        """Write wisdom principles to 05-Wisdom."""
+        month_dir = self._get_month_dir("05-Wisdom")
+        paths = []
+
+        for i, wisdom in enumerate(wisdom_items):
+            note_path = month_dir / f"wisdom-{message_id}-{i}.md"
+
+            # Handle both dataclass objects and dicts
+            if isinstance(wisdom, dict):
+                principle = wisdom.get('principle', '')
+                context = wisdom.get('context', '')
+                implications = wisdom.get('implications', [])
+            else:
+                principle = getattr(wisdom, 'principle', '')
+                context = getattr(wisdom, 'context', '')
+                implications = getattr(wisdom, 'implications', [])
+
+            frontmatter = {
+                "dikiwi_stage": "wisdom",
+                "wisdom_id": f"{message_id}-{i}",
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "tags": ["dikiwi", "wisdom", "principle"],
+            }
+
+            content_lines = [
+                self._format_frontmatter(frontmatter),
+                f"",
+                f"# 🧠 Principle: {principle[:50] if principle else 'Untitled'}",
+                f"",
+                f"{principle}",
+                f"",
+                f"## Context",
+                f"{context}",
+                f"",
+                f"## Implications",
+            ]
+            for impl in implications:
+                content_lines.append(f"- {impl}")
+            if not implications:
+                content_lines.append("- _No specific implications recorded_")
+
+            content_lines.extend([
+                f"",
+                f"---",
+                f"",
+                f"## Navigation",
+                f"- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom Library]]",
+                f"- [[DIKIWI/06-Impact/06-Impact-MOC|→ Impact]]",
+            ])
+
+            note_path.write_text("\n".join(content_lines), encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d wisdom items for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_impact(
+        self,
+        message_id: str,
+        impacts: list[Any],
+    ) -> list[Path]:
+        """Write impact proposals to 06-Impact as tasks."""
+        if self.zettelkasten_only:
+            return []
+
+        month_dir = self._get_month_dir("06-Impact")
+        paths = []
+
+        for i, impact in enumerate(impacts):
+            note_path = month_dir / f"impact-{message_id}-{i}.md"
+
+            # Handle both dataclass objects and dicts
+            if isinstance(impact, dict):
+                proposal = impact.get('proposal', '')
+                rationale = impact.get('rationale', '')
+                proposal_type = impact.get('proposal_type', 'task')
+                priority = impact.get('priority', 'medium')
+                expected_outcome = impact.get('expected_outcome', 'TBD')
+            else:
+                proposal = getattr(impact, 'proposal', '')
+                rationale = getattr(impact, 'rationale', '')
+                proposal_type = getattr(impact, 'proposal_type', 'task')
+                priority = getattr(impact, 'priority', 'medium')
+                expected_outcome = getattr(impact, 'expected_outcome', 'TBD')
+
+            frontmatter = {
+                "dikiwi_stage": "impact",
+                "impact_id": f"{message_id}-{i}",
+                "proposal_type": proposal_type,
+                "priority": priority,
+                "status": "active",
+                "date_created": datetime.now(timezone.utc).isoformat(),
+                "tags": ["dikiwi", "impact", "proposal", str(proposal_type)],
+            }
+
+            content_lines = [
+                self._format_frontmatter(frontmatter),
+                f"",
+                f"# 🚀 Proposal: {proposal[:50] if proposal else 'Untitled'}",
+                f"",
+                f"{proposal}",
+                f"",
+                f"## Rationale",
+                f"{rationale}",
+                f"",
+                f"## Expected Outcome",
+                f"{expected_outcome}",
+                f"",
+                f"---",
+                f"",
+                f"## Task",
+                f"- [ ] {proposal}",
+                f"",
+                f"---",
+                f"",
+                f"## Navigation",
+                f"- [[DIKIWI/06-Impact/06-Impact-MOC|Proposals Queue]]",
+                f"- [[DIKIWI/Canvas/DIKIWI-Overview|📊 Overview Canvas]]",
+            ]
+
+            note_path.write_text("\n".join(content_lines), encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d impact proposals for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_zettel(
+        self,
+        zettel_id: str,
+        title: str,
+        content: str,
+        tags: list[str],
+        links_to: list[str],
+        source: str = "",
+        source_paths: list[str] | None = None,
+        dikiwi_level: str = "wisdom",
+    ) -> Path:
+        """Write a Zettelkasten permanent note.
+
+        Creates a proper atomic note in the Zettelkasten folder with:
+        - YAML frontmatter with metadata
+        - Full content (300-500 words)
+        - Tags and links sections
+        """
+        zettel_dir = self.zettelkasten_root
+        zettel_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create date-based subfolder for organization
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m")
+        date_dir = zettel_dir / date_str
+        date_dir.mkdir(exist_ok=True)
+
+        # Sanitize title for filename
+        safe_title = _slugify_title(title)
+        filename = f"{zettel_id}-{safe_title}.md"
+        note_path = date_dir / filename
+
+        # Build frontmatter
+        frontmatter = {
+            "zettel_id": zettel_id,
+            "title": title,
+            "aliases": [title],
+            "source": source,
+            "date_created": datetime.now(timezone.utc).isoformat(),
+            "note_type": "permanent",
+            "dikiwi_level": dikiwi_level,
+            "word_count": len(content.split()),
+        }
+        if source_paths:
+            frontmatter["source_paths"] = _dedupe_preserve_order(source_paths)
+        deduped_tags = _dedupe_preserve_order([dikiwi_level, *tags])
+        if deduped_tags:
+            frontmatter["tags"] = deduped_tags
+
+        # Build content
+        content_lines = [
+            self._format_frontmatter(frontmatter),
+            f"",
+            f"# {title}",
+            f"",
+            content,
+            f"",
+        ]
+
+        # Add related section if there are links
+        if links_to:
+            content_lines.extend([
+                f"## Related",
+                f"",
+            ])
+            for link in links_to:
+                content_lines.append(f"- [[{link}]]")
+            content_lines.append("")
+
+        content_lines.extend([
+            f"---",
+            f"",
+            f"*Source: {source}*",
+        ])
+
+        note_path.write_text("\n".join(content_lines), encoding="utf-8")
+        self._update_topic_maps(tags)
+        logger.info("Wrote Zettelkasten note: %s (%d words)", filename, len(content.split()))
+
+        return note_path
+
+    async def create_message_canvas(
+        self,
+        message_id: str,
+        stage_files: dict[str, list[str]],
+    ) -> Path:
+        """Create a Canvas visualization for a specific message."""
+        canvas_path = self.dikiwi_root / "Canvas" / f"Message-{message_id}.canvas"
+
+        nodes = []
+        edges = []
+        x_pos = 0
+
+        stage_colors = {
+            "data": "2",      # Orange
+            "information": "3",  # Yellow
+            "knowledge": "4",    # Green
+            "insights": "5",     # Blue
+            "wisdom": "6",       # Purple
+            "impact": "7",       # Pink
+        }
+
+        for stage, files in stage_files.items():
+            for i, file_path in enumerate(files):
+                node_id = f"{stage}-{i}"
+                nodes.append({
+                    "id": node_id,
+                    "type": "file",
+                    "file": file_path.replace(".md", ""),
+                    "x": x_pos,
+                    "y": i * 200,
+                    "width": 280,
+                    "height": 180,
+                    "color": stage_colors.get(stage, "1"),
+                })
+
+            # Connect to next stage
+            if len(nodes) > len(files) and len(files) > 0:
+                edges.append({
+                    "fromNode": f"{stage}-0",
+                    "toNode": f"{list(stage_files.keys())[list(stage_files.keys()).index(stage) + 1]}-0",
+                    "label": "→",
+                })
+
+            x_pos += 350
+
+        canvas_data = {"nodes": nodes, "edges": edges}
+        canvas_path.write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")
+
+        logger.info("Created canvas: %s", canvas_path)
+        return canvas_path
+
+    async def create_insight_dashboard(self) -> Path:
+        """Create a comprehensive insight dashboard."""
+        dashboard_path = self.dikiwi_root / "04-Insights" / "Insight-Dashboard.md"
+
+        content = """---
+tags: [dashboard, dikiwi, insights]
+---
+
+# DIKIWI Insight Dashboard
+
+## Overview Stats
+```dataviewjs
+const insights = dv.pages('"DIKIWI/04-Insights"').where(p => p.insight_type);
+const wisdom = dv.pages('"DIKIWI/05-Wisdom"').where(p => p.dikiwi_stage == "wisdom");
+const impact = dv.pages('"DIKIWI/06-Impact"').where(p => p.dikiwi_stage == "impact");
+
+const highConfidence = insights.where(p => p.confidence >= 0.8).length;
+const medConfidence = insights.where(p => p.confidence >= 0.6 && p.confidence < 0.8).length;
+const lowConfidence = insights.where(p => p.confidence < 0.6).length;
+
+dv.table(["Metric", "Count"], [
+  ["📝 Total Insights", insights.length],
+  ["✨ High Confidence (≥0.8)", highConfidence],
+  ["📊 Medium Confidence (0.6-0.8)", medConfidence],
+  ["⚠️ Low Confidence (<0.6)", lowConfidence],
+  ["🧠 Wisdom Principles", wisdom.length],
+  ["🚀 Active Proposals", impact.where(p => p.status == "active").length],
+]);
+```
+
+## Insights by Type
+```dataviewjs
+const byType = dv.pages('"DIKIWI/04-Insights"')
+  .groupBy(p => p.insight_type)
+  .sort(g => g.rows.length, 'desc');
+
+dv.table(["Type", "Count", "Avg Confidence"],
+  byType.map(g => [
+    g.key || "uncategorized",
+    g.rows.length,
+    (g.rows.reduce((sum, r) => sum + (r.confidence || 0), 0) / g.rows.length).toFixed(2)
+  ])
+);
+```
+
+## Recent High-Confidence Insights
+```dataview
+TABLE insight_type, confidence, source_title
+FROM "DIKIWI/04-Insights"
+WHERE confidence >= 0.8
+SORT date_created DESC
+LIMIT 10
+```
+
+## Top Opportunities
+```dataview
+TABLE confidence, source_title
+FROM "DIKIWI/04-Insights"
+WHERE insight_type = "opportunity"
+SORT confidence DESC
+LIMIT 5
+```
+
+## Active Proposals
+```dataview
+TABLE proposal_type, priority
+FROM "DIKIWI/06-Impact"
+WHERE status = "active"
+SORT priority DESC
+```
+
+## Tasks
+```tasks
+not done
+path includes DIKIWI/06-Impact
+```
+
+---
+
+*Generated by DIKIWI Obsidian Integration*
+"""
+
+        dashboard_path.write_text(content, encoding="utf-8")
+        logger.info("Created dashboard: %s", dashboard_path)
+        return dashboard_path
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get statistics about the DIKIWI vault."""
+        stats = {
+            "stages": {},
+            "total_notes": 0,
+            "canvas_files": 0,
+        }
+
+        for stage_num, stage_name in self.STAGE_NAMES.items():
+            stage_dir = self.dikiwi_root / stage_name
+            if stage_dir.exists():
+                md_files = list(stage_dir.rglob("*.md"))
+                stats["stages"][stage_name] = len(md_files)
+                stats["total_notes"] += len(md_files)
+
+        canvas_dir = self.dikiwi_root / "Canvas"
+        if canvas_dir.exists():
+            canvas_files = list(canvas_dir.glob("*.canvas"))
+            stats["canvas_files"] = len(canvas_files)
+
+        return stats

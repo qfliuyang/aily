@@ -1,0 +1,36 @@
+# Aily Chaos - Multimodal Content Processing Dependencies
+
+# File type detection
+python-magic>=0.4.27
+
+# PDF processing
+pdfplumber>=0.10.0
+pymupdf>=1.23.0
+pdf2image>=1.16.3
+
+# Image processing
+Pillow>=10.0.0
+
+# PowerPoint
+python-pptx>=0.6.21
+
+# Video processing
+# ffmpeg required system dependency
+
+# ASR/Transcription
+# openai-whisper>=20231117  # Optional, for local transcription
+
+# HTTP client
+aiohttp>=3.9.0
+
+# Watchdog for file monitoring
+watchdog>=3.0.0
+
+# YAML config
+pyyaml>=6.0.1
+
+# OCR
+easyocr>=1.7.0
+
+# Image hash for deduplication
+imagehash>=4.3.1

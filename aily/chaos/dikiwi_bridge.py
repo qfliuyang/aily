@@ -1,0 +1,295 @@
+"""Chaos-to-DIKIWI Bridge - Feed extracted content into Zettelkasten pipeline."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from aily.chaos.types import ExtractedContentMultimodal
+from aily.gating.drainage import RainDrop, RainType, StreamType
+from aily.sessions.dikiwi_mind import DikiwiMind
+
+logger = logging.getLogger(__name__)
+
+
+class ChaosDikiwiBridge:
+    """Bridge between Chaos extracted content and DIKIWI Zettelkasten."""
+
+    def __init__(
+        self,
+        dikiwi_mind: DikiwiMind,
+        processed_folder: Path | None = None,
+    ) -> None:
+        self.dikiwi_mind = dikiwi_mind
+        self.processed_folder = processed_folder or (Path.home() / "aily_chaos" / ".processed")
+
+    async def process_extracted_content(
+        self,
+        content: ExtractedContentMultimodal,
+    ) -> dict[str, Any]:
+        """Process extracted content through DIKIWI pipeline.
+
+        Args:
+            content: Extracted multimodal content from Chaos
+
+        Returns:
+            DIKIWI processing results with Zettelkasten IDs
+        """
+        logger.info(f"Feeding to DIKIWI: {content.title or 'Untitled'}")
+
+        # Create RainDrop from extracted content
+        drop = self._create_raindrop(content)
+
+        # Process through DIKIWI 6-stage pipeline
+        try:
+            result = await self.dikiwi_mind.process_input(drop)
+
+            # Get final stage reached
+            final_stage = result.final_stage_reached
+            final_stage_name = final_stage.name if final_stage else "UNKNOWN"
+
+            # Count zettels and insights from stage results
+            zettels_created = 0
+            insights_count = 0
+            for sr in result.stage_results:
+                if sr.success:
+                    zettels_created += len(sr.data.get("zettels", []))
+                    insights_count += len(sr.data.get("insights", []))
+
+            logger.info(
+                f"DIKIWI complete for {content.title}: "
+                f"Stage {final_stage_name}, Zettels: {zettels_created}, Insights: {insights_count}"
+            )
+
+            return {
+                "drop_id": drop.id,
+                "stage": final_stage_name,
+                "zettels_created": zettels_created,
+                "insights": insights_count,
+                "pipeline_id": result.pipeline_id,
+            }
+
+        except Exception as e:
+            logger.exception(f"DIKIWI processing failed: {e}")
+            return {"error": str(e), "drop_id": drop.id}
+
+    def _create_raindrop(self, content: ExtractedContentMultimodal) -> RainDrop:
+        """Convert Chaos content to RainDrop for DIKIWI processing."""
+        # Build rich content from extracted data
+        content_text = content.text or ""
+
+        # Add title if available
+        if content.title:
+            content_text = f"# {content.title}\n\n{content_text}"
+
+        # Add transcript if available
+        if content.transcript:
+            content_text += f"\n\n## Transcript\n\n{content.transcript}"
+
+        # Add tags as context
+        if content.tags:
+            tags_str = ", ".join(content.tags)
+            content_text += f"\n\n## Tags\n{tags_str}"
+
+        # Add metadata
+        metadata = {
+            **content.metadata,
+            "extracted_at": content.processing_timestamp.isoformat(),
+            "processing_method": content.processing_method,
+            "source_type": content.source_type,
+            "has_transcript": content.transcript is not None,
+            "visual_elements_count": len(content.visual_elements),
+            "original_tags": content.tags,
+            "title": content.title,
+        }
+        if content.source_path:
+            metadata.setdefault("source_paths", [str(content.source_path)])
+        elif content.metadata.get("source_paths"):
+            metadata["source_paths"] = content.metadata["source_paths"]
+
+        # Add visual descriptions if available
+        if content.visual_elements:
+            visual_desc = "\n".join([
+                f"- {getattr(elem, 'element_type', 'visual')}: {getattr(elem, 'description', '')}"
+                for elem in content.visual_elements[:5]  # Limit to 5
+            ])
+            content_text += f"\n\n## Visual Elements\n{visual_desc}"
+
+        return RainDrop(
+            id="",
+            rain_type=RainType.DOCUMENT,
+            content=content_text,
+            source="chaos_processor",
+            source_id=str(content.source_path) if content.source_path else "unknown",
+            stream_type=StreamType.EXTRACT_ANALYZE,
+            metadata=metadata,
+        )
+
+    async def process_batch(
+        self,
+        date_folder: str | None = None,
+        max_items: int | None = None,
+    ) -> dict[str, Any]:
+        """Process a batch of extracted JSON files through DIKIWI.
+
+        Args:
+            date_folder: Date folder to process (e.g., "2026-04-12"), defaults to today
+            max_items: Maximum items to process, None for all
+
+        Returns:
+            Batch processing statistics
+        """
+        date_folder = date_folder or datetime.now().strftime("%Y-%m-%d")
+        source_dir = self.processed_folder / date_folder
+
+        if not source_dir.exists():
+            logger.warning(f"Source directory not found: {source_dir}")
+            return {"processed": 0, "failed": 0, "zettels_created": 0}
+
+        # Find all JSON files
+        json_files = list(source_dir.glob("*.json"))
+
+        if max_items:
+            json_files = json_files[:max_items]
+
+        logger.info(f"Processing {len(json_files)} items through DIKIWI...")
+
+        processed = 0
+        failed = 0
+        total_zettels = 0
+
+        for json_file in json_files:
+            try:
+                # Load extracted content
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Convert to ExtractedContentMultimodal
+                content = self._dict_to_content(data)
+
+                # Process through DIKIWI
+                result = await self.process_extracted_content(content)
+
+                if "error" not in result:
+                    processed += 1
+                    total_zettels += int(result.get("zettels_created", 0))
+                else:
+                    failed += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to process {json_file.name}: {e}")
+                failed += 1
+
+        stats = {
+            "processed": processed,
+            "failed": failed,
+            "zettels_created": total_zettels,
+            "source_folder": str(source_dir),
+        }
+
+        logger.info(f"Batch complete: {stats}")
+        return stats
+
+    def _dict_to_content(self, data: dict) -> ExtractedContentMultimodal:
+        """Convert dict back to ExtractedContentMultimodal."""
+        from datetime import datetime as dt
+
+        return ExtractedContentMultimodal(
+            text=data.get("text", ""),
+            title=data.get("title"),
+            source_type=data.get("source_type", "unknown"),
+            source_path=Path(data["source_path"]) if data.get("source_path") else None,
+            metadata=data.get("metadata", {}),
+            tags=data.get("tags", []),
+            processing_timestamp=dt.fromisoformat(data["processing_timestamp"])
+            if data.get("processing_timestamp")
+            else dt.now(),
+            processing_method=data.get("processing_method", "unknown"),
+        )
+
+
+async def run_chaos_to_zettelkasten(
+    vault_path: Path,
+    processed_folder: Path | None = None,
+    date_folder: str | None = None,
+) -> dict[str, Any]:
+    """CLI entry point: Process Chaos extracted content to Zettelkasten.
+
+    Args:
+        vault_path: Path to Obsidian vault
+        processed_folder: Path to processed Chaos files
+        date_folder: Specific date folder to process
+
+    Returns:
+        Processing statistics
+    """
+    import os
+
+    from aily.config import SETTINGS
+    from aily.llm.provider_routes import PrimaryLLMRoute
+    from aily.sessions.dikiwi_mind import DikiwiMind
+    from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
+
+    # Setup
+    os.environ.setdefault("ZHIPU_API_KEY", SETTINGS.zhipu_api_key or "")
+    llm_client = PrimaryLLMRoute.route_zhipu(
+        api_key=os.environ["ZHIPU_API_KEY"],
+        model=SETTINGS.zhipu_model,
+        max_concurrency=SETTINGS.llm_max_concurrency,
+        min_interval_seconds=SETTINGS.llm_min_interval_seconds,
+    )
+
+    # Initialize GraphDB
+    from aily.graph.db import GraphDB
+    graph_db = GraphDB(db_path=vault_path / ".aily" / "graph.db")
+    await graph_db.initialize()
+
+    # Initialize Obsidian writer
+    obsidian_writer = DikiwiObsidianWriter(vault_path=vault_path)
+
+    # Initialize DIKIWI mind
+    dikiwi_mind = DikiwiMind(
+        graph_db=graph_db,
+        llm_client=llm_client,
+        dikiwi_obsidian_writer=obsidian_writer,
+    )
+
+    # Create bridge
+    bridge = ChaosDikiwiBridge(
+        dikiwi_mind=dikiwi_mind,
+        processed_folder=processed_folder,
+    )
+
+    # Process batch
+    stats = await bridge.process_batch(date_folder=date_folder)
+
+    return stats
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Chaos to Zettelkasten bridge")
+    parser.add_argument("--vault", "-v", type=str, required=True, help="Obsidian vault path")
+    parser.add_argument("--folder", "-f", type=str, default="~/aily_chaos/.processed")
+    parser.add_argument("--date", "-d", type=str, help="Date folder (default: today)")
+    parser.add_argument("--max", "-m", type=int, help="Max items to process")
+
+    args = parser.parse_args()
+
+    result = asyncio.run(run_chaos_to_zettelkasten(
+        vault_path=Path(args.vault),
+        processed_folder=Path(args.folder).expanduser(),
+        date_folder=args.date,
+    ))
+
+    print(f"\n{'='*50}")
+    print("Chaos → Zettelkasten Complete")
+    print(f"{'='*50}")
+    print(f"Processed: {result['processed']}")
+    print(f"Failed: {result['failed']}")
+    print(f"Zettels Created: {result['zettels_created']}")
