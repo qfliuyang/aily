@@ -63,6 +63,22 @@ from aily.dikiwi.stages import (
     can_transition,
 )
 
+# Agents (v2 agent system)
+from aily.dikiwi.agents import (
+    DikiwiAgent,
+    AgentContext,
+    ProducerAgent,
+    ReviewerAgent,
+    DataAgent,
+    InformationAgent,
+    KnowledgeAgent,
+    InsightAgent,
+    WisdomAgent,
+    ImpactAgent,
+    HanlinAgent,
+    ObsidianCLI,
+)
+
 __all__ = [
     # Core orchestrator
     "DikiwiOrchestrator",
@@ -106,6 +122,19 @@ __all__ = [
     "MemorialDecisionType",
     "GraphDBMemorialStore",
     "ObsidianMemorialStore",
+    # Agents
+    "DikiwiAgent",
+    "AgentContext",
+    "ProducerAgent",
+    "ReviewerAgent",
+    "DataAgent",
+    "InformationAgent",
+    "KnowledgeAgent",
+    "InsightAgent",
+    "WisdomAgent",
+    "ImpactAgent",
+    "HanlinAgent",
+    "ObsidianCLI",
 ]
 
 __version__ = "2.0.0"

@@ -31,6 +31,15 @@ Then actively engages you in conversation to strengthen memory formation.
 │   • Knowledge graph with collision detection                         │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│              MAC LOOP: Innolaval ⟷ Hanlin (×2 rounds)                │
+│   Multiply:  Innolaval runs 8 innovation frameworks on DIKIWI output │
+│   Accumulate: Hanlin synthesizes vault + graph + framework proposals │
+│   Round 1: dry-run synthesis feeds back into Innolaval context       │
+│   Round 2: final synthesis persists to Obsidian + GraphDB            │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   │
               ┌────────────────────┼────────────────────┐
               ▼                    ▼                    ▼
 ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
@@ -87,6 +96,9 @@ Then actively engages you in conversation to strengthen memory formation.
 │  │ • 6-Stage Pipe   │  │ • 8 Methods      │  │ • GStack Eval    │   │
 │  │ • Atomic Notes   │  │ • TRIZ/SIT/etc   │  │ • PMF Analysis   │   │
 │  │ • GraphDB Links  │  │ • Synthesis      │  │ • Growth Loops   │   │
+│  │ • MAC Loop w/    │  │                  │  │                  │   │
+│  │   Innolaval+     │  │                  │  │                  │   │
+│  │   Hanlin         │  │                  │  │                  │   │
 │  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘   │
 │           │                     │                     │             │
 │           └─────────────────────┼─────────────────────┘             │
@@ -104,9 +116,10 @@ Then actively engages you in conversation to strengthen memory formation.
 
 - `aily/main.py` is the active app bootstrap.
 - `aily/sessions/dikiwi_mind.py` is the active continuous DIKIWI runtime.
-- `aily/sessions/innolaval_scheduler.py` is the active daily innovation runtime.
+- `aily/sessions/innolaval_scheduler.py` is the active innovation runtime (per-pipeline MAC loop + daily 8am).
 - `aily/sessions/entrepreneur_scheduler.py` is the active daily entrepreneur runtime.
-- `aily/dikiwi/` and `aily/gating/` are kept as secondary or experimental architectures, not the primary runtime path.
+- `aily/dikiwi/agents/hanlin_agent.py` is the active post-pipeline vault analyst (翰林).
+- `aily/dikiwi/` (orchestrator, gates, skills, memorials) is the primary DIKIWI runtime. `aily/gating/` is kept as a secondary experimental architecture.
 
 #### 1. Input Layer (Feishu WebSocket)
 - **File**: `aily/bot/ws_client.py`
@@ -393,7 +406,8 @@ Aily has evolved through several phases:
 | v0.1.0 | Foundation | Feishu webhook, URL → Obsidian pipeline, basic parsers |
 | v0.2.0 | Brain-Aligned | Atomic notes, SRS, active recall, entity graph, verification |
 | v0.3.0 | Bidirectional | WebSocket client, conversational memory, proactive nudges |
-| v0.4.0 | **Three-Mind System** | **Chaos ingestion, DIKIWI pipeline, Innolaval (8 methods), Entrepreneur mind** |
+| v0.4.0 | Three-Mind System | Chaos ingestion, DIKIWI pipeline, Innolaval (8 methods), Entrepreneur mind |
+| **v0.5.0** | **MAC Architecture** | **Innolaval-Hanlin multiply-accumulate loop, agentic business gates** |
 
 ---
 

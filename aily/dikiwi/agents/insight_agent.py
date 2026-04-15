@@ -1,0 +1,161 @@
+"""InsightAgent - Stage 4: INSIGHT pattern recognition."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import time
+import uuid
+
+from aily.dikiwi.agents.base import DikiwiAgent
+from aily.dikiwi.agents.context import AgentContext
+from aily.dikiwi.agents.llm_tools import multi_agent_json
+from aily.llm.prompt_registry import DikiwiPromptRegistry
+from aily.sessions.dikiwi_mind import DikiwiStage, InformationNode, Insight, KnowledgeLink, StageResult
+
+logger = logging.getLogger(__name__)
+
+
+class InsightAgent(DikiwiAgent):
+    """Stage 4: Detect patterns from knowledge network via producer-reviewer."""
+
+    async def execute(self, ctx: AgentContext) -> StageResult:
+        start = time.time()
+
+        try:
+            info_result = self._find_stage_result(ctx, DikiwiStage.INFORMATION)
+            knowledge_result = self._find_stage_result(ctx, DikiwiStage.KNOWLEDGE)
+            if not info_result or not knowledge_result:
+                raise RuntimeError("Prior stage results not found in context")
+
+            info_nodes: list[InformationNode] = info_result.data.get("information_nodes", [])
+            links: list[KnowledgeLink] = knowledge_result.data.get("links", [])
+            knowledge_note_ids: list[str] = knowledge_result.data.get("knowledge_note_ids", [])
+
+            insights: list[Insight] = []
+            if len(info_nodes) >= 2:
+                insights = await self._llm_detect_patterns(info_nodes, links, ctx)
+
+            # Write insight notes
+            insight_note_ids: list[str] = []
+            if ctx.dikiwi_obsidian_writer and insights:
+                source_paths = ctx.drop.metadata.get("source_paths", [])
+                for insight_item in insights:
+                    try:
+                        iid = await ctx.dikiwi_obsidian_writer.write_insight_note(
+                            insight_item, knowledge_note_ids, ctx.drop, source_paths
+                        )
+                        insight_note_ids.append(iid)
+                    except Exception as e:
+                        logger.warning("[DIKIWI] Failed to write insight note: %s", e)
+
+            # Add to memory
+            if ctx.memory and insights:
+                ctx.memory.add_assistant(
+                    f"STAGE 4 (INSIGHT) Complete: Found {len(insights)} patterns. "
+                    f"Key insights: {', '.join(i.description[:60] for i in insights[:2])}..."
+                )
+
+            processing_time = (time.time() - start) * 1000
+
+            return StageResult(
+                stage=DikiwiStage.INSIGHT,
+                success=True,
+                items_processed=len(info_nodes),
+                items_output=len(insights),
+                processing_time_ms=processing_time,
+                data={
+                    "insights": insights,
+                    "insight_note_ids": insight_note_ids,
+                },
+            )
+
+        except Exception as exc:
+            return StageResult(
+                stage=DikiwiStage.INSIGHT,
+                success=False,
+                error_message=str(exc),
+                processing_time_ms=(time.time() - start) * 1000,
+            )
+
+    async def _llm_detect_patterns(
+        self,
+        info_nodes: list[InformationNode],
+        links: list[KnowledgeLink],
+        ctx: AgentContext,
+    ) -> list[Insight]:
+        nodes_desc = "\n".join(
+            f"{i+1}. [{n.domain}] {n.content[:150]}"
+            for i, n in enumerate(info_nodes[:15])
+        )
+        links_desc = "\n".join(
+            f"- {l.source_id[:8]}... {l.relation_type} {l.target_id[:8]}... (strength: {l.strength:.2f})"
+            for l in links[:10]
+        )
+
+        memory_context = ""
+        if ctx.memory and len(ctx.memory.messages) > 2:
+            memory_context = f"\n\nProcessing context:\n{ctx.memory.to_prompt_context()[-1500:]}\n\n"
+
+        messages = DikiwiPromptRegistry.insight(
+            nodes_desc=nodes_desc,
+            links_desc=links_desc,
+            memory_context=memory_context.strip(),
+        )
+        stage_key = f"insight:{hashlib.sha1((nodes_desc + links_desc).encode('utf-8')).hexdigest()[:8]}"
+
+        try:
+            result = await multi_agent_json(
+                llm_client=ctx.llm_client,
+                stage="insight",
+                stage_key=stage_key,
+                producer_messages=messages,
+                reviewer_messages_factory=lambda draft_json: DikiwiPromptRegistry.review(
+                    stage="INSIGHT",
+                    reviewer_role="Pattern Editor",
+                    objective="Review the draft insights and keep only non-obvious patterns that deserve long-term note space.",
+                    output_contract=DikiwiPromptRegistry.INSIGHT_CONTRACT,
+                    draft_json=draft_json,
+                    memory_context=memory_context.strip(),
+                    review_focus=(
+                        "Remove restatements of single facts.",
+                        "Prefer tensions, mechanisms, gaps, and recurring patterns.",
+                        "Keep the insight list compact but meaningful.",
+                    ),
+                    context_sections=(
+                        ("Information Nodes", nodes_desc or "No nodes available."),
+                        ("Relationships", links_desc or "No explicit relationships available."),
+                    ),
+                ),
+                temperature=0.4,
+                budget=ctx.budget,
+            )
+
+            if not isinstance(result, dict):
+                return []
+
+            insights_data = result.get("insights", [])
+            insights: list[Insight] = []
+            for p in insights_data:
+                if isinstance(p, dict) and p.get("description"):
+                    insights.append(
+                        Insight(
+                            id=f"insight_{uuid.uuid4().hex[:8]}",
+                            insight_type=p.get("type", "pattern"),
+                            description=p.get("description", ""),
+                            related_nodes=[
+                                f"node_{i}" for i in p.get("related_node_indices", [])
+                            ],
+                            confidence=p.get("confidence", 0.5),
+                        )
+                    )
+            return insights
+        except Exception as exc:
+            logger.debug("[DIKIWI] Pattern detection failed: %s", exc)
+            return []
+
+    def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
+        for result in ctx.stage_results:
+            if result.stage == stage:
+                return result
+        return None

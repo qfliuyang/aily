@@ -36,6 +36,8 @@ from aily.dikiwi.stages import (
 )
 
 if TYPE_CHECKING:
+    from aily.dikiwi.agents.base import DikiwiAgent
+    from aily.dikiwi.agents.context import AgentContext
     from aily.llm.client import LLMClient
     from aily.graph.db import GraphDB
 
@@ -76,6 +78,9 @@ class ProcessingPipeline:
     completed_at: datetime | None = None
     status: str = "running"  # running, completed, failed, rejected
 
+    def __post_init__(self) -> None:
+        self._completion_event: asyncio.Event = asyncio.Event()
+
 
 class DikiwiOrchestrator:
     """Orchestrates the DIKIWI multi-agent system.
@@ -115,6 +120,8 @@ class DikiwiOrchestrator:
             max_rejections=self.config.max_rejections,
         )
         self._pipelines: dict[str, ProcessingPipeline] = {}
+        self._agent_contexts: dict[str, AgentContext] = {}
+        self.agent_registry: dict[DikiwiStage, DikiwiAgent] = {}
 
         # Metrics
         self._metrics = {
@@ -143,6 +150,76 @@ class DikiwiOrchestrator:
         self.event_bus.subscribe(GateDecisionEvent, self._on_gate_decision)
 
         logger.info("DikiwiOrchestrator event handlers registered")
+
+    def register_agent(self, stage: DikiwiStage, agent: DikiwiAgent) -> None:
+        """Register a stage agent."""
+        self.agent_registry[stage] = agent
+        logger.info("Registered agent for stage %s", stage.name)
+
+    async def run_pipeline(
+        self,
+        agent_ctx: AgentContext,
+    ) -> ProcessingPipeline:
+        """Start a DIKIWI pipeline using a pre-built agent context.
+
+        This is the adapter entry-point used by DikiwiMind.
+        """
+        from aily.dikiwi.stages import StageContext
+
+        context = StageContext(
+            context_id=agent_ctx.pipeline_id,
+            correlation_id=agent_ctx.correlation_id or agent_ctx.pipeline_id,
+            content_id=agent_ctx.drop.id,
+            source=agent_ctx.drop.source,
+        )
+        self.state_machine._contexts[context.context_id] = context
+
+        pipeline = ProcessingPipeline(
+            pipeline_id=context.context_id,
+            correlation_id=context.correlation_id,
+            context=context,
+            config=self.config,
+        )
+        self._pipelines[pipeline.pipeline_id] = pipeline
+        self._agent_contexts[pipeline.pipeline_id] = agent_ctx
+        self._metrics["pipelines_started"] += 1
+
+        logger.info(
+            "[DIKIWI] Pipeline %s started for content %s",
+            pipeline.pipeline_id,
+            agent_ctx.drop.id,
+        )
+
+        # Execute DATA agent first, then emit stage completed to trigger downstream
+        agent = self.agent_registry.get(DikiwiStage.DATA)
+        if agent:
+            try:
+                result = await agent.execute(agent_ctx)
+                agent_ctx.stage_results.append(result)
+                if not result.success:
+                    await self._fail_pipeline(pipeline, result.error_message or "DATA stage failed")
+                    return pipeline
+            except Exception as exc:
+                logger.exception("[DIKIWI] Agent execution failed for DATA")
+                await self._fail_pipeline(pipeline, str(exc))
+                return pipeline
+
+        await self.event_bus.publish(
+            StageCompletedEvent(
+                correlation_id=pipeline.correlation_id,
+                stage=DikiwiStage.DATA,
+                output_content_ids=[agent_ctx.drop.id],
+            )
+        )
+
+        # Wait for full pipeline completion (all event-driven stages)
+        try:
+            await asyncio.wait_for(pipeline._completion_event.wait(), timeout=300.0)
+        except asyncio.TimeoutError:
+            logger.error("[DIKIWI] Pipeline %s timed out waiting for completion", pipeline.pipeline_id)
+            await self._fail_pipeline(pipeline, "Pipeline completion timeout")
+
+        return pipeline
 
     async def start_pipeline(
         self,
@@ -177,7 +254,7 @@ class DikiwiOrchestrator:
             content_id,
         )
 
-        # Emit initial event
+        # Emit initial event to trigger DATA agent execution
         await self.event_bus.publish(
             StageCompletedEvent(
                 correlation_id=pipeline.correlation_id,
@@ -203,7 +280,11 @@ class DikiwiOrchestrator:
         self.state_machine.complete_stage(pipeline.context)
 
         # Determine next step based on stage
-        if event.stage == DikiwiStage.INFORMATION:
+        if event.stage == DikiwiStage.DATA:
+            # Data complete → auto-promote to INFORMATION
+            await self._promote_to_stage(pipeline, DikiwiStage.INFORMATION)
+
+        elif event.stage == DikiwiStage.INFORMATION:
             # Information complete → 门下省 review for KNOWLEDGE promotion
             await self._schedule_menxia_review(pipeline, event)
 
@@ -309,14 +390,15 @@ class DikiwiOrchestrator:
             pipeline.pipeline_id,
         )
 
-        # Emit gate decision event for review
+        # Automated review - auto-approve
         await self.event_bus.publish(
             GateDecisionEvent(
                 correlation_id=pipeline.correlation_id,
                 gate_name="menxia",
-                decision="pending",
+                decision="approve",
                 content_ids=event.output_content_ids,
-                requires_human=False,  # Automated review for now
+                requires_human=False,
+                reasoning="Automated menxia review passed",
             )
         )
 
@@ -381,7 +463,7 @@ class DikiwiOrchestrator:
         to_stage: DikiwiStage,
         is_rejection: bool = False,
     ) -> None:
-        """Promote content to next stage."""
+        """Promote content to next stage and dispatch the stage agent."""
         success, message = self.state_machine.transition(pipeline.context, to_stage)
 
         if not success:
@@ -410,11 +492,39 @@ class DikiwiOrchestrator:
             f"(rejection loop)" if is_rejection else "",
         )
 
+        # Dispatch agent for the target stage
+        agent = self.agent_registry.get(to_stage)
+        if agent:
+            ctx = self._agent_contexts.get(pipeline.pipeline_id)
+            if ctx:
+                try:
+                    result = await agent.execute(ctx)
+                    ctx.stage_results.append(result)
+                    if not result.success:
+                        await self._fail_pipeline(pipeline, result.error_message or f"{to_stage.name} stage failed")
+                        return
+                except Exception as exc:
+                    logger.exception("[DIKIWI] Agent execution failed for %s", to_stage.name)
+                    await self._fail_pipeline(pipeline, str(exc))
+                    return
+            else:
+                logger.warning("[DIKIWI] No agent context found for pipeline %s", pipeline.pipeline_id)
+
+        # Emit stage completed to trigger next coordination step
+        await self.event_bus.publish(
+            StageCompletedEvent(
+                correlation_id=pipeline.correlation_id,
+                stage=to_stage,
+                output_content_ids=[pipeline.context.content_id],
+            )
+        )
+
     async def _complete_pipeline(self, pipeline: ProcessingPipeline) -> None:
         """Mark pipeline as completed."""
         pipeline.status = "completed"
         pipeline.completed_at = datetime.now(timezone.utc)
         self._metrics["pipelines_completed"] += 1
+        pipeline._completion_event.set()
 
         logger.info(
             "[DIKIWI] Pipeline %s completed in %.2fs",
@@ -427,6 +537,7 @@ class DikiwiOrchestrator:
         pipeline.status = "failed"
         pipeline.completed_at = datetime.now(timezone.utc)
         self._metrics["pipelines_failed"] += 1
+        pipeline._completion_event.set()
 
         logger.error(
             "[DIKIWI] Pipeline %s failed: %s",

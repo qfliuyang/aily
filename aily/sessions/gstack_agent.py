@@ -82,10 +82,12 @@ class GStackAgent:
         llm_client: Any,
         tool_executor: Callable | None = None,
         obsidian_writer: Any | None = None,
+        graph_db: Any | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_executor = tool_executor
         self.obsidian_writer = obsidian_writer
+        self.graph_db = graph_db
 
         # Available GStack actions
         self.actions = {
@@ -118,23 +120,23 @@ class GStackAgent:
 
         logger.info(f"[GStack Agent] Starting evaluation: {hypothesis[:60]}...")
 
-        # Action 1: Analyze codebase if exists
-        await self._run_action(session, "analyze_codebase", context)
+        # Action 1: Analyze codebase (only if explicitly requested)
+        if context.get("evaluate_codebase"):
+            await self._run_action(session, "analyze_codebase", context)
+            await self._run_action(session, "check_test_coverage", context)
 
-        # Action 2: Check test coverage
-        await self._run_action(session, "check_test_coverage", context)
-
-        # Action 3: Search for market/competitive intel
+        # Action 2: Search for market/competitive intel
         await self._run_action(session, "search_market", context)
 
-        # Action 4: Validate problem with real users/data
+        # Action 3: Validate problem with real users/data
         await self._run_action(session, "validate_problem", context)
 
-        # Action 5: Assess technical risks
+        # Action 4: Assess technical risks
         await self._run_action(session, "assess_tech_risk", context)
 
-        # Action 6: Check if ready to ship
-        await self._run_action(session, "check_deployment_readiness", context)
+        # Action 5: Check if ready to ship (only if explicitly requested)
+        if context.get("evaluate_codebase"):
+            await self._run_action(session, "check_deployment_readiness", context)
 
         # Generate verdict based on findings
         verdict, confidence = await self._generate_verdict(session)
@@ -172,6 +174,27 @@ class GStackAgent:
                     session.blockers.extend(result["blockers"])
                 if "opportunities" in result:
                     session.opportunities.extend(result["opportunities"])
+
+                # Persist action to GraphDB
+                if self.graph_db and context.get("proposal_node_id"):
+                    try:
+                        action_id = f"gstack_{uuid.uuid4().hex[:8]}"
+                        await self.graph_db.insert_node(
+                            node_id=action_id,
+                            node_type="gstack_action",
+                            label=f"{action_name}: {result.get('status', 'unknown')}",
+                            source="entrepreneur",
+                        )
+                        await self.graph_db.insert_edge(
+                            edge_id=f"edge_{uuid.uuid4().hex[:8]}",
+                            source_node_id=action_id,
+                            target_node_id=context["proposal_node_id"],
+                            relation_type="validates",
+                            weight=1.0,
+                            source="entrepreneur",
+                        )
+                    except Exception as exc:
+                        logger.warning(f"[GStack Agent] Failed to persist action: {exc}")
             else:
                 session.add_action(
                     action=action_name,

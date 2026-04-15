@@ -57,86 +57,86 @@ class EntrepreneurScheduler(BaseMindScheduler):
             llm_client=llm_client,
             tool_executor=tool_executor,
             obsidian_writer=obsidian_writer,
+            graph_db=graph_db,
         )
 
     async def _run_session(self) -> dict[str, Any]:
         """Execute GStack agentic evaluation - actually takes actions."""
         logger.info("[Entrepreneur] Starting GStack evaluation with real actions")
 
-        # Step 1: Gather knowledge and innovation proposals
-        knowledge = await self._query_recent_knowledge()
+        # Step 1: Gather pending business proposals from Hanlin/Innolaval
+        pending_proposals = await self._query_pending_business_proposals()
         innovation_proposals = self._get_innovation_proposals()
 
         logger.info(
-            "[Entrepreneur] Evaluating %d knowledge items, %d innovation proposals",
-            len(knowledge), len(innovation_proposals),
+            "[Entrepreneur] Evaluating %d pending business proposals",
+            len(pending_proposals),
         )
 
-        # Step 2: Run GStack Agent - it actually does things
-        # Build hypothesis from knowledge and innovation proposals
-        hypothesis = self._build_hypothesis(knowledge, innovation_proposals)
+        approved_proposals: list[Proposal] = []
+        total_actions = 0
 
-        context = {
-            "knowledge": knowledge,
-            "innovation_proposals": innovation_proposals,
-            "session_type": "entrepreneur",
-        }
+        # Step 2: Evaluate each pending proposal with GStack
+        for proposal_node in pending_proposals[: self.proposal_max_per_session]:
+            hypothesis = self._build_hypothesis_from_node(proposal_node)
+            context = {
+                "knowledge": [],
+                "innovation_proposals": innovation_proposals,
+                "session_type": "entrepreneur",
+                "proposal_node_id": proposal_node["id"],
+            }
 
-        session = await self.gstack_agent.evaluate(
-            hypothesis=hypothesis["hypothesis"],
-            problem=hypothesis["problem"],
-            solution=hypothesis["solution"],
-            target_user=hypothesis["target_user"],
-            context=context,
-        )
-
-        # Step 3: Generate proposal from session results
-        proposals: list[Proposal] = []
-        confidence = session.confidence
-
-        if confidence >= self.proposal_min_confidence:
-            proposal = Proposal(
-                id=f"biz_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
-                mind_name="entrepreneur",
-                title=hypothesis["title"],
-                content=session.hypothesis,
-                summary=session.hypothesis[:200],
-                confidence=confidence,
-                proposal_type=ProposalType.BUSINESS,
-                status=ProposalStatus.PENDING,
-                priority="high" if confidence >= 0.85 else "medium",
-                framework_used="GStack",
-                metadata={
-                    "problem": session.problem,
-                    "solution": session.solution,
-                    "target_user": session.target_user,
-                    "verdict": session.verdict,
-                    "risks": session.blockers,
-                    "opportunities": session.opportunities,
-                    "actions_taken": len(session.actions),
-                    "key_findings": session.key_findings[:10],
-                },
+            session = await self.gstack_agent.evaluate(
+                hypothesis=hypothesis["hypothesis"],
+                problem=hypothesis["problem"],
+                solution=hypothesis["solution"],
+                target_user=hypothesis["target_user"],
+                context=context,
             )
-            proposals.append(proposal)
-            await self._deliver_proposals(proposals)
+            total_actions += len(session.actions)
 
-        # Step 4: Write session report to Obsidian
+            # Step 3: Process verdict and update GraphDB
+            entrepreneur_proposal = await self._process_gstack_verdict(
+                proposal_node, session
+            )
+            if entrepreneur_proposal:
+                approved_proposals.append(entrepreneur_proposal)
+
+        if approved_proposals:
+            await self._deliver_proposals(approved_proposals)
+
+        # Step 4: Write session summary report to Obsidian
         if self.obsidian_writer:
             try:
-                report = self.gstack_agent.get_session_report(session)
+                summary_lines = [
+                    f"# Entrepreneur Session {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    "",
+                    f"Evaluated: {len(pending_proposals)} proposals",
+                    f"Approved: {len(approved_proposals)} proposals",
+                    "",
+                    "## Approved",
+                ]
+                for p in approved_proposals:
+                    summary_lines.append(f"- **{p.title}** (confidence: {p.confidence:.0%})")
+                summary_lines.append("")
+                summary_lines.append("## Rejected")
+                for node in pending_proposals:
+                    props = node.get("properties", {})
+                    if props.get("status") in ("rejected_business", "rejected_innovation"):
+                        summary_lines.append(f"- {node['label'][:80]}... — {props.get('rejection_reason', '')}")
+
                 await self.obsidian_writer.write_note(
-                    title=f"GStack Evaluation {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-                    markdown=report,
+                    title=f"Entrepreneur Session {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    markdown="\n".join(summary_lines),
                     source_url="aily://entrepreneur_session",
                 )
             except Exception as e:
                 logger.warning("[Entrepreneur] Failed to write session report: %s", e)
 
         return {
-            "proposals_generated": len(proposals),
-            "actions_taken": len(session.actions),
-            "confidence": confidence,
-            "verdict": session.verdict,
+            "proposals_generated": len(approved_proposals),
+            "actions_taken": total_actions,
+            "evaluated": len(pending_proposals),
         }
 
     def _build_hypothesis(self, knowledge: list[dict], innovation_proposals: list[dict]) -> dict:
@@ -181,8 +181,8 @@ class EntrepreneurScheduler(BaseMindScheduler):
 
             nodes = []
             async with self.graph_db._db.execute(
-                "SELECT id, label, source, created_at FROM nodes WHERE type = ? AND created_at > ? ORDER BY created_at DESC",
-                ("atomic_note", since.isoformat()),
+                "SELECT id, label, source, created_at FROM nodes WHERE type IN (?, ?) AND created_at > ? ORDER BY created_at DESC",
+                ("atomic_note", "hanlin_proposal", since.isoformat()),
             ) as cursor:
                 async for row in cursor:
                     nodes.append({"id": row[0], "content": row[1], "source": row[2], "created_at": row[3]})
@@ -221,3 +221,143 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     proposal.status = ProposalStatus.DELIVERED
                 except Exception as e:
                     logger.warning("[Entrepreneur] Obsidian write failed: %s", e)
+
+    async def _query_pending_business_proposals(self) -> list[dict]:
+        """Query Hanlin proposals waiting for business evaluation."""
+        if not self.graph_db:
+            return []
+        try:
+            nodes = await self.graph_db.get_nodes_by_type("hanlin_proposal")
+            pending = []
+            for node in nodes:
+                props = node.get("properties", {})
+                if isinstance(props, str):
+                    import json
+                    try:
+                        props = json.loads(props)
+                    except Exception:
+                        props = {}
+                if props.get("status") == "pending_business":
+                    node["properties"] = props
+                    pending.append(node)
+            return pending
+        except Exception as e:
+            logger.exception("[Entrepreneur] Failed to query pending business proposals: %s", e)
+            return []
+
+    def _build_hypothesis_from_node(self, node: dict) -> dict:
+        """Build a GStack hypothesis from a Hanlin proposal node."""
+        label = node.get("label", "")
+        title = label.split(":")[0] if ":" in label else label
+        description = label[len(title) + 1 :].strip() if ":" in label else label
+        return {
+            "title": title or "Business Opportunity",
+            "hypothesis": f"Building {title} will solve a real problem",
+            "problem": description or "Problem not clearly defined",
+            "solution": description or "Solution not clearly defined",
+            "target_user": "Users who face this problem",
+        }
+
+    async def _process_gstack_verdict(
+        self, proposal_node: dict, session: "GStackSession"
+    ) -> Proposal | None:
+        """Update proposal status based on GStack verdict and return Proposal if approved."""
+        if not self.graph_db:
+            return None
+
+        node_id = proposal_node["id"]
+        verdict = session.verdict
+        confidence = session.confidence
+        props = proposal_node.get("properties", {})
+
+        if verdict == "build_it" and confidence >= self.proposal_min_confidence:
+            await self.graph_db.set_node_property(node_id, "status", "incubating")
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._create_incubation_task(proposal_node, session)
+            return Proposal(
+                id=f"biz_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{node_id[-4:]}",
+                mind_name="entrepreneur",
+                title=self._build_hypothesis_from_node(proposal_node)["title"],
+                content=session.hypothesis,
+                summary=session.hypothesis[:200],
+                confidence=confidence,
+                proposal_type=ProposalType.BUSINESS,
+                status=ProposalStatus.PENDING,
+                priority="high" if confidence >= 0.85 else "medium",
+                business_score=confidence,
+                stage=ProposalStage.INCUBATING,
+                source_knowledge_ids=[node_id],
+                framework_used="GStack",
+                metadata={
+                    "problem": session.problem,
+                    "solution": session.solution,
+                    "target_user": session.target_user,
+                    "verdict": session.verdict,
+                    "risks": session.blockers,
+                    "opportunities": session.opportunities,
+                    "actions_taken": len(session.actions),
+                    "key_findings": session.key_findings[:10],
+                },
+            )
+
+        if verdict == "kill_it":
+            reason = session.blockers[-1] if session.blockers else "killed_by_gstack"
+            await self.graph_db.set_node_property(node_id, "status", "rejected_business")
+            await self.graph_db.set_node_property(node_id, "rejection_reason", reason)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._write_rejection_feedback(proposal_node, reason)
+            return None
+
+        # needs_more_validation or pivot
+        attempts = int(props.get("validation_attempts", 0)) + 1
+        if attempts >= 2:
+            reason = "max_validation_attempts_reached"
+            await self.graph_db.set_node_property(node_id, "status", "rejected_business")
+            await self.graph_db.set_node_property(node_id, "rejection_reason", reason)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._write_rejection_feedback(proposal_node, reason)
+        else:
+            await self.graph_db.set_node_property(node_id, "validation_attempts", attempts)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+
+        return None
+
+    async def _write_rejection_feedback(self, proposal_node: dict, reason: str) -> None:
+        """Append rejection reason to the Hanlin Feedback Index for future learning."""
+        if not self.graph_db:
+            return
+        try:
+            label = proposal_node.get("label", "")[:120]
+            await self.graph_db.add_hanlin_feedback(label, reason)
+            logger.info("[Entrepreneur] Wrote rejection feedback for %s", proposal_node.get("id"))
+        except Exception as e:
+            logger.warning("[Entrepreneur] Failed to write rejection feedback: %s", e)
+
+    async def _create_incubation_task(self, proposal_node: dict, session: "GStackSession") -> None:
+        """Create an incubation task note for approved proposals."""
+        if not self.obsidian_writer:
+            return
+        try:
+            title = self._build_hypothesis_from_node(proposal_node)["title"]
+            lines = [
+                f"# Incubation Task: {title}",
+                "",
+                f"**Verdict:** {session.verdict}",
+                f"**Confidence:** {session.confidence:.0%}",
+                "",
+                "## Next Steps",
+            ]
+            for finding in session.key_findings[:5]:
+                lines.append(f"- [ ] {finding}")
+            lines.append("")
+            lines.append("## Blockers to Resolve")
+            for blocker in session.blockers:
+                lines.append(f"- [ ] {blocker}")
+
+            await self.obsidian_writer.write_note(
+                title=f"Incubation: {title}",
+                markdown="\n".join(lines),
+                source_url="aily://entrepreneur_incubation",
+            )
+        except Exception as e:
+            logger.warning("[Entrepreneur] Failed to create incubation task: %s", e)

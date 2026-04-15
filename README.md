@@ -17,12 +17,14 @@ Aily is not a bookmarking tool. It is a **knowledge system** with three autonomo
 - Automatic content extraction and structuring
 - Atomic Zettelkasten notes written to Obsidian
 - Knowledge graph with bidirectional linking
+- **MAC Loop**: After each pipeline, Innolaval and Hanlin iterate twice to synthesize framework proposals into formal reports
 
-### 2. Innolaval — Innovation Mind (Daily @ 8am)
+### 2. Innolaval — Innovation Mind (Per-pipeline + Daily @ 8am)
 **Generates innovation proposals** from your accumulated knowledge
 
 - 8 methodologies running in parallel: TRIZ, SIT, Six Hats, Blue Ocean, SCAMPER, Biomimicry, Morphological, First Principles
 - Wide input → focused synthesis through the "Laval nozzle"
+- Runs inside the DIKIWI MAC loop after every input, plus a full daily session
 - Proposals written to `Obsidian/20-Innovation/`
 
 ### 3. Entrepreneur Mind (Daily @ 9am)
@@ -44,10 +46,17 @@ You drop a PDF into `~/aily_chaos/`:
 ```
 [DIKIWI Mind processing...]
 ↓
+6-Stage Pipeline Complete
+↓
+MAC Loop (×2 rounds):
+├── Round 1: Innolaval (TRIZ, SIT, Blue Ocean...) → Hanlin synthesis
+└── Round 2: Innolaval (refined with Hanlin feedback) → Hanlin final report
+↓
 Saved to Obsidian:
 ├── 10-Knowledge/concepts/attention-mechanisms.md
 ├── 10-Knowledge/concepts/transformer-architecture.md
-└── 10-Knowledge/sources/attention-is-all-you-need.md
+├── 10-Knowledge/sources/attention-is-all-you-need.md
+└── 10-Knowledge/Hanlin Reports/2026-04-15 - Attention Mechanisms Report.md
 ```
 
 ### Daily Innovation Session (8am)
@@ -76,15 +85,29 @@ Feishu notification:
 │  Chaos Folder │ URLs │ Voice │ Feishu Chat │ Sessions                       │
 └─────────────────────────────────────────────────────────────────────────────┘
                                        │
-              ┌────────────────────────┼────────────────────────┐
-              ▼                        ▼                        ▼
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│    DIKIWI MIND (Continuous) — 6-Stage Pipeline + MAC Loop                   │
+│                                                                              │
+│  Data → Information → Knowledge → Insight → Wisdom → Impact                  │
+│       │                                                                       │
+│       ▼                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │  MAC Loop (×2 rounds)                                                  ││
+│  │  Round 1: Innolaval multiply → Hanlin accumulate (dry-run)             ││
+│  │  Round 2: Innolaval multiply → Hanlin accumulate (persist)             ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              ▼                    ▼                    ▼
 ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│    DIKIWI MIND       │  │   INNOLAVAL          │  │  ENTREPRENEUR        │
-│ (Continuous)         │  │ (Daily @ 8am)        │  │ (Daily @ 9am)        │
+│   INNOLAVAL          │  │   ENTREPRENEUR       │  │  MEMORY EXCITATION   │
+│ (Daily @ 8am)        │  │ (Daily @ 9am)        │  │ (Continuous)         │
 │                      │  │                      │  │                      │
-│ • 6-Stage Pipeline   │  │ • 8 Methods Parallel │  │ • GStack Analysis    │
-│ • Atomic Notes       │  │ • TRIZ/SIT/etc       │  │ • PMF Evaluation     │
-│ • GraphDB Links      │  │ • Laval Synthesis    │  │ • Growth Loops       │
+│ • 8 Methods Parallel │  │ • GStack Analysis    │  │ • SRS scheduling     │
+│ • TRIZ/SIT/etc       │  │ • PMF Evaluation     │  │ • Active recall      │
+│ • Laval Synthesis    │  │ • Growth Loops       │  │ • Feishu nudges      │
 └──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
            │                         │                         │
            └─────────────────────────┼─────────────────────────┘
@@ -206,6 +229,7 @@ The DIKIWI pipeline transforms raw data into actionable impact:
 | **I**nsight | Pattern detection | Connections, contradictions |
 | **W**isdom | Synthesis | Principles, frameworks |
 | **I**mpact | Actionable output | Proposals, decisions |
+| **MAC** | Innolaval ↔ Hanlin loop | Refined proposals + formal report |
 
 **Implementation:** `aily/sessions/dikiwi_mind.py`
 
@@ -225,6 +249,17 @@ Named after the Laval nozzle (convergent-divergent) — wide inputs from 8 innov
 
 **Implementation:** `aily/sessions/innolaval_scheduler.py`
 
+### Hanlin Agent (翰林): Vault Synthesis
+
+Synthesizes DIKIWI vault outputs, knowledge graph, and Innolaval framework proposals into formal reports.
+
+- Vault topology scan via `obsidian-cli`
+- GraphDB query for recent DIKIWI nodes
+- LLM synthesis with Innolaval proposals as context
+- Persists `hanlin_proposal` nodes to GraphDB for downstream business evaluation
+
+**Implementation:** `aily/dikiwi/agents/hanlin_agent.py`
+
 ### Entrepreneur Mind: Business Evaluation
 
 Evaluates ideas through the GStack framework:
@@ -235,7 +270,7 @@ Evaluates ideas through the GStack framework:
 - **C**onstants (constraints)
 - **K**ey metrics
 
-**Implementation:** `aily/sessions/entrepreneur_react_scheduler.py`
+**Implementation:** `aily/sessions/entrepreneur_scheduler.py`
 
 ---
 
@@ -252,12 +287,21 @@ aily/
 │   └── dikiwi_bridge.py         # Chaos → DIKIWI
 │
 ├── sessions/                    # Three-Mind System
-│   ├── dikiwi_mind.py           # Continuous knowledge pipeline
-│   ├── innolaval_scheduler.py   # Daily innovation (8am)
-│   ├── entrepreneur_react_scheduler.py  # Daily business (9am)
+│   ├── dikiwi_mind.py           # Continuous knowledge pipeline + MAC loop
+│   ├── innolaval_scheduler.py   # Innovation mind (per-pipeline + daily 8am)
+│   ├── entrepreneur_scheduler.py # Business mind (daily 9am)
+│   ├── gstack_agent.py          # GStack business analysis executor
 │   └── base.py                  # Shared scheduler infrastructure
 │
-├── dikiwi/                      # DIKIWI v2 architecture
+├── dikiwi/                      # DIKIWI v2 agents + Hanlin
+│   ├── agents/                  # Stage agents + post-pipeline analyst
+│   │   ├── data_agent.py
+│   │   ├── information_agent.py
+│   │   ├── knowledge_agent.py
+│   │   ├── insight_agent.py
+│   │   ├── wisdom_agent.py
+│   │   ├── impact_agent.py
+│   │   └── hanlin_agent.py      # Vault scholar (翰林)
 │   ├── orchestrator.py          # Event-driven coordination
 │   ├── gates/                   # Menxia review, CVO approval
 │   ├── skills/                  # Tag extraction, pattern detection
@@ -290,7 +334,8 @@ aily/
 | v0.1.0 | Foundation | Feishu webhook, URL → Obsidian pipeline |
 | v0.2.0 | Brain-Aligned | Atomic notes, SRS, entity graph |
 | v0.3.0 | Bidirectional | WebSocket, conversational memory |
-| **v0.4.0** | **Three Minds** | **DIKIWI, Innolaval, Entrepreneur, Chaos Daemon** |
+| v0.4.0 | Three Minds | DIKIWI, Innolaval, Entrepreneur, Chaos Daemon |
+| **v0.5.0** | **MAC Architecture** | **Innolaval-Hanlin multiply-accumulate loop, agentic business gates** |
 
 ---
 

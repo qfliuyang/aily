@@ -7,6 +7,7 @@ This file is the shortest trustworthy map of the current codebase.
 - App bootstrap: `aily/main.py`
 - Continuous knowledge pipeline: `aily/sessions/dikiwi_mind.py`
 - Daily innovation mind: `aily/sessions/innolaval_scheduler.py`
+- Post-pipeline vault analyst: `aily/dikiwi/agents/hanlin_agent.py`
 - Daily entrepreneur mind: `aily/sessions/entrepreneur_scheduler.py`
 - Chaos ingestion runtime: `scripts/run_chaos_daemon.py`
 
@@ -22,9 +23,9 @@ This file is the shortest trustworthy map of the current codebase.
 - `docs/feishu-voice-webhook.md` - voice integration notes
 - `docs/monica-kimi-dom-discovery.md` - passive capture research
 
-## Experimental But Kept
+## Active Runtime (Updated)
 
-- `aily/dikiwi/` - event-driven DIKIWI architecture; not the active runtime
+- `aily/dikiwi/` - event-driven DIKIWI architecture; now the primary runtime via `DikiwiOrchestrator`
 - `aily/gating/` - hydrological gating subsystem; not the primary runtime path
 
 ## Archived Docs

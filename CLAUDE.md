@@ -37,7 +37,7 @@ Aily is a **Three-Mind knowledge system** built as a FastAPI app with a backgrou
 | Mind | File | Trigger |
 |------|------|---------|
 | DIKIWI Mind (continuous) | `aily/sessions/dikiwi_mind.py` | Every inbound message |
-| Innolaval (Innovation) | `aily/sessions/innolaval_scheduler.py` | Daily 8am — 8 methods in parallel |
+| Innolaval (Innovation) | `aily/sessions/innolaval_scheduler.py` | Per-pipeline MAC loop + daily 8am |
 | Entrepreneur | `aily/sessions/entrepreneur_scheduler.py` | Daily 9am — GStack framework |
 
 All three are wired up and started in `aily/main.py`'s `lifespan()` context manager.
@@ -46,7 +46,8 @@ All three are wired up and started in `aily/main.py`'s `lifespan()` context mana
 
 1. **Feishu WebSocket** (`aily/bot/ws_client.py`) receives messages and routes them to `DikiwiMind.process_input()`.
 2. **DIKIWI Mind** runs a 6-stage LLM pipeline (Data → Information → Knowledge → Insight → Wisdom → Impact), writing Zettelkasten notes via `aily/writer/dikiwi_obsidian.py`.
-3. For non-text inputs (URLs, files, voice, images), the bot enqueues jobs into the **SQLite queue** (`aily/queue/db.py`), dispatched by `JobWorker` (`aily/queue/worker.py`) through `_dispatch_job()` in `main.py`.
+3. **MAC Loop** (Multiply-Accumulate): After the 6-stage pipeline, Innolaval runs 8 innovation frameworks on the DIKIWI context; Hanlin synthesizes the results. This iterates 2 rounds — round 1 is a dry run, round 2 persists the final report and `hanlin_proposal` nodes to GraphDB.
+4. For non-text inputs (URLs, files, voice, images), the bot enqueues jobs into the **SQLite queue** (`aily/queue/db.py`), dispatched by `JobWorker` (`aily/queue/worker.py`) through `_dispatch_job()` in `main.py`.
 
 ### Chaos Daemon (separate process)
 
@@ -73,7 +74,7 @@ All notes go to **Obsidian** via its Local REST API (`aily/writer/obsidian.py`).
 | `aily/scheduler/jobs.py` | APScheduler wrappers for digest, passive capture, Claude session capture |
 | `aily/capture/claude_code.py` | Captures Claude Code session JSONL files into Obsidian |
 | `aily/thinking/` | Extended thinking config for complex LLM calls |
-| `aily/dikiwi/` | Event-driven DIKIWI v2 — **experimental, not the active runtime** |
+| `aily/dikiwi/` | Primary DIKIWI runtime — event-driven agents (Data, Information, Knowledge, Insight, Wisdom, Impact, plus Hanlin vault analyst) |
 | `aily/gating/` | Hydrological gating subsystem — **experimental, not the active runtime** |
 
 ### Required env vars

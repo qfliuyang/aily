@@ -36,6 +36,7 @@ class DikiwiStage(Enum):
     INSIGHT = auto()      # Network → Pattern recognition (尚书省)
     WISDOM = auto()       # Insights → Applied understanding (吏部/CVO gate)
     IMPACT = auto()       # Wisdom → Actionable outcomes (工部)
+    HANLIN = auto()       # Post-pipeline vault analysis and proposal drafting (翰林)
 
     def __str__(self) -> str:
         return self.name
@@ -50,6 +51,7 @@ class DikiwiStage(Enum):
             DikiwiStage.INSIGHT: "尚书省",
             DikiwiStage.WISDOM: "吏部",
             DikiwiStage.IMPACT: "工部",
+            DikiwiStage.HANLIN: "翰林",
         }
         return names.get(self, "未知")
 
@@ -82,6 +84,7 @@ class StageTransition(Enum):
     KNOWLEDGE_TO_INSIGHT = (DikiwiStage.KNOWLEDGE, DikiwiStage.INSIGHT)
     INSIGHT_TO_WISDOM = (DikiwiStage.INSIGHT, DikiwiStage.WISDOM)
     WISDOM_TO_IMPACT = (DikiwiStage.WISDOM, DikiwiStage.IMPACT)
+    IMPACT_TO_HANLIN = (DikiwiStage.IMPACT, DikiwiStage.HANLIN)
 
     # Review rejection loops (封驳)
     KNOWLEDGE_REJECT_TO_INFORMATION = (DikiwiStage.KNOWLEDGE, DikiwiStage.INFORMATION)
@@ -117,7 +120,8 @@ PERMISSION_MATRIX: dict[DikiwiStage, list[DikiwiStage]] = {
     DikiwiStage.KNOWLEDGE: [DikiwiStage.INSIGHT, DikiwiStage.INFORMATION],  # Can reject back
     DikiwiStage.INSIGHT: [DikiwiStage.WISDOM],
     DikiwiStage.WISDOM: [DikiwiStage.IMPACT, DikiwiStage.INSIGHT],  # CVO can reject back
-    DikiwiStage.IMPACT: [],  # Terminal stage
+    DikiwiStage.IMPACT: [DikiwiStage.HANLIN],  # Can proceed to Hanlin analysis
+    DikiwiStage.HANLIN: [],  # Terminal stage
 }
 
 

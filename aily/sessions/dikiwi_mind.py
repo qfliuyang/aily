@@ -44,6 +44,7 @@ class DikiwiStage(Enum):
     INSIGHT = auto()
     WISDOM = auto()
     IMPACT = auto()
+    HANLIN = auto()
 
 
 @dataclass
@@ -270,6 +271,8 @@ class DikiwiMind:
     - Pure semantic understanding
     """
 
+    _MAC_ITERATIONS = 2
+
     def __init__(
         self,
         graph_db: GraphDB,
@@ -280,6 +283,7 @@ class DikiwiMind:
         model: str = "moonshot-v1-32k",
         dikiwi_obsidian_writer: DikiwiObsidianWriter | None = None,
         llm_client: Any | None = None,
+        innolaval_scheduler: Any | None = None,
     ) -> None:
         """Initialize LLM-powered DIKIWI mind.
 
@@ -292,6 +296,7 @@ class DikiwiMind:
             model: Kimi model to use (8k, 32k, or 128k) - Standard API only
             dikiwi_obsidian_writer: Optional enhanced Obsidian writer (file-based with Dataview)
             llm_client: Pre-configured LLM client (e.g., Coding Plan with kimi-k2.5)
+            innolaval_scheduler: Optional InnolavalScheduler to run framework evaluation on DIKIWI outputs
         """
         # Use pre-configured client if provided, otherwise create Standard API client
         if llm_client is not None:
@@ -304,6 +309,7 @@ class DikiwiMind:
         self.obsidian_writer = obsidian_writer
         self.dikiwi_obsidian_writer = dikiwi_obsidian_writer
         self.browser_manager = browser_manager
+        self.innolaval_scheduler = innolaval_scheduler
 
         self._markdownizer = MarkdownizeProcessor(browser_manager=browser_manager)
 
@@ -431,193 +437,131 @@ class DikiwiMind:
 
         result = DikiwiResult(input_id=drop.id, pipeline_id=pipeline_id)
 
-        # Rate limiting: small delay between stages to avoid API rate limits
-        STAGE_DELAY = 1.0  # 1 second between stages
-
         try:
-            # Pre-processing: Markdownize content
-            markdownized_drop = await self._markdownize_drop(drop)
+            # Lazy imports to avoid circular dependency
+            from aily.dikiwi.agents.context import AgentContext
+            from aily.dikiwi.agents.data_agent import DataAgent
+            from aily.dikiwi.agents.information_agent import InformationAgent
+            from aily.dikiwi.agents.knowledge_agent import KnowledgeAgent
+            from aily.dikiwi.agents.insight_agent import InsightAgent
+            from aily.dikiwi.agents.wisdom_agent import WisdomAgent
+            from aily.dikiwi.agents.impact_agent import ImpactAgent
+            from aily.dikiwi.agents.hanlin_agent import HanlinAgent
+            from aily.dikiwi.orchestrator import DikiwiOrchestrator, PipelineConfig
+            from aily.dikiwi.stages import DikiwiStage as OrchestratorDikiwiStage
 
-            # Add input to conversation memory
-            memory.add_user(f"Input to process:\n{markdownized_drop.content[:3000]}")
-
-            # Stage 1: DATA - LLM extracts data points
-            stage1 = await self._stage_data(markdownized_drop, memory)
-            result.stage_results.append(stage1)
-            if not stage1.success:
-                raise RuntimeError(f"DATA failed: {stage1.error_message}")
-
-            data_points = stage1.data.get("data_points", [])
-            if not data_points:
-                logger.info("[DIKIWI] No data points extracted")
-                result.completed_at = datetime.now(timezone.utc)
-                return result
-
-            doc_title: str = stage1.data.get("doc_title", "")
-            doc_summary: str = stage1.data.get("doc_summary", "")
-
-            if memory and data_points:
-                memory.add_assistant(
-                    f"STAGE 1 (DATA) Complete: Extracted {len(data_points)} concepts. "
-                    f"Examples: {', '.join(dp.concept or dp.content[:80] for dp in data_points[:3])}"
-                )
-
-            # DATA stage: write source note
-            data_note_id: str = ""
-            if self.dikiwi_obsidian_writer:
-                try:
-                    source_paths = drop.metadata.get("source_paths", [])
-                    concepts = [dp.concept for dp in data_points if dp.concept]
-                    data_note_id = await self.dikiwi_obsidian_writer.write_data_note(
-                        markdownized_drop, pipeline_id, source_paths,
-                        title=doc_title,
-                        summary=doc_summary,
-                        concepts=concepts,
-                    )
-                except Exception as e:
-                    logger.warning("[DIKIWI] Failed to write data note: %s", e)
-
-            # Stage 2: INFORMATION - LLM classifies and tags
-            await asyncio.sleep(STAGE_DELAY)
-            stage2 = await self._stage_information(data_points, drop.source, memory)
-            result.stage_results.append(stage2)
-            if not stage2.success:
-                raise RuntimeError(f"INFORMATION failed: {stage2.error_message}")
-
-            info_nodes = stage2.data.get("information_nodes", [])
-            if memory and info_nodes:
-                memory.add_assistant(
-                    f"STAGE 2 (INFORMATION) Complete: Classified {len(info_nodes)} information nodes. "
-                    f"Domains: {', '.join(node.domain for node in info_nodes[:4])}"
-                )
-            # INFORMATION stage: write one ref card per classified idea chunk
-            info_note_ids: dict[str, str] = {}
-            if self.dikiwi_obsidian_writer and info_nodes:
-                source_paths = drop.metadata.get("source_paths", [])
-                for node in info_nodes:
-                    try:
-                        nid = await self.dikiwi_obsidian_writer.write_information_note(
-                            node, data_note_id, drop.source, source_paths
-                        )
-                        info_note_ids[node.id] = nid
-                    except Exception as e:
-                        logger.warning("[DIKIWI] Failed to write information note: %s", e)
-
-            # Stage 3: KNOWLEDGE - LLM determines relationships
-            await asyncio.sleep(STAGE_DELAY)
-            stage3 = await self._stage_knowledge(info_nodes, drop.source, memory)
-            result.stage_results.append(stage3)
-            links = stage3.data.get("links", [])
-            if memory and links:
-                memory.add_assistant(
-                    f"STAGE 3 (KNOWLEDGE) Complete: Found {len(links)} meaningful links. "
-                    f"Examples: {', '.join(link.relation_type for link in links[:4])}"
-                )
-            # KNOWLEDGE stage: write relationship notes linking information cards
-            node_map = {n.id: n for n in info_nodes}
-            knowledge_note_ids: list[str] = []
-            if self.dikiwi_obsidian_writer and links:
-                for link in links:
-                    src_node = node_map.get(link.source_id)
-                    tgt_node = node_map.get(link.target_id)
-                    if src_node and tgt_node:
-                        try:
-                            kid = await self.dikiwi_obsidian_writer.write_knowledge_note(
-                                link, src_node, tgt_node,
-                                info_note_ids.get(link.source_id, ""),
-                                info_note_ids.get(link.target_id, ""),
-                                drop.source,
-                            )
-                            knowledge_note_ids.append(kid)
-                        except Exception as e:
-                            logger.warning("[DIKIWI] Failed to write knowledge note: %s", e)
-
-            # Stage 4: INSIGHT - LLM detects patterns (with memory context)
-            await asyncio.sleep(STAGE_DELAY)
-            stage4 = await self._stage_insight(
-                info_nodes, links, drop, memory
+            # Build agent context
+            ctx = AgentContext(
+                pipeline_id=pipeline_id,
+                correlation_id=pipeline_id,
+                drop=drop,
+                memory=memory,
+                budget=self._llm_budgets[pipeline_id],
+                llm_client=self.llm_client,
+                graph_db=self.graph_db,
+                obsidian_writer=self.obsidian_writer,
+                dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+                markdownizer=self._markdownizer,
             )
-            result.stage_results.append(stage4)
-            insights = stage4.data.get("insights", [])
-            insight_note_ids: list[str] = []
-            if self.dikiwi_obsidian_writer and insights:
-                source_paths = drop.metadata.get("source_paths", [])
-                for insight_item in insights:
+
+            # Create orchestrator and register agents
+            orchestrator = DikiwiOrchestrator(
+                llm_client=self.llm_client,
+                graph_db=self.graph_db,
+                config=PipelineConfig(require_cvo_for_impact=False),
+            )
+            orchestrator.register_agent(OrchestratorDikiwiStage.DATA, DataAgent())
+            orchestrator.register_agent(OrchestratorDikiwiStage.INFORMATION, InformationAgent())
+            orchestrator.register_agent(OrchestratorDikiwiStage.KNOWLEDGE, KnowledgeAgent())
+            orchestrator.register_agent(OrchestratorDikiwiStage.INSIGHT, InsightAgent())
+            orchestrator.register_agent(OrchestratorDikiwiStage.WISDOM, WisdomAgent())
+            orchestrator.register_agent(OrchestratorDikiwiStage.IMPACT, ImpactAgent())
+
+            # Run pipeline
+            pipeline = await orchestrator.run_pipeline(ctx)
+
+            # MAC loop: Innolaval (multiply) <-> Hanlin (accumulate)
+            if pipeline.status == "completed" and self.innolaval_scheduler:
+                hanlin_result: StageResult | None = None
+                for mac_round in range(self._MAC_ITERATIONS):
                     try:
-                        iid = await self.dikiwi_obsidian_writer.write_insight_note(
-                            insight_item, knowledge_note_ids, drop, source_paths
+                        context = await self.innolaval_scheduler._gather_context()
+                        if mac_round > 0 and hanlin_result and hanlin_result.success:
+                            context["hanlin_accumulated"] = {
+                                "summary": hanlin_result.data.get("summary", ""),
+                                "key_findings": hanlin_result.data.get("key_findings", []),
+                                "innolaval_synthesis": hanlin_result.data.get("innolaval_synthesis", ""),
+                            }
+
+                        innolaval_proposals = await self.innolaval_scheduler.evaluate_context(context)
+                        ctx.artifact_store["innolaval_proposals"] = innolaval_proposals
+                        logger.info(
+                            "[DIKIWI] MAC round %d/%d: Innolaval generated %d proposals for pipeline %s",
+                            mac_round + 1,
+                            self._MAC_ITERATIONS,
+                            len(innolaval_proposals),
+                            pipeline_id,
                         )
-                        insight_note_ids.append(iid)
-                    except Exception as e:
-                        logger.warning("[DIKIWI] Failed to write insight note: %s", e)
 
-            # Stage 5: WISDOM - LLM synthesizes principles (with memory context)
-            await asyncio.sleep(STAGE_DELAY)
-            stage5 = await self._stage_wisdom(insights, info_nodes, drop, memory)
-            result.stage_results.append(stage5)
-            zettels = stage5.data.get("zettels", [])
-            if memory and zettels:
-                memory.add_assistant(
-                    f"STAGE 5 (WISDOM) Complete: Authored {len(zettels)} permanent notes. "
-                    f"Titles: {', '.join(z.title[:80] for z in zettels[:3])}"
-                )
+                        agent = HanlinAgent()
+                        if mac_round == self._MAC_ITERATIONS - 1:
+                            hanlin_result = await agent.execute(ctx)
+                        else:
+                            hanlin_result = await agent.synthesize(ctx)
 
-            # WISDOM stage: write permanent notes with grounded_in links to insights
-            wisdom_note_ids: list[str] = []
-            if self.dikiwi_obsidian_writer and zettels:
-                source_paths = drop.metadata.get("source_paths", [])
-                for zettel in zettels:
-                    try:
-                        wid = await self.dikiwi_obsidian_writer.write_wisdom_note(
-                            zettel, insight_note_ids, drop, source_paths
-                        )
-                        wisdom_note_ids.append(wid)
-                        logger.info("[DIKIWI] Wrote wisdom note: %s (%d words)", zettel.title[:40], len(zettel.content.split()))
-                    except Exception as e:
-                        logger.warning("[DIKIWI] Failed to write wisdom note: %s", e)
+                    except Exception as exc:
+                        logger.warning("[DIKIWI] MAC round %d failed: %s", mac_round + 1, exc)
+                        break
 
-            # Stage 6: IMPACT - LLM generates actionable outcomes (with memory context)
-            await asyncio.sleep(STAGE_DELAY)
-            stage6 = await self._stage_impact(zettels, insights, drop, memory)
-            result.stage_results.append(stage6)
+                if hanlin_result:
+                    ctx.stage_results.append(hanlin_result)
 
-            # Add completion to memory and clean up
+            # Fallback: run Hanlin alone if no Innolaval scheduler
+            elif pipeline.status == "completed":
+                try:
+                    hanlin_result = await HanlinAgent().execute(ctx)
+                    ctx.stage_results.append(hanlin_result)
+                except Exception as exc:
+                    logger.warning("[DIKIWI] HanlinAgent failed: %s", exc)
+
+            # Transfer results
+            result.stage_results = list(ctx.stage_results)
+            result.completed_at = datetime.now(timezone.utc)
+
+            # Extract counts for logging
+            data_points = ctx.stage_results[0].data.get("data_points", []) if ctx.stage_results else []
+            info_nodes = ctx.stage_results[1].data.get("information_nodes", []) if len(ctx.stage_results) > 1 else []
+            links = ctx.stage_results[2].data.get("links", []) if len(ctx.stage_results) > 2 else []
+            insights = ctx.stage_results[3].data.get("insights", []) if len(ctx.stage_results) > 3 else []
+            zettels = ctx.stage_results[4].data.get("zettels", []) if len(ctx.stage_results) > 4 else []
+            impacts = ctx.stage_results[5].data.get("impacts", []) if len(ctx.stage_results) > 5 else []
+
             if memory:
                 memory.add_assistant(
                     f"PIPELINE COMPLETE: All 6 stages finished successfully. "
                     f"Generated {len(data_points)} data → {len(info_nodes)} info → "
                     f"{len(insights)} insights → {len(zettels)} zettels → "
-                    f"{len(stage6.data.get('impacts', []))} impacts. "
+                    f"{len(impacts)} impacts. "
                     f"LLM calls used: {self._llm_budgets[pipeline_id].calls_used}"
                 )
+
             self._cleanup_memory(pipeline_id)
             self._llm_budgets.pop(pipeline_id, None)
 
-            # IMPACT stage: write action notes with based_on links to wisdom
-            impacts = stage6.data.get("impacts", [])
-            if self.dikiwi_obsidian_writer and impacts:
-                source_paths = drop.metadata.get("source_paths", [])
-                for impact_item in impacts:
-                    try:
-                        await self.dikiwi_obsidian_writer.write_impact_note(
-                            impact_item, wisdom_note_ids, drop, source_paths
-                        )
-                    except Exception as e:
-                        logger.warning("[DIKIWI] Failed to write impact note: %s", e)
-
-            result.completed_at = datetime.now(timezone.utc)
-            self._successful_pipelines += 1
-
-            logger.info(
-                "[DIKIWI] Pipeline %s complete: %d data → %d info → %d links → %d insights → %d wisdom → %d impact",
-                pipeline_id,
-                len(data_points),
-                len(info_nodes),
-                len(stage3.data.get("links", [])),
-                len(insights),
-                len(zettels),
-                len(stage6.data.get("impacts", [])),
-            )
+            if pipeline.status == "completed":
+                self._successful_pipelines += 1
+                logger.info(
+                    "[DIKIWI] Pipeline %s complete: %d data → %d info → %d links → %d insights → %d wisdom → %d impact",
+                    pipeline_id,
+                    len(data_points),
+                    len(info_nodes),
+                    len(links),
+                    len(insights),
+                    len(zettels),
+                    len(impacts),
+                )
+            else:
+                self._failed_pipelines += 1
 
         except Exception as exc:
             result.completed_at = datetime.now(timezone.utc)
@@ -722,78 +666,23 @@ class DikiwiMind:
     async def _stage_data(
         self, drop: "RainDrop", memory: ConversationMemory | None = None
     ) -> StageResult:
-        """Stage 1: DATA - LLM extracts concept-level data points.
+        """Stage 1: DATA - delegate to DataAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.data_agent import DataAgent
 
-        Long documents are split into chunks and processed separately to avoid
-        the 12K char truncation problem. Each chunk uses a single-pass extraction
-        (no reviewer) for budget efficiency.
-        """
-        start = time.time()
-
-        try:
-            content = drop.content
-            all_data_points: list[DataPoint] = []
-            doc_title = ""
-            doc_summary = ""
-
-            if len(content) > self._LONG_DOC_THRESHOLD:
-                chunks = self._chunk_content(content, self._CHUNK_SIZE)
-                logger.info(
-                    "[DIKIWI] Long doc (%d chars) split into %d chunks",
-                    len(content), min(len(chunks), self._MAX_CHUNKS),
-                )
-                existing_concepts: list[str] = []
-                for i, chunk in enumerate(chunks[:self._MAX_CHUNKS]):
-                    dps, meta = await self._llm_extract_chunk(
-                        chunk, drop.source, memory,
-                        chunk_index=i,
-                        existing_concepts=existing_concepts,
-                    )
-                    all_data_points.extend(dps)
-                    existing_concepts.extend(dp.concept for dp in dps if dp.concept)
-                    if i == 0:
-                        doc_title = meta.get("title", "")
-                        doc_summary = meta.get("summary", "")
-            else:
-                dps, meta = await self._llm_extract_chunk(
-                    content, drop.source, memory, chunk_index=0
-                )
-                all_data_points.extend(dps)
-                doc_title = meta.get("title", "")
-                doc_summary = meta.get("summary", "")
-
-            data_points = all_data_points
-            if not data_points:
-                data_points = await self._llm_fallback_extraction(content, drop.source)
-
-            processing_time = (time.time() - start) * 1000
-
-            if memory:
-                memory.add_assistant(
-                    f"STAGE 1 (DATA) Complete: Extracted {len(data_points)} concepts. "
-                    f"Examples: {', '.join(dp.concept or dp.content[:50] for dp in data_points[:3])}..."
-                )
-
-            return StageResult(
-                stage=DikiwiStage.DATA,
-                success=True,
-                items_processed=1,
-                items_output=len(data_points),
-                processing_time_ms=processing_time,
-                data={
-                    "data_points": data_points,
-                    "doc_title": doc_title,
-                    "doc_summary": doc_summary,
-                },
-            )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.DATA,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
-            )
+        ctx = AgentContext(
+            pipeline_id=f"legacy_{id(drop)}",
+            correlation_id=f"legacy_{id(drop)}",
+            drop=drop,
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        return await DataAgent().execute(ctx)
 
     async def _llm_extract_data_points(
         self, content: str, source: str, memory: ConversationMemory | None = None
@@ -1014,55 +903,37 @@ class DikiwiMind:
         source: str,
         memory: ConversationMemory | None = None,
     ) -> StageResult:
-        """Stage 2: INFORMATION - batch LLM classification in one call.
+        """Stage 2: INFORMATION - delegate to InformationAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.information_agent import InformationAgent
 
-        Replaces per-node classification loop (which wasted 2× budget per node)
-        with a single batched call that classifies all data points at once.
-        """
-        start = time.time()
-
-        try:
-            classifications = await self._llm_classify_batch(data_points, source, memory)
-
-            info_nodes: list[InformationNode] = []
-            for dp, cls in zip(data_points, classifications):
-                node = InformationNode(
-                    id=f"info_{uuid.uuid4().hex[:8]}",
-                    data_point_id=dp.id,
-                    content=dp.content,
-                    concept=dp.concept,
-                    tags=cls.get("tags", []),
-                    info_type=cls.get("info_type", "fact"),
-                    domain=cls.get("domain", "general"),
-                )
-                info_nodes.append(node)
-
-                await self.graph_db.insert_node(
-                    node_id=node.id,
-                    node_type="information",
-                    label=node.content[:200],
-                    source=source,
-                )
-                await self._store_node_metadata(node)
-
-            processing_time = (time.time() - start) * 1000
-
-            return StageResult(
-                stage=DikiwiStage.INFORMATION,
+        class _MockDrop:
+            def __init__(self):
+                self.id = "legacy"
+                self.source = source
+                self.metadata = {}
+        ctx = AgentContext(
+            pipeline_id=f"legacy_info_{source}",
+            correlation_id=f"legacy_info_{source}",
+            drop=_MockDrop(),  # type: ignore[arg-type]
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.DATA,
                 success=True,
                 items_processed=len(data_points),
-                items_output=len(info_nodes),
-                processing_time_ms=processing_time,
-                data={"information_nodes": info_nodes},
+                items_output=len(data_points),
+                data={"data_points": data_points, "doc_title": "", "doc_summary": ""},
             )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.INFORMATION,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
-            )
+        )
+        return await InformationAgent().execute(ctx)
 
     async def _llm_classify_and_tag(
         self,
@@ -1135,56 +1006,37 @@ class DikiwiMind:
         source: str,
         memory: ConversationMemory | None = None,
     ) -> StageResult:
-        """Stage 3: KNOWLEDGE - batch relationship mapping in ONE LLM call.
+        """Stage 3: KNOWLEDGE - delegate to KnowledgeAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.knowledge_agent import KnowledgeAgent
 
-        Uses a single batched call instead of O(n²) per-pair calls to avoid
-        budget exhaustion and ensure insight/wisdom stages can run.
-        """
-        start = time.time()
-
-        try:
-            links: list[KnowledgeLink] = []
-
-            if len(info_nodes) < 2:
-                return StageResult(
-                    stage=DikiwiStage.KNOWLEDGE,
-                    success=True,
-                    items_processed=len(info_nodes),
-                    items_output=0,
-                    processing_time_ms=(time.time() - start) * 1000,
-                    data={"links": links},
-                )
-
-            links = await self._llm_map_relations_batch(info_nodes, source, memory)
-
-            for link in links:
-                await self.graph_db.insert_edge(
-                    edge_id=f"link_{uuid.uuid4().hex[:8]}",
-                    source_node_id=link.source_id,
-                    target_node_id=link.target_id,
-                    relation_type=link.relation_type,
-                    weight=link.strength,
-                    source="dikiwi",
-                )
-
-            processing_time = (time.time() - start) * 1000
-
-            return StageResult(
-                stage=DikiwiStage.KNOWLEDGE,
+        class _MockDrop:
+            def __init__(self):
+                self.id = "legacy"
+                self.source = source
+                self.metadata = {}
+        ctx = AgentContext(
+            pipeline_id=f"legacy_knowledge_{source}",
+            correlation_id=f"legacy_knowledge_{source}",
+            drop=_MockDrop(),  # type: ignore[arg-type]
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.INFORMATION,
                 success=True,
                 items_processed=len(info_nodes),
-                items_output=len(links),
-                processing_time_ms=processing_time,
-                data={"links": links},
+                items_output=len(info_nodes),
+                data={"information_nodes": info_nodes, "info_note_ids": {}},
             )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.KNOWLEDGE,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
-            )
+        )
+        return await KnowledgeAgent().execute(ctx)
 
     async def _llm_map_relations_batch(
         self,
@@ -1254,51 +1106,41 @@ class DikiwiMind:
         drop: "RainDrop",
         memory: ConversationMemory | None = None,
     ) -> StageResult:
-        """Stage 4: INSIGHT - LLM pattern recognition.
+        """Stage 4: INSIGHT - delegate to InsightAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.insight_agent import InsightAgent
 
-        No rule-based gap detection - pure LLM pattern analysis.
-        """
-        start = time.time()
-
-        try:
-            insights: list[Insight] = []
-
-            if len(info_nodes) >= 2:
-                # LLM-based pattern detection with memory context
-                pattern_insights = await self._llm_detect_patterns(
-                    info_nodes, links, memory
-                )
-                insights.extend(pattern_insights)
-
-            # Add to memory
-            if memory and insights:
-                memory.add_assistant(
-                    f"STAGE 4 (INSIGHT) Complete: Found {len(insights)} patterns. "
-                    f"Key insights: {', '.join(i.description[:60] for i in insights[:2])}..."
-                )
-
-            # Write insights to Obsidian
-            if self.obsidian_writer and insights:
-                await self._write_insight_notes(insights, drop)
-
-            processing_time = (time.time() - start) * 1000
-
-            return StageResult(
-                stage=DikiwiStage.INSIGHT,
+        ctx = AgentContext(
+            pipeline_id=f"legacy_insight_{id(drop)}",
+            correlation_id=f"legacy_insight_{id(drop)}",
+            drop=drop,
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.INFORMATION,
                 success=True,
                 items_processed=len(info_nodes),
-                items_output=len(insights),
-                processing_time_ms=processing_time,
-                data={"insights": insights},
+                items_output=len(info_nodes),
+                data={"information_nodes": info_nodes, "info_note_ids": {}},
             )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.INSIGHT,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.KNOWLEDGE,
+                success=True,
+                items_processed=len(info_nodes),
+                items_output=len(links),
+                data={"links": links, "knowledge_note_ids": []},
             )
+        )
+        return await InsightAgent().execute(ctx)
 
     async def _llm_detect_patterns(
         self,
@@ -1443,33 +1285,41 @@ class DikiwiMind:
         drop: "RainDrop",
         memory: ConversationMemory | None = None,
     ) -> StageResult:
-        """Stage 5: WISDOM - LLM synthesis into principles."""
-        start = time.time()
+        """Stage 5: WISDOM - delegate to WisdomAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.wisdom_agent import WisdomAgent
 
-        try:
-            zettels: list[ZettelkastenNote] = []
-
-            if info_nodes:
-                zettels = await self._llm_synthesize_wisdom(insights, info_nodes, memory)
-
-            processing_time = (time.time() - start) * 1000
-
-            return StageResult(
-                stage=DikiwiStage.WISDOM,
+        ctx = AgentContext(
+            pipeline_id=f"legacy_wisdom_{id(drop)}",
+            correlation_id=f"legacy_wisdom_{id(drop)}",
+            drop=drop,
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.INFORMATION,
+                success=True,
+                items_processed=len(info_nodes),
+                items_output=len(info_nodes),
+                data={"information_nodes": info_nodes, "info_note_ids": {}},
+            )
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.INSIGHT,
                 success=True,
                 items_processed=len(insights),
-                items_output=len(zettels),
-                processing_time_ms=processing_time,
-                data={"zettels": zettels},
+                items_output=len(insights),
+                data={"insights": insights, "insight_note_ids": []},
             )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.WISDOM,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
-            )
+        )
+        return await WisdomAgent().execute(ctx)
 
     async def _llm_synthesize_wisdom(
         self,
@@ -1780,33 +1630,42 @@ class DikiwiMind:
         drop: "RainDrop",
         memory: ConversationMemory | None = None,
     ) -> StageResult:
-        """Stage 6: IMPACT - LLM generates actionable outcomes from Zettelkasten notes."""
-        start = time.time()
+        """Stage 6: IMPACT - delegate to ImpactAgent."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.agents.impact_agent import ImpactAgent
 
-        try:
-            impacts = []
-
-            if zettels:
-                impacts = await self._llm_generate_impacts(zettels, insights, memory)
-
-            processing_time = (time.time() - start) * 1000
-
-            return StageResult(
-                stage=DikiwiStage.IMPACT,
+        ctx = AgentContext(
+            pipeline_id=f"legacy_impact_{id(drop)}",
+            correlation_id=f"legacy_impact_{id(drop)}",
+            drop=drop,
+            memory=memory,
+            budget=self._budget_for_memory(memory),
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.append(
+            StageResult(
+                stage=DikiwiStage.WISDOM,
                 success=True,
-                items_processed=len(zettels),
-                items_output=len(impacts),
-                processing_time_ms=processing_time,
-                data={"impacts": impacts, "ready_for_scheduled_minds": len(impacts) > 0},
+                items_processed=len(insights),
+                items_output=len(zettels),
+                data={"zettels": zettels, "wisdom_note_ids": []},
             )
-
-        except Exception as exc:
-            return StageResult(
-                stage=DikiwiStage.IMPACT,
-                success=False,
-                error_message=str(exc),
-                processing_time_ms=(time.time() - start) * 1000,
+        )
+        if insights:
+            ctx.stage_results.append(
+                StageResult(
+                    stage=DikiwiStage.INSIGHT,
+                    success=True,
+                    items_processed=len(insights),
+                    items_output=len(insights),
+                    data={"insights": insights, "insight_note_ids": []},
+                )
             )
+        return await ImpactAgent().execute(ctx)
 
     async def _llm_generate_impacts(
         self,

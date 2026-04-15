@@ -11,10 +11,10 @@
 DIKIWI is a multi-agent knowledge processing system inspired by the Tang Dynasty's 三省六部 (Three Departments and Six Ministries) governance structure. It transforms raw data into actionable impact through six hierarchical stages, with institutional review gates ensuring quality at critical transitions.
 
 > **Implementation Status**:
-> - **`aily/sessions/dikiwi_mind.py`** — Simpler LLM-first pipeline (currently used in production)
-> - **`aily/dikiwi/`** — Event-driven architecture with gates, skills, memorials (kept as experimental reference)
+> - **`aily/dikiwi/`** — Event-driven architecture with gates, skills, memorials (now the active runtime)
+> - **`aily/sessions/dikiwi_mind.py`** — Adapter/wrapper that builds `AgentContext` and delegates to `DikiwiOrchestrator`
 >
-> This document covers DIKIWI concepts and the event-driven design that still exists in the repo. See `dikiwi_mind.py` for the current production implementation.
+> This document covers the active event-driven DIKIWI design. See `dikiwi_mind.py` for the entry-point and `aily/dikiwi/orchestrator.py` for the runtime coordination.
 
 ### 1.1 Core Philosophy
 
@@ -545,18 +545,23 @@ metrics = orchestrator.get_metrics()
 
 ### Current Production Code (`aily/sessions/dikiwi_mind.py`)
 
-The production DIKIWI implementation uses a simpler LLM-first design:
+The production DIKIWI implementation uses a simpler LLM-first design with a post-pipeline MAC (Multiply-Accumulate) loop:
 
 ```python
 class DikiwiMind:
     """LLM-Powered Knowledge filtration and refinement pipeline."""
 
     async def process_input(self, drop: RainDrop) -> DikiwiResult:
-        # Direct LLM-based stage progression
-        # No EventBus overhead for single-user scale
-        # Conversation memory across stages
+        # 1. Run 6-stage DIKIWI pipeline (Data → Impact)
+        # 2. MAC Loop (×2 rounds):
+        #    - Multiply: Innolaval runs 8 innovation frameworks
+        #    - Accumulate: HanlinAgent synthesizes vault + graph + proposals
+        #    - Round 1: dry-run synthesis feeds back into Innolaval context
+        #    - Round 2: final execute() persists to Obsidian + GraphDB
         pass
 ```
+
+The 6 stage agents live in `aily/dikiwi/agents/` (`data_agent.py`, `information_agent.py`, `knowledge_agent.py`, `insight_agent.py`, `wisdom_agent.py`, `impact_agent.py`). After IMPACT completes, `DikiwiMind` optionally runs the MAC loop with `InnolavalScheduler` and `HanlinAgent` before returning the result.
 
 **Differences from Full Architecture:**
 
@@ -566,6 +571,7 @@ class DikiwiMind:
 | Gates | Implicit in LLM prompts | Explicit Menxia/CVO gates |
 | Skills | LLM handles all reasoning | Registry-loaded skills |
 | Memorials | Basic logging | Full dual-storage (GraphDB + Obsidian) |
+| Post-pipeline | Innolaval-Hanlin MAC loop | Not present |
 | Scale | Single-user optimized | Multi-user capable |
 
 **When to use full architecture:**

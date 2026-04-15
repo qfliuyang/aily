@@ -128,6 +128,31 @@ class DikiwiPromptRegistry:
   ]
 }"""
 
+    HANLIN_SYNTHESIS_CONTRACT = """Respond with JSON:
+{
+  "report_title": "Title for the formal summary report",
+  "summary": "3-5 paragraph executive summary of what DIKIWI discovered",
+  "key_findings": [
+    "First key finding",
+    "Second key finding"
+  ],
+  "innolaval_synthesis": "Assessment of how Innolaval framework proposals complement or conflict with vault insights",
+  "proposals": [
+    {
+      "title": "Proposal title",
+      "description": "Detailed proposal description (2-4 sentences)",
+      "domain": "technology|business|science|general",
+      "priority": "high|medium|low",
+      "rationale": "Why this proposal is supported by the vault contents and/or Innolaval frameworks",
+      "source_evidence": ["Specific note, insight, or framework that supports this"],
+      "framework_contribution": "Which Innolaval framework(s) contributed, if any"
+    }
+  ],
+  "recommended_next_steps": [
+    "Specific action recommendation"
+  ]
+}"""
+
     @classmethod
     def _build_messages(cls, spec: PromptSpec) -> list[dict[str, str]]:
         system_lines = [
@@ -464,6 +489,40 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             ),
             context_sections=(
                 ("Zettelkasten Principles", zettels_desc or "No zettels available."),
+                ("Shared Memory", memory_context or "No earlier stage memory available."),
+            ),
+        )
+        return cls._build_messages(spec)
+
+    @classmethod
+    def hanlin_synthesis(
+        cls,
+        *,
+        vault_excerpts: str,
+        graph_nodes: str,
+        innolaval_proposals: str,
+        memory_context: str = "",
+    ) -> list[dict[str, str]]:
+        spec = PromptSpec(
+            stage="HANLIN",
+            role="Vault Scholar (翰林)",
+            objective=(
+                "Analyze the DIKIWI vault outputs, knowledge graph, and Innolaval framework proposals "
+                "to draft a formal summary report and concrete proposals for innovation and business evaluation."
+            ),
+            output_contract=cls.HANLIN_SYNTHESIS_CONTRACT,
+            guidelines=(
+                "Synthesize patterns across vault notes, graph nodes, and Innolaval proposals — not just restate them.",
+                "Proposals must be grounded in specific evidence from the vault, graph, or Innolaval frameworks.",
+                "When Innolaval frameworks and vault insights conflict, resolve the tension explicitly.",
+                "Write as a formal analyst drafting paperwork for the Innovation and Entrepreneur minds.",
+                "Prioritize proposals with clear domains, priorities, and rationale.",
+                "Return valid JSON only.",
+            ),
+            context_sections=(
+                ("Vault Excerpts", vault_excerpts or "No vault excerpts available."),
+                ("Graph Nodes", graph_nodes or "No graph nodes available."),
+                ("Innolaval Framework Proposals", innolaval_proposals or "No Innolaval proposals available."),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),
         )

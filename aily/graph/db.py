@@ -1,5 +1,8 @@
+"""GraphDB - SQLite-backed knowledge graph with node properties."""
+
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -84,6 +87,32 @@ class GraphDB:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS node_properties (
+                node_id TEXT PRIMARY KEY,
+                properties TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_node_properties_node_id ON node_properties(node_id)"
+        )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hanlin_feedback (
+                id TEXT PRIMARY KEY,
+                proposal_label TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hanlin_feedback_created_at ON hanlin_feedback(created_at)"
         )
         await self._db.commit()
 
@@ -337,5 +366,96 @@ class GraphDB:
                 "raw_log_id": row[0],
                 "created_at": row[1],
             }
+            for row in rows
+        ]
+
+    async def set_node_property(self, node_id: str, key: str, value: object) -> None:
+        """Set a single JSON-serializable property on a node."""
+        if self._db is None:
+            raise RuntimeError("GraphDB not initialized")
+        row = await self._db.execute(
+            "SELECT properties FROM node_properties WHERE node_id = ?",
+            (node_id,),
+        )
+        result = await row.fetchone()
+        props = json.loads(result[0]) if result else {}
+        props[key] = value
+        await self._db.execute(
+            """
+            INSERT INTO node_properties (node_id, properties, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(node_id) DO UPDATE SET
+                properties = excluded.properties,
+                updated_at = excluded.updated_at
+            """,
+            (node_id, json.dumps(props, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+        )
+        await self._db.commit()
+
+    async def get_node_properties(self, node_id: str) -> dict[str, object]:
+        """Get all properties for a node as a dict."""
+        if self._db is None:
+            raise RuntimeError("GraphDB not initialized")
+        row = await self._db.execute(
+            "SELECT properties FROM node_properties WHERE node_id = ?",
+            (node_id,),
+        )
+        result = await row.fetchone()
+        return json.loads(result[0]) if result else {}
+
+    async def get_nodes_by_property(self, node_type: str, key: str, value: object) -> list[dict]:
+        """Get nodes of a given type with a specific property value."""
+        json_path = f"$.{key}"
+        # SQLite json_extract returns 0/1 for booleans
+        if isinstance(value, bool):
+            db_value = 1 if value else 0
+        else:
+            db_value = value
+        rows = await self._fetchall(
+            """
+            SELECT n.id, n.type, n.label, n.source, n.created_at, np.properties
+            FROM nodes n
+            JOIN node_properties np ON n.id = np.node_id
+            WHERE n.type = ?
+              AND json_extract(np.properties, ?) = ?
+            """,
+            (node_type, json_path, db_value),
+        )
+        results = []
+        for row in rows:
+            props = json.loads(row[5]) if row[5] else {}
+            results.append(
+                {
+                    "id": row[0],
+                    "type": row[1],
+                    "label": row[2],
+                    "source": row[3],
+                    "created_at": row[4],
+                    "properties": props,
+                }
+            )
+        return results
+
+    async def add_hanlin_feedback(self, proposal_label: str, reason: str) -> None:
+        """Append a Hanlin rejection feedback entry."""
+        import uuid
+        await self._execute(
+            "INSERT INTO hanlin_feedback (id, proposal_label, reason) VALUES (?, ?, ?)",
+            (f"hf_{uuid.uuid4().hex[:8]}", proposal_label, reason),
+        )
+
+    async def get_hanlin_feedback(self, limit: int = 100) -> list[dict]:
+        """Get recent Hanlin rejection feedback entries."""
+        rows = await self._fetchall(
+            """
+            SELECT proposal_label, reason, created_at
+            FROM hanlin_feedback
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [
+            {"proposal_label": row[0], "reason": row[1], "created_at": row[2]}
             for row in rows
         ]
