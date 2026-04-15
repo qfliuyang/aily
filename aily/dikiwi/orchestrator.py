@@ -27,6 +27,7 @@ from aily.dikiwi.events import (
     GateDecisionEvent,
 )
 from aily.dikiwi.events.models import MemorialCreatedEvent
+from aily.dikiwi.gates import CVOGate, MenxiaGate
 from aily.dikiwi.stages import (
     DikiwiStage,
     StageContext,
@@ -122,6 +123,13 @@ class DikiwiOrchestrator:
         self._pipelines: dict[str, ProcessingPipeline] = {}
         self._agent_contexts: dict[str, AgentContext] = {}
         self.agent_registry: dict[DikiwiStage, DikiwiAgent] = {}
+
+        # Gates
+        self.menxia_gate = MenxiaGate(
+            llm_client=llm_client,
+            quality_threshold=self.config.menxia_quality_threshold,
+        )
+        self.cvo_gate = CVOGate(ttl_hours=self.config.cvo_ttl_hours)
 
         # Metrics
         self._metrics = {
@@ -293,12 +301,12 @@ class DikiwiOrchestrator:
             await self._promote_to_stage(pipeline, DikiwiStage.INSIGHT)
 
         elif event.stage == DikiwiStage.INSIGHT:
-            # Insight complete → 吏部/CVO review for WISDOM promotion
-            await self._schedule_cvo_review(pipeline, event)
+            # Insight complete → auto-promote to WISDOM
+            await self._promote_to_stage(pipeline, DikiwiStage.WISDOM)
 
         elif event.stage == DikiwiStage.WISDOM:
-            # Wisdom complete → auto-promote to IMPACT
-            await self._promote_to_stage(pipeline, DikiwiStage.IMPACT)
+            # Wisdom complete → CVO review for IMPACT promotion
+            await self._schedule_cvo_review(pipeline, event)
 
         elif event.stage == DikiwiStage.IMPACT:
             # Pipeline complete
@@ -407,7 +415,7 @@ class DikiwiOrchestrator:
         pipeline: ProcessingPipeline,
         event: StageCompletedEvent,
     ) -> None:
-        """Schedule CVO review for INSIGHT → WISDOM transition."""
+        """Schedule CVO review for WISDOM → IMPACT transition."""
         logger.info(
             "[DIKIWI] Scheduling CVO review for pipeline %s",
             pipeline.pipeline_id,
@@ -431,7 +439,7 @@ class DikiwiOrchestrator:
             )
         else:
             # Auto-approve
-            await self._promote_to_stage(pipeline, DikiwiStage.WISDOM)
+            await self._promote_to_stage(pipeline, DikiwiStage.IMPACT)
 
     async def _cvo_ttl_timer(
         self,
@@ -442,7 +450,7 @@ class DikiwiOrchestrator:
         await asyncio.sleep(self.config.cvo_ttl_hours * 3600)
 
         # Check if still pending
-        if pipeline.status == "running" and pipeline.context.current_stage == DikiwiStage.INSIGHT:
+        if pipeline.status == "running" and pipeline.context.current_stage == DikiwiStage.WISDOM:
             logger.info(
                 "[DIKIWI] CVO TTL expired for pipeline %s, auto-approving",
                 pipeline.pipeline_id,

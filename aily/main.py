@@ -594,6 +594,10 @@ async def lifespan(app: FastAPI):
             entrepreneur_scheduler.start()
             logger.info("Entrepreneur Mind (Agentic) started (9am daily GStack with real actions)")
 
+        # Wire Entrepreneur into DIKIWI Mind for per-pipeline business evaluation
+        if dikiwi_mind and entrepreneur_scheduler:
+            dikiwi_mind.entrepreneur_scheduler = entrepreneur_scheduler
+
         logger.info("Three-Mind System initialized")
     except Exception:
         logger.exception("Failed to initialize Three-Mind System")

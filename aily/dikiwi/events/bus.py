@@ -92,7 +92,14 @@ class InMemoryEventBus(EventBus):
         event_type = type(event)
 
         async with self._lock:
-            handlers = list(self._subscribers.get(event_type, []))
+            # Collect handlers for the exact event type and all base classes
+            handlers: list[EventHandler] = []
+            seen = set()
+            for cls in event_type.__mro__:
+                for handler in self._subscribers.get(cls, []):
+                    if id(handler) not in seen:
+                        handlers.append(handler)
+                        seen.add(id(handler))
 
         if not handlers:
             logger.debug("No handlers for event type: %s", event_type.__name__)

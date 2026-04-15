@@ -161,7 +161,7 @@ class CVOGate:
             # Decision was made (via approve/reject)
             decision = getattr(pending, '_decision_result', None)
             if decision:
-                del self._pending[approval_id]
+                self._pending.pop(approval_id, None)
                 self._completed.append(decision)
 
                 if decision.decision == ApprovalDecisionType.APPROVED:
@@ -178,7 +178,7 @@ class CVOGate:
                 approval_id[:8],
             )
             self._auto_approval_count += 1
-            del self._pending[approval_id]
+            self._pending.pop(approval_id, None)
 
             decision = ApprovalDecision(
                 decision=ApprovalDecisionType.AUTO_APPROVED,

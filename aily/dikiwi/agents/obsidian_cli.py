@@ -22,6 +22,29 @@ class ObsidianCLI:
         self._cli_path = cli_path or "obsidian-cli"
         self._available: bool | None = None
 
+    @staticmethod
+    def _sanitize_path(path: str) -> str:
+        """Validate and normalize a vault path.
+
+        Rejects directory traversal, absolute paths, null bytes, and backslashes.
+        """
+        if not path or not isinstance(path, str):
+            raise ValueError("Path must be a non-empty string")
+        if "\x00" in path:
+            raise ValueError("Path contains null bytes")
+        if ".." in path:
+            raise ValueError("Path contains directory traversal")
+        if path.startswith("/"):
+            raise ValueError("Path must be relative (no leading slash)")
+        if "\\" in path:
+            raise ValueError("Path contains backslashes")
+        return path
+
+    @staticmethod
+    def _escape_js_string(value: str) -> str:
+        """Escape a string for safe use in single-quoted JavaScript literals."""
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
     def _is_available(self) -> bool:
         if self._available is None:
             self._available = shutil.which(self._cli_path) is not None
@@ -76,6 +99,11 @@ class ObsidianCLI:
 
     def read_note(self, path: str) -> str:
         """Read a note by vault path via obsidian-cli read."""
+        try:
+            self._sanitize_path(path)
+        except ValueError as exc:
+            logger.warning("[ObsidianCLI] Invalid path: %s", exc)
+            return ""
         ok, out = self._run("read", path)
         return out if ok else ""
 
@@ -102,8 +130,14 @@ class ObsidianCLI:
 
     def get_backlinks(self, path: str) -> list[str]:
         """Get backlink paths for a given note via obsidian-cli eval."""
+        try:
+            self._sanitize_path(path)
+        except ValueError as exc:
+            logger.warning("[ObsidianCLI] Invalid path: %s", exc)
+            return []
+        safe_path = self._escape_js_string(path)
         script = (
-            f"const file = app.vault.getAbstractFileByPath('{path}'); "
+            f"const file = app.vault.getAbstractFileByPath('{safe_path}'); "
             "if (!file) return []; "
             "const cache = app.metadataCache.getFileCache(file); "
             "(cache && cache.links || []).map(l => l.link)"

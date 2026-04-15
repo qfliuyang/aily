@@ -284,6 +284,7 @@ class DikiwiMind:
         dikiwi_obsidian_writer: DikiwiObsidianWriter | None = None,
         llm_client: Any | None = None,
         innolaval_scheduler: Any | None = None,
+        entrepreneur_scheduler: Any | None = None,
     ) -> None:
         """Initialize LLM-powered DIKIWI mind.
 
@@ -297,6 +298,7 @@ class DikiwiMind:
             dikiwi_obsidian_writer: Optional enhanced Obsidian writer (file-based with Dataview)
             llm_client: Pre-configured LLM client (e.g., Coding Plan with kimi-k2.5)
             innolaval_scheduler: Optional InnolavalScheduler to run framework evaluation on DIKIWI outputs
+            entrepreneur_scheduler: Optional EntrepreneurScheduler for per-pipeline business evaluation
         """
         # Use pre-configured client if provided, otherwise create Standard API client
         if llm_client is not None:
@@ -310,6 +312,7 @@ class DikiwiMind:
         self.dikiwi_obsidian_writer = dikiwi_obsidian_writer
         self.browser_manager = browser_manager
         self.innolaval_scheduler = innolaval_scheduler
+        self.entrepreneur_scheduler = entrepreneur_scheduler
 
         self._markdownizer = MarkdownizeProcessor(browser_manager=browser_manager)
 
@@ -468,7 +471,10 @@ class DikiwiMind:
             orchestrator = DikiwiOrchestrator(
                 llm_client=self.llm_client,
                 graph_db=self.graph_db,
-                config=PipelineConfig(require_cvo_for_impact=False),
+                config=PipelineConfig(
+                    require_cvo_for_impact=True,
+                    cvo_ttl_hours=0,  # Non-blocking: auto-approve immediately
+                ),
             )
             orchestrator.register_agent(OrchestratorDikiwiStage.DATA, DataAgent())
             orchestrator.register_agent(OrchestratorDikiwiStage.INFORMATION, InformationAgent())
@@ -523,6 +529,24 @@ class DikiwiMind:
                     ctx.stage_results.append(hanlin_result)
                 except Exception as exc:
                     logger.warning("[DIKIWI] HanlinAgent failed: %s", exc)
+
+            # Per-pipeline Entrepreneur evaluation for business proposals
+            if (
+                pipeline.status == "completed"
+                and self.entrepreneur_scheduler
+                and hanlin_result
+                and hanlin_result.success
+                and hanlin_result.data.get("proposals")
+            ):
+                try:
+                    logger.info(
+                        "[DIKIWI] Triggering Entrepreneur evaluation for %d proposals from pipeline %s",
+                        len(hanlin_result.data["proposals"]),
+                        pipeline_id,
+                    )
+                    asyncio.create_task(self.entrepreneur_scheduler._run_session_wrapper())
+                except Exception as exc:
+                    logger.warning("[DIKIWI] Entrepreneur trigger failed: %s", exc)
 
             # Transfer results
             result.stage_results = list(ctx.stage_results)

@@ -19,7 +19,7 @@ from aily.dikiwi.events import (
     InMemoryEventBus,
     RedisStreamsEventBus,
 )
-from aily.dikiwi.events.models import Event, StageCompletedEvent
+from aily.dikiwi.events.models import Event, EventType, StageCompletedEvent
 
 
 class TestInMemoryEventBus:
@@ -167,6 +167,7 @@ class TestRedisStreamsEventBus:
 
     async def test_publish_sends_to_redis(self, mock_redis):
         """Publish sends event to Redis Stream."""
+        pytest.importorskip("redis")
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             bus = RedisStreamsEventBus()
             await bus._get_redis()  # Initialize connection
@@ -183,6 +184,7 @@ class TestRedisStreamsEventBus:
 
     async def test_subscribe_starts_listener(self, mock_redis):
         """Subscribe starts background listener."""
+        pytest.importorskip("redis")
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             bus = RedisStreamsEventBus()
 
@@ -201,6 +203,7 @@ class TestRedisStreamsEventBus:
 
     async def test_close_cancels_listener(self, mock_redis):
         """Close cancels background listener."""
+        pytest.importorskip("redis")
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             bus = RedisStreamsEventBus()
 
@@ -215,6 +218,15 @@ class TestRedisStreamsEventBus:
 
     async def test_missing_redis_raises_import_error(self):
         """Missing redis package raises ImportError."""
+        try:
+            import redis
+        except ImportError:
+            # redis is actually not installed
+            with pytest.raises(ImportError):
+                RedisStreamsEventBus()
+            return
+
+        # redis is installed - simulate missing with patch
         with patch.dict("sys.modules", {"redis": None}):
             bus = RedisStreamsEventBus()
             with pytest.raises(ImportError):
@@ -254,7 +266,7 @@ class TestEventModels:
         )
 
         assert event.correlation_id == "corr-001"
-        assert event.event_type == "stage_completed"
+        assert event.event_type == EventType.STAGE_COMPLETED
 
     def test_event_timestamp_auto_set(self):
         """Events auto-set timestamp."""
@@ -276,4 +288,4 @@ class TestEventModels:
 
         assert data["correlation_id"] == "corr-001"
         assert data["stage"] == "INFORMATION"
-        assert data["event_type"] == "stage_completed"
+        assert data["event_type"] == "STAGE_COMPLETED"
