@@ -317,6 +317,41 @@ class ChaosDaemon:
                 stats = self.queue.get_stats()
                 logger.info(f"Queue stats: {stats}")
 
+    def _save_transcript_to_vault(self, content: ExtractedContentMultimodal, source_path: Path) -> None:
+        """Save complete markdown transcript to vault 00-Chaos."""
+        try:
+            transcript_dir = VAULT_PATH / "00-Chaos"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            base_name = source_path.stem
+            transcript_path = transcript_dir / f"{base_name}.md"
+
+            counter = 1
+            while transcript_path.exists():
+                transcript_path = transcript_dir / f"{base_name}_{counter}.md"
+                counter += 1
+
+            lines = [
+                f"# {content.title or base_name}\n",
+                f"**Original File:** {source_path.name}\n",
+                f"**Type:** {content.source_type}\n",
+                f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+                "---\n",
+                content.get_full_text(),
+            ]
+            if content.segments:
+                lines.append("\n## Segments\n")
+                for seg in content.segments:
+                    start_m = int(seg.start_time) // 60
+                    start_s = int(seg.start_time) % 60
+                    end_m = int(seg.end_time) // 60
+                    end_s = int(seg.end_time) % 60
+                    lines.append(f"**[{start_m}:{start_s:02d} - {end_m}:{end_s:02d}]** {seg.text}\n")
+
+            transcript_path.write_text("\n".join(lines), encoding="utf-8")
+            logger.info("Saved transcript to vault 00-Chaos: %s", transcript_path.name)
+        except Exception as exc:
+            logger.warning("Failed to save transcript to vault: %s", exc)
+
     async def _process_records(self, file_records) -> None:
         """Process one file or a grouped image session through DIKIWI."""
         if not file_records:
@@ -327,6 +362,7 @@ class ChaosDaemon:
             logger.info(f"Processing: {source_path.name}")
             content = await self._extract_content(file_records[0])
         else:
+            source_path = Path(file_records[0].source_path)
             logger.info(
                 "Processing grouped image session: %s files (%s)",
                 len(file_records),
@@ -336,6 +372,9 @@ class ChaosDaemon:
 
         if not content:
             raise ValueError("Failed to extract content")
+
+        # Save raw transcript to vault 00-Chaos
+        self._save_transcript_to_vault(content, source_path)
 
         content_items = self._split_content_into_jobs(content)
         bridge = await self._ensure_dikiwi_bridge()

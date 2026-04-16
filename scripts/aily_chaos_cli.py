@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aily.chaos.config import ChaosConfig
 from aily.chaos.processor import ChaosProcessor
+from aily.config import SETTINGS
 
 
 def setup_api_key():
@@ -34,9 +35,13 @@ def setup_api_key():
     return api_key
 
 
+def _get_vault_path() -> str:
+    return SETTINGS.dikiwi_vault_path or SETTINGS.obsidian_vault_path or str(Path.home() / "Documents" / "aily")
+
+
 async def process_single(file_path: Path, config: ChaosConfig):
     """Process a single file."""
-    processor = ChaosProcessor(config)
+    processor = ChaosProcessor(config, vault_path=_get_vault_path())
 
     print(f"\n{'='*60}")
     print(f"Processing: {file_path.name}")
@@ -62,7 +67,7 @@ async def process_single(file_path: Path, config: ChaosConfig):
 
 async def watch_mode(config: ChaosConfig):
     """Run in watch mode."""
-    processor = ChaosProcessor(config)
+    processor = ChaosProcessor(config, vault_path=_get_vault_path())
 
     def on_complete(job):
         status = "✓" if job.status.name == "COMPLETED" else "✗"

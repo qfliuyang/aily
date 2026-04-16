@@ -37,8 +37,13 @@ class ChaosProcessor:
         await processor.stop()
     """
 
-    def __init__(self, config: ChaosConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ChaosConfig | None = None,
+        vault_path: str | Path | None = None,
+    ) -> None:
         self.config = config or ChaosConfig()
+        self.vault_path = Path(vault_path) if vault_path else None
         self.watcher = FileWatcher(self.config)
         self.tagger = IntelligentTagger(self.config)
         # Use free tier model for chaos processing
@@ -284,7 +289,7 @@ class ChaosProcessor:
     async def _save_extraction(
         self, job: ProcessingJob, extracted: ExtractedContentMultimodal
     ) -> None:
-        """Save extraction result to processed folder."""
+        """Save extraction result to processed folder and 00-chaos transcript folder."""
         date_folder = datetime.now().strftime("%Y-%m-%d")
         output_dir = self.config.processed_folder / date_folder
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -305,6 +310,48 @@ class ChaosProcessor:
             f.write(f"**Tags:** {', '.join(extracted.tags)}\n\n")
             f.write("---\n\n")
             f.write(extracted.get_full_text())
+
+        # Save complete markdown transcript to vault 00-Chaos (one-to-one)
+        if self.vault_path:
+            transcript_dir = self.vault_path / "00-Chaos"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            transcript_path = transcript_dir / f"{base_name}.md"
+
+            # Handle duplicates
+            counter = 1
+            while transcript_path.exists():
+                transcript_path = transcript_dir / f"{base_name}_{counter}.md"
+                counter += 1
+
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(f"# {extracted.title or base_name}\n\n")
+                f.write(f"**Original File:** {job.file_path.name}\n\n")
+                f.write(f"**Type:** {extracted.source_type}\n\n")
+                f.write(f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("---\n\n")
+                f.write(extracted.get_full_text())
+                if extracted.segments:
+                    f.write("\n\n## Segments\n\n")
+                    for seg in extracted.segments:
+                        start = self._format_timestamp(seg.start_time)
+                        end = self._format_timestamp(seg.end_time)
+                        f.write(f"**[{start} - {end}]** {seg.text}\n\n")
+
+            logger.info(
+                "Saved complete transcript to vault 00-Chaos: %s",
+                transcript_path.name,
+            )
+
+    @staticmethod
+    def _format_timestamp(seconds: float) -> str:
+        """Format seconds as HH:MM:SS or MM:SS."""
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes}:{secs:02d}"
 
     async def _move_to_processed(self, job: ProcessingJob) -> None:
         """Move original file to processed folder."""

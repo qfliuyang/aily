@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aily.chaos.config import ChaosConfig
 from aily.chaos.processor import ChaosProcessor
 from aily.chaos.types import ProcessingJob, ProcessingStatus
+from aily.config import SETTINGS
 
 
 @dataclass
@@ -75,10 +76,12 @@ class BatchProcessor:
         config: ChaosConfig,
         concurrency: int = 3,
         rate_limit_delay: float = 1.0,
+        vault_path: str | None = None,
     ):
         self.config = config
         self.concurrency = concurrency
         self.rate_limit_delay = rate_limit_delay
+        self.vault_path = vault_path or SETTINGS.dikiwi_vault_path or SETTINGS.obsidian_vault_path or str(Path.home() / "Documents" / "aily")
         self.state_file = Path.home() / ".aily_chaos_batch_state.json"
         self.state = BatchState.load(self.state_file)
         self.semaphore = asyncio.Semaphore(concurrency)
@@ -116,7 +119,7 @@ class BatchProcessor:
                 return "skipped", None
 
             try:
-                processor = ChaosProcessor(self.config)
+                processor = ChaosProcessor(self.config, vault_path=self.vault_path)
                 job = await processor.process_file(file_path)
 
                 if job.status == ProcessingStatus.COMPLETED:
