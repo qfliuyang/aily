@@ -44,7 +44,7 @@ class DikiwiStage(Enum):
     INSIGHT = auto()
     WISDOM = auto()
     IMPACT = auto()
-    HANLIN = auto()
+    RESIDUAL = auto()
 
 
 @dataclass

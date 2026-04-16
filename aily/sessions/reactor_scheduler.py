@@ -296,22 +296,14 @@ class ReactorScheduler(BaseMindScheduler):
             return []
 
         try:
-            nodes = await self.graph_db.get_nodes_by_type("residual_proposal")
+            nodes = await self.graph_db.get_nodes_by_property(
+                "residual_proposal", "status", "pending_innovation"
+            )
         except Exception as e:
             logger.warning(f"[Reactor] Failed to query residual proposals: {e}")
             return []
 
-        pending = []
-        for node in nodes:
-            props = node.get("properties", {})
-            if isinstance(props, str):
-                import json
-                try:
-                    props = json.loads(props)
-                except Exception:
-                    props = {}
-            if props.get("status") == "pending_innovation":
-                pending.append(node)
+        pending = nodes
 
         if not pending:
             logger.info("[Reactor] No pending Residual proposals to evaluate")

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aily.sessions.base import BaseMindScheduler
-from aily.sessions.models import Proposal, ProposalType, ProposalStatus
+from aily.sessions.models import Proposal, ProposalType, ProposalStatus, ProposalStage
 from aily.sessions.gstack_agent import GStackAgent
 
 logger = logging.getLogger(__name__)
@@ -227,20 +227,10 @@ class EntrepreneurScheduler(BaseMindScheduler):
         if not self.graph_db:
             return []
         try:
-            nodes = await self.graph_db.get_nodes_by_type("residual_proposal")
-            pending = []
-            for node in nodes:
-                props = node.get("properties", {})
-                if isinstance(props, str):
-                    import json
-                    try:
-                        props = json.loads(props)
-                    except Exception:
-                        props = {}
-                if props.get("status") == "pending_business":
-                    node["properties"] = props
-                    pending.append(node)
-            return pending
+            nodes = await self.graph_db.get_nodes_by_property(
+                "residual_proposal", "status", "pending_business"
+            )
+            return nodes
         except Exception as e:
             logger.exception("[Entrepreneur] Failed to query pending business proposals: %s", e)
             return []

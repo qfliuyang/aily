@@ -472,6 +472,7 @@ class DikiwiOrchestrator:
         is_rejection: bool = False,
     ) -> None:
         """Promote content to next stage and dispatch the stage agent."""
+        from_stage = pipeline.context.current_stage
         success, message = self.state_machine.transition(pipeline.context, to_stage)
 
         if not success:
@@ -487,7 +488,7 @@ class DikiwiOrchestrator:
         await self.event_bus.publish(
             ContentPromotedEvent(
                 correlation_id=pipeline.correlation_id,
-                from_stage=pipeline.context.current_stage,
+                from_stage=from_stage,
                 to_stage=to_stage,
                 gate_decision="rejected_back" if is_rejection else "approved",
             )
