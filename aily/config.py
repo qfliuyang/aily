@@ -22,7 +22,7 @@ class MindsConfig:
     dikiwi_enabled: bool = True
     innovation_enabled: bool = True
     entrepreneur_enabled: bool = True
-    mac_enabled: bool = False  # Off by default: MAC loop can burn 24+ LLM calls per message
+    mac_enabled: bool = True  # On by default: MAC loop drives Reactor -> Residual -> Entrepreneur pipeline
 
     # Schedule times (24-hour format)
     innovation_time: time = field(default_factory=lambda: time(8, 0))
@@ -50,7 +50,7 @@ class MindsConfig:
         config.dikiwi_enabled = settings.get("aily_dikiwi_enabled", "true").lower() == "true"
         config.innovation_enabled = settings.get("aily_innovation_enabled", "true").lower() == "true"
         config.entrepreneur_enabled = settings.get("aily_entrepreneur_enabled", "true").lower() == "true"
-        config.mac_enabled = settings.get("aily_mac_enabled", "false").lower() == "true"
+        config.mac_enabled = settings.get("aily_mac_enabled", "true").lower() == "true"
 
         # Parse times
         innovation_time_str = settings.get("aily_innovation_time", "08:00")
@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     feishu_encrypt_key: str = ""
     obsidian_rest_api_key: str = ""
     obsidian_vault_path: str = ""
-    dikiwi_vault_path: str = str(Path.home() / "obsidian" / "aily-dikiwi")
+    dikiwi_vault_path: str = "/Users/luzi/Documents/aily"
     obsidian_rest_api_port: int = 27123
     llm_provider: str = "zhipu"
     llm_api_key: str = ""

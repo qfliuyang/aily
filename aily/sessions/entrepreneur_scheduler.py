@@ -12,7 +12,7 @@ from typing import Any
 
 from aily.sessions.base import BaseMindScheduler
 from aily.sessions.models import Proposal, ProposalType, ProposalStatus, ProposalStage
-from aily.sessions.gstack_agent import GStackAgent
+from aily.sessions.gstack_agent import GStackAgent, GStackPanelResult
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
         proposal_max_per_session: int = 10,
         innovation_timeout_minutes: int = 30,
         tool_executor: Any | None = None,
+        use_gstack_panel: bool = True,
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -51,6 +52,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
         self.proposal_min_confidence = proposal_min_confidence
         self.proposal_max_per_session = proposal_max_per_session
         self.innovation_timeout_minutes = innovation_timeout_minutes
+        self.use_gstack_panel = use_gstack_panel
 
         # Initialize GStack Agent - actually takes actions
         self.gstack_agent = GStackAgent(
@@ -86,19 +88,33 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 "proposal_node_id": proposal_node["id"],
             }
 
-            session = await self.gstack_agent.evaluate(
-                hypothesis=hypothesis["hypothesis"],
-                problem=hypothesis["problem"],
-                solution=hypothesis["solution"],
-                target_user=hypothesis["target_user"],
-                context=context,
-            )
-            total_actions += len(session.actions)
+            if self.use_gstack_panel:
+                panel = await self.gstack_agent.evaluate_panel(
+                    hypothesis=hypothesis["hypothesis"],
+                    problem=hypothesis["problem"],
+                    solution=hypothesis["solution"],
+                    target_user=hypothesis["target_user"],
+                    context=context,
+                )
+                total_actions += sum(len(s.actions) for s in panel.sessions)
 
-            # Step 3: Process verdict and update GraphDB
-            entrepreneur_proposal = await self._process_gstack_verdict(
-                proposal_node, session
-            )
+                # Step 3: Process verdict and update GraphDB
+                entrepreneur_proposal = await self._process_gstack_panel_verdict(
+                    proposal_node, panel
+                )
+            else:
+                session = await self.gstack_agent.evaluate(
+                    hypothesis=hypothesis["hypothesis"],
+                    problem=hypothesis["problem"],
+                    solution=hypothesis["solution"],
+                    target_user=hypothesis["target_user"],
+                    context=context,
+                )
+                total_actions += len(session.actions)
+                entrepreneur_proposal = await self._process_gstack_verdict(
+                    proposal_node, session
+                )
+
             if entrepreneur_proposal:
                 approved_proposals.append(entrepreneur_proposal)
 
@@ -248,6 +264,93 @@ class EntrepreneurScheduler(BaseMindScheduler):
             "target_user": "Users who face this problem",
         }
 
+    async def _process_gstack_panel_verdict(
+        self, proposal_node: dict, panel: GStackPanelResult
+    ) -> Proposal | None:
+        """Update proposal status based on GStack panel verdict and return Proposal if approved."""
+        if not self.graph_db:
+            return None
+
+        node_id = proposal_node["id"]
+        verdict = panel.final_verdict
+        confidence = panel.final_confidence
+        props = proposal_node.get("properties", {})
+
+        # Persist panel sessions to GraphDB for audit trail
+        try:
+            for session in panel.sessions:
+                session_id = f"gstack_{session.persona}_{node_id[-8:]}"
+                await self.graph_db.insert_node(
+                    node_id=session_id,
+                    node_type="gstack_panel_session",
+                    label=f"{session.persona}: {session.verdict} ({session.confidence:.0%})",
+                    source="entrepreneur",
+                )
+                await self.graph_db.insert_edge(
+                    edge_id=f"edge_{session.persona}_{node_id[-8:]}",
+                    source_node_id=session_id,
+                    target_node_id=node_id,
+                    relation_type="evaluates",
+                    weight=session.confidence,
+                    source="entrepreneur",
+                )
+        except Exception as exc:
+            logger.warning("[Entrepreneur] Failed to persist panel sessions: %s", exc)
+
+        if verdict == "build_it" and confidence >= self.proposal_min_confidence:
+            await self.graph_db.set_node_property(node_id, "status", "incubating")
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._create_incubation_task(proposal_node, panel)
+            return Proposal(
+                id=f"biz_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{node_id[-4:]}",
+                mind_name="entrepreneur",
+                title=self._build_hypothesis_from_node(proposal_node)["title"],
+                content=panel.synthesis_reasoning or panel.sessions[0].hypothesis,
+                summary=panel.synthesis_reasoning[:200] if panel.synthesis_reasoning else panel.sessions[0].hypothesis[:200],
+                confidence=confidence,
+                proposal_type=ProposalType.BUSINESS,
+                status=ProposalStatus.PENDING,
+                priority="high" if confidence >= 0.85 else "medium",
+                business_score=confidence,
+                stage=ProposalStage.INCUBATING,
+                source_knowledge_ids=[node_id],
+                framework_used="GStack Panel",
+                metadata={
+                    "problem": panel.sessions[0].problem,
+                    "solution": panel.sessions[0].solution,
+                    "target_user": panel.sessions[0].target_user,
+                    "verdict": verdict,
+                    "panel_verdicts": panel.verdict_counts,
+                    "split_verdict": panel.split_verdict,
+                    "risks": panel.sessions[0].blockers,
+                    "opportunities": panel.sessions[0].opportunities,
+                    "actions_taken": sum(len(s.actions) for s in panel.sessions),
+                    "key_findings": panel.sessions[0].key_findings[:10],
+                },
+            )
+
+        if verdict == "kill_it":
+            reason = panel.synthesis_reasoning or "killed_by_gstack_panel"
+            await self.graph_db.set_node_property(node_id, "status", "rejected_business")
+            await self.graph_db.set_node_property(node_id, "rejection_reason", reason)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._write_rejection_feedback(proposal_node, reason)
+            return None
+
+        # needs_more_validation or pivot
+        attempts = int(props.get("validation_attempts", 0)) + 1
+        if attempts >= 2:
+            reason = panel.synthesis_reasoning or "max_validation_attempts_reached"
+            await self.graph_db.set_node_property(node_id, "status", "rejected_business")
+            await self.graph_db.set_node_property(node_id, "rejection_reason", reason)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+            await self._write_rejection_feedback(proposal_node, reason)
+        else:
+            await self.graph_db.set_node_property(node_id, "validation_attempts", attempts)
+            await self.graph_db.set_node_property(node_id, "business_score", confidence)
+
+        return None
+
     async def _process_gstack_verdict(
         self, proposal_node: dict, session: "GStackSession"
     ) -> Proposal | None:
@@ -323,7 +426,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
         except Exception as e:
             logger.warning("[Entrepreneur] Failed to write rejection feedback: %s", e)
 
-    async def _create_incubation_task(self, proposal_node: dict, session: "GStackSession") -> None:
+    async def _create_incubation_task(self, proposal_node: dict, panel_or_session: Any) -> None:
         """Create an incubation task note for approved proposals."""
         if not self.obsidian_writer:
             return
@@ -332,16 +435,38 @@ class EntrepreneurScheduler(BaseMindScheduler):
             lines = [
                 f"# Incubation Task: {title}",
                 "",
-                f"**Verdict:** {session.verdict}",
-                f"**Confidence:** {session.confidence:.0%}",
-                "",
-                "## Next Steps",
             ]
-            for finding in session.key_findings[:5]:
+
+            # Handle both panel and single session
+            if isinstance(panel_or_session, GStackPanelResult):
+                lines.append(f"**Verdict:** {panel_or_session.final_verdict}")
+                lines.append(f"**Confidence:** {panel_or_session.final_confidence:.0%}")
+                lines.append("")
+                lines.append("## Panel Verdicts")
+                for session in panel_or_session.sessions:
+                    lines.append(f"- **{session.persona}**: {session.verdict} ({session.confidence:.0%})")
+                lines.append("")
+                lines.append("## Synthesis Reasoning")
+                lines.append(panel_or_session.synthesis_reasoning or "No reasoning provided.")
+                lines.append("")
+                key_findings = panel_or_session.sessions[0].key_findings[:5] if panel_or_session.sessions else []
+                blockers = []
+                for s in panel_or_session.sessions:
+                    blockers.extend(s.blockers)
+            else:
+                session = panel_or_session
+                lines.append(f"**Verdict:** {session.verdict}")
+                lines.append(f"**Confidence:** {session.confidence:.0%}")
+                lines.append("")
+                key_findings = session.key_findings[:5]
+                blockers = session.blockers
+
+            lines.append("## Next Steps")
+            for finding in key_findings:
                 lines.append(f"- [ ] {finding}")
             lines.append("")
             lines.append("## Blockers to Resolve")
-            for blocker in session.blockers:
+            for blocker in blockers:
                 lines.append(f"- [ ] {blocker}")
 
             await self.obsidian_writer.write_note(

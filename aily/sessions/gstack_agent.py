@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -21,9 +22,51 @@ from typing import Any, Callable
 logger = logging.getLogger(__name__)
 
 
+GSTACK_PERSONAS: dict[str, dict[str, str]] = {
+    "general": {
+        "name": "General Partner",
+        "prompt": "You are Garry Tan rendering a final investment decision. Be direct. No hedging.",
+    },
+    "ceo": {
+        "name": "CEO / Founder",
+        "prompt": (
+            "You are a CEO evaluating a business opportunity. "
+            "Challenge scope and ambition. Is this the right thing to build? "
+            "Is the problem real, large, and growing? Demand extraordinary evidence. "
+            "Be direct. No hedging."
+        ),
+    },
+    "engineer": {
+        "name": "Senior Engineer",
+        "prompt": (
+            "You are a senior engineer evaluating technical feasibility and execution risk. "
+            "Look for architecture landmines, underestimated complexity, and team gaps. "
+            "Be direct. No hedging."
+        ),
+    },
+    "designer": {
+        "name": "Product Designer",
+        "prompt": (
+            "You are a product designer evaluating user experience and differentiation. "
+            "Ask: does this feel like AI slop? Is the wedge narrow enough to win? "
+            "Be direct. No hedging."
+        ),
+    },
+    "market": {
+        "name": "Market Analyst",
+        "prompt": (
+            "You are a competitive intelligence analyst. Who already does this? "
+            "Why would anyone switch? Is the market large enough to matter? "
+            "Be direct. No hedging."
+        ),
+    },
+}
+
+
 @dataclass
 class ActionResult:
     """Result of a GStack action."""
+
     action: str
     status: str  # success, failure, partial
     output: str
@@ -34,6 +77,7 @@ class ActionResult:
 @dataclass
 class GStackSession:
     """GStack evaluation session with actions taken."""
+
     session_id: str
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
@@ -43,6 +87,9 @@ class GStackSession:
     target_user: str = ""
     problem: str = ""
     solution: str = ""
+
+    # Specialist persona that produced this evaluation
+    persona: str = "general"
 
     # Actions taken
     actions: list[ActionResult] = field(default_factory=list)
@@ -68,6 +115,30 @@ class GStackSession:
         self.verdict = verdict
         self.confidence = confidence
         self.completed_at = datetime.now(timezone.utc)
+
+
+@dataclass
+class GStackPanelResult:
+    """Result of a multi-persona GStack panel evaluation."""
+
+    sessions: list[GStackSession]
+    final_verdict: str = "needs_more_validation"
+    final_confidence: float = 0.0
+    synthesis_reasoning: str = ""
+    split_verdict: bool = False
+
+    @property
+    def verdict_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for session in self.sessions:
+            counts[session.verdict] = counts.get(session.verdict, 0) + 1
+        return counts
+
+    @property
+    def average_confidence(self) -> float:
+        if not self.sessions:
+            return 0.0
+        return sum(s.confidence for s in self.sessions) / len(self.sessions)
 
 
 class GStackAgent:
@@ -106,19 +177,20 @@ class GStackAgent:
         solution: str,
         target_user: str,
         context: dict[str, Any],
+        persona: str = "general",
     ) -> GStackSession:
         """Execute GStack evaluation through actions."""
 
-        import uuid
         session = GStackSession(
             session_id=f"gstack_{uuid.uuid4().hex[:8]}",
             hypothesis=hypothesis,
             problem=problem,
             solution=solution,
             target_user=target_user,
+            persona=persona,
         )
 
-        logger.info(f"[GStack Agent] Starting evaluation: {hypothesis[:60]}...")
+        logger.info("[GStack Agent] Starting evaluation: %s (persona: %s)", hypothesis[:60], persona)
 
         # Action 1: Analyze codebase (only if explicitly requested)
         if context.get("evaluate_codebase"):
@@ -139,12 +211,144 @@ class GStackAgent:
             await self._run_action(session, "check_deployment_readiness", context)
 
         # Generate verdict based on findings
-        verdict, confidence = await self._generate_verdict(session)
+        verdict, confidence = await self._generate_verdict(session, persona)
         session.complete(verdict, confidence)
 
-        logger.info(f"[GStack Agent] Verdict: {verdict} ({confidence:.0%} confidence)")
+        logger.info("[GStack Agent] Verdict: %s (%.0f%% confidence, persona: %s)", verdict, confidence * 100, persona)
 
         return session
+
+    async def evaluate_panel(
+        self,
+        hypothesis: str,
+        problem: str,
+        solution: str,
+        target_user: str,
+        context: dict[str, Any],
+        personas: list[str] | None = None,
+    ) -> GStackPanelResult:
+        """Run a multi-persona GStack panel and synthesize a final verdict."""
+
+        personas = personas or ["ceo", "engineer", "designer", "market"]
+        logger.info("[GStack Panel] Starting panel evaluation with %d personas", len(personas))
+
+        # Run all persona evaluations concurrently
+        tasks = [
+            self.evaluate(
+                hypothesis=hypothesis,
+                problem=problem,
+                solution=solution,
+                target_user=target_user,
+                context=context,
+                persona=persona,
+            )
+            for persona in personas
+        ]
+        sessions = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any failures gracefully
+        valid_sessions: list[GStackSession] = []
+        for session in sessions:
+            if isinstance(session, Exception):
+                logger.warning("[GStack Panel] Persona evaluation failed: %s", session)
+                continue
+            valid_sessions.append(session)
+
+        if not valid_sessions:
+            logger.error("[GStack Panel] All persona evaluations failed")
+            return GStackPanelResult(sessions=[], final_verdict="needs_more_validation", final_confidence=0.0)
+
+        # Synthesize panel into a single verdict
+        return await self.synthesize_panel(valid_sessions, context)
+
+    async def synthesize_panel(
+        self,
+        sessions: list[GStackSession],
+        context: dict[str, Any],
+    ) -> GStackPanelResult:
+        """Synthesize multiple GStack sessions into a single verdict."""
+
+        # Build panel summary
+        panel_lines: list[str] = []
+        for session in sessions:
+            persona_label = GSTACK_PERSONAS.get(session.persona, {}).get("name", session.persona)
+            panel_lines.append(
+                f"=== {persona_label} ===\n"
+                f"Verdict: {session.verdict}\n"
+                f"Confidence: {session.confidence:.0%}\n"
+                f"Key Findings: {', '.join(session.key_findings[:5]) or 'None'}\n"
+                f"Blockers: {', '.join(session.blockers[:5]) or 'None'}\n"
+                f"Opportunities: {', '.join(session.opportunities[:5]) or 'None'}"
+            )
+
+        verdict_counts: dict[str, int] = {}
+        for session in sessions:
+            verdict_counts[session.verdict] = verdict_counts.get(session.verdict, 0) + 1
+
+        verdict_summary = "\n".join([f"- {v}: {c}" for v, c in verdict_counts.items()])
+        split_verdict = len(verdict_counts) > 1
+
+        prompt = f"""You are the senior partner chairing a GStack investment committee.
+
+A panel of four specialists evaluated the same business hypothesis. Here are their independent verdicts:
+
+{verdict_summary}
+
+Detailed findings:
+{chr(10).join(panel_lines)}
+
+Hypothesis: {sessions[0].hypothesis}
+Problem: {sessions[0].problem}
+Solution: {sessions[0].solution}
+Target User: {sessions[0].target_user}
+
+Your job is to render a SINGLE final verdict that the firm will stand behind.
+Rules:
+- If the panel is split, side with the most bearish credible view unless one side has overwhelming evidence.
+- Technical blockers from the engineer should weigh heavily.
+- If confidence is low across the board, default to needs_more_validation.
+- Be direct. No hedging.
+
+Return JSON:
+{{
+    "final_verdict": "build_it|pivot|kill_it|needs_more_validation",
+    "final_confidence": 0.0-1.0,
+    "reasoning": "Why this verdict given the panel disagreement",
+    "critical_factors": ["factor 1", "factor 2"]
+}}"""
+
+        try:
+            result = await self.llm_client.chat_json(
+                messages=[{
+                    "role": "system",
+                    "content": "You are Garry Tan chairing the final investment committee. Be direct. No hedging.",
+                }, {
+                    "role": "user",
+                    "content": prompt,
+                }],
+                temperature=0.5,
+            )
+
+            final_verdict = result.get("final_verdict", "needs_more_validation")
+            final_confidence = result.get("final_confidence", 0.5)
+            reasoning = result.get("reasoning", "")
+        except Exception as e:
+            logger.error("[GStack Panel] Synthesis failed: %s", e)
+            # Fallback to majority vote
+            if verdict_counts:
+                final_verdict = max(verdict_counts, key=verdict_counts.get)  # type: ignore[arg-type]
+            else:
+                final_verdict = "needs_more_validation"
+            final_confidence = sum(s.confidence for s in sessions) / len(sessions) if sessions else 0.0
+            reasoning = f"Synthesis failed; fallback to plurality verdict."
+
+        return GStackPanelResult(
+            sessions=sessions,
+            final_verdict=final_verdict,
+            final_confidence=final_confidence,
+            synthesis_reasoning=reasoning,
+            split_verdict=split_verdict,
+        )
 
     async def _run_action(
         self,
@@ -154,12 +358,12 @@ class GStackAgent:
     ) -> None:
         """Execute a GStack action and record result."""
 
-        logger.info(f"[GStack Agent] Running: {action_name}")
+        logger.info("[GStack Agent] Running: %s (persona: %s)", action_name, session.persona)
 
         try:
             action_fn = self.actions.get(action_name)
             if action_fn:
-                result = await action_fn(context)
+                result = await action_fn(context, session.persona)
                 session.add_action(
                     action=action_name,
                     status=result.get("status", "unknown"),
@@ -194,7 +398,7 @@ class GStackAgent:
                             source="entrepreneur",
                         )
                     except Exception as exc:
-                        logger.warning(f"[GStack Agent] Failed to persist action: {exc}")
+                        logger.warning("[GStack Agent] Failed to persist action: %s", exc)
             else:
                 session.add_action(
                     action=action_name,
@@ -202,18 +406,19 @@ class GStackAgent:
                     output=f"Unknown action: {action_name}",
                 )
         except Exception as e:
-            logger.exception(f"[GStack Agent] Action {action_name} failed: {e}")
+            logger.exception("[GStack Agent] Action %s failed: %s", action_name, e)
             session.add_action(
                 action=action_name,
                 status="error",
                 output=str(e),
             )
 
-    async def _analyze_codebase(self, context: dict) -> dict:
+    async def _analyze_codebase(self, context: dict, persona: str = "general") -> dict:
         """Analyze the codebase for quality and complexity."""
 
-        # Use LLM to reason about code quality
-        prompt = """Analyze this codebase like a senior engineer evaluating a startup.
+        persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
+
+        prompt = f"""Analyze this codebase like a {persona_label} evaluating a startup.
 
 Look for:
 1. Code quality and maintainability
@@ -225,13 +430,13 @@ Look for:
 Be direct. What's the real technical health?
 
 Return JSON:
-{
+{{
     "status": "success|partial|failure",
     "output": "Concise assessment",
     "findings": ["finding 1", "finding 2"],
     "blockers": ["critical issue"],
-    "data": {"lines_of_code": 0, "test_ratio": 0.0}
-}"""
+    "data": {{"lines_of_code": 0, "test_ratio": 0.0}}
+}}"""
 
         try:
             result = await self.llm_client.chat_json(
@@ -247,7 +452,7 @@ Return JSON:
                 "data": {},
             }
 
-    async def _check_test_coverage(self, context: dict) -> dict:
+    async def _check_test_coverage(self, context: dict, persona: str = "general") -> dict:
         """Check test coverage and quality."""
 
         # If we have a tool executor, run actual tests
@@ -274,13 +479,14 @@ Return JSON:
             "findings": ["Need to verify test coverage manually"],
         }
 
-    async def _search_market(self, context: dict) -> dict:
+    async def _search_market(self, context: dict, persona: str = "general") -> dict:
         """Search for market intelligence and competitors."""
 
         hypothesis = context.get("hypothesis", "")
         target_user = context.get("target_user", "")
+        persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
 
-        prompt = f"""Search for market intelligence on this business.
+        prompt = f"""Search for market intelligence on this business from the perspective of a {persona_label}.
 
 Hypothesis: {hypothesis}
 Target User: {target_user}
@@ -315,13 +521,14 @@ Return JSON:
                 "findings": [],
             }
 
-    async def _validate_problem(self, context: dict) -> dict:
+    async def _validate_problem(self, context: dict, persona: str = "general") -> dict:
         """Validate that the problem is real and painful."""
 
         problem = context.get("problem", "")
         target_user = context.get("target_user", "")
+        persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
 
-        prompt = f"""Validate this problem statement like a YC interviewer.
+        prompt = f"""Validate this problem statement like a {persona_label}.
 
 Problem: {problem}
 Target User: {target_user}
@@ -355,12 +562,13 @@ Return JSON:
                 "findings": [],
             }
 
-    async def _assess_tech_risk(self, context: dict) -> dict:
+    async def _assess_tech_risk(self, context: dict, persona: str = "general") -> dict:
         """Assess technical risks and feasibility."""
 
         solution = context.get("solution", "")
+        persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
 
-        prompt = f"""Assess technical risks for this solution.
+        prompt = f"""Assess technical risks for this solution from the perspective of a {persona_label}.
 
 Solution: {solution}
 
@@ -394,7 +602,7 @@ Return JSON:
                 "findings": [],
             }
 
-    async def _check_deployment_readiness(self, context: dict) -> dict:
+    async def _check_deployment_readiness(self, context: dict, persona: str = "general") -> dict:
         """Check if the product is ready to ship."""
 
         # If we have tool executor, run actual checks
@@ -405,7 +613,7 @@ Return JSON:
             try:
                 health = await self.tool_executor("health_check")
                 checks.append(("health", health))
-            except:
+            except Exception:
                 checks.append(("health", {"status": "unknown"}))
 
             return {
@@ -422,7 +630,9 @@ Return JSON:
             "findings": ["Manual deployment verification needed"],
         }
 
-    async def _generate_verdict(self, session: GStackSession) -> tuple[str, float]:
+    async def _generate_verdict(
+        self, session: GStackSession, persona: str = "general"
+    ) -> tuple[str, float]:
         """Generate final verdict based on all actions taken."""
 
         # Build context from all actions
@@ -454,7 +664,7 @@ Blockers:
 Opportunities:
 {opportunities}
 
-Render verdict like Garry Tan would - direct, no bullshit:
+Render verdict like a senior partner would - direct, no bullshit:
 - build_it: Strong signal, clear path, real problem
 - pivot: Something's off but there's potential
 - kill_it: Fatal flaws, don't waste time
@@ -469,14 +679,16 @@ Return JSON:
     "next_steps": ["do this", "then this"]
 }}"""
 
+        system_prompt = GSTACK_PERSONAS.get(persona, GSTACK_PERSONAS["general"])["prompt"]
+
         try:
             result = await self.llm_client.chat_json(
                 messages=[{
                     "role": "system",
-                    "content": "You are Garry Tan rendering a final investment decision. Be direct. No hedging."
+                    "content": system_prompt,
                 }, {
                     "role": "user",
-                    "content": prompt
+                    "content": prompt,
                 }],
                 temperature=0.7,
             )
@@ -486,7 +698,7 @@ Return JSON:
                 result.get("confidence", 0.5),
             )
         except Exception as e:
-            logger.error(f"[GStack Agent] Verdict generation failed: {e}")
+            logger.error("[GStack Agent] Verdict generation failed: %s", e)
             return ("needs_more_validation", 0.3)
 
     def get_session_report(self, session: GStackSession) -> str:
@@ -495,6 +707,7 @@ Return JSON:
         lines = [
             f"# GStack Evaluation: {session.hypothesis[:60]}...",
             "",
+            f"**Persona:** {GSTACK_PERSONAS.get(session.persona, {}).get('name', session.persona)}",
             f"**Verdict:** {session.verdict.upper()}",
             f"**Confidence:** {session.confidence:.0%}",
             f"**Duration:** {len(session.actions)} actions taken",
@@ -525,5 +738,33 @@ Return JSON:
             for o in session.opportunities:
                 lines.append(f"- 💡 {o}")
             lines.append("")
+
+        return "\n".join(lines)
+
+    def get_panel_report(self, panel: GStackPanelResult) -> str:
+        """Generate human-readable panel report."""
+
+        lines = [
+            f"# GStack Panel Evaluation: {panel.sessions[0].hypothesis[:60]}..." if panel.sessions else "# GStack Panel Evaluation",
+            "",
+            f"**Final Verdict:** {panel.final_verdict.upper()}",
+            f"**Final Confidence:** {panel.final_confidence:.0%}",
+            f"**Split Verdict:** {'Yes' if panel.split_verdict else 'No'}",
+            "",
+            "## Panel Verdicts",
+        ]
+
+        for session in panel.sessions:
+            persona_name = GSTACK_PERSONAS.get(session.persona, {}).get("name", session.persona)
+            lines.append(f"- **{persona_name}**: {session.verdict} ({session.confidence:.0%})")
+
+        lines.append("")
+        lines.append("## Synthesis Reasoning")
+        lines.append(panel.synthesis_reasoning or "No reasoning provided.")
+        lines.append("")
+
+        for session in panel.sessions:
+            lines.append(self.get_session_report(session))
+            lines.append("---")
 
         return "\n".join(lines)

@@ -538,6 +538,18 @@ class DikiwiMind:
                 if residual_result:
                     ctx.stage_results.append(residual_result)
 
+                # Promote Residual proposals through Reactor innovation screening
+                if self.reactor_scheduler and residual_result and residual_result.success:
+                    try:
+                        approved = await self.reactor_scheduler._evaluate_residual_proposals()
+                        logger.info(
+                            "[DIKIWI] Reactor approved %d residual proposals for business evaluation (pipeline %s)",
+                            len(approved),
+                            pipeline_id,
+                        )
+                    except Exception as exc:
+                        logger.warning("[DIKIWI] Reactor residual screening failed: %s", exc)
+
             # Fallback: run Residual alone if no Reactor scheduler or MAC disabled
             if pipeline.status == "completed" and not residual_result:
                 try:
@@ -545,6 +557,22 @@ class DikiwiMind:
                     ctx.stage_results.append(residual_result)
                 except Exception as exc:
                     logger.warning("[DIKIWI] ResidualAgent failed: %s", exc)
+
+                # Promote Residual proposals through Reactor innovation screening
+                if (
+                    self.reactor_scheduler
+                    and residual_result
+                    and residual_result.success
+                ):
+                    try:
+                        approved = await self.reactor_scheduler._evaluate_residual_proposals()
+                        logger.info(
+                            "[DIKIWI] Reactor approved %d residual proposals for business evaluation (pipeline %s)",
+                            len(approved),
+                            pipeline_id,
+                        )
+                    except Exception as exc:
+                        logger.warning("[DIKIWI] Reactor residual screening failed: %s", exc)
 
             # Per-pipeline Entrepreneur evaluation for business proposals
             if (
