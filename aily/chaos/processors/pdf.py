@@ -1,4 +1,4 @@
-"""PDF processor using GLM-OCR API."""
+"""PDF processor using Docling with GLM-OCR and pdfplumber fallbacks."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class PDFProcessor(ContentProcessor):
-    """Process PDF files using GLM-OCR and optional visual analysis."""
+    """Process PDF files using Docling primary, with GLM-OCR and pdfplumber fallbacks."""
 
     OCR_API_URL = "https://api.z.ai/api/paas/v4/layout_parsing"
 
@@ -28,7 +28,12 @@ class PDFProcessor(ContentProcessor):
         logger.info("Processing PDF: %s", file_path.name)
 
         try:
-            # Method 1: Try GLM-OCR API first
+            # Method 1: Docling (best quality, handles layout/tables/images)
+            docling_result = await self._call_docling(file_path)
+            if docling_result:
+                return docling_result
+
+            # Method 2: Try GLM-OCR API
             ocr_result = await self._call_glm_ocr(file_path)
 
             if ocr_result and ocr_result.get("text"):
@@ -59,6 +64,20 @@ class PDFProcessor(ContentProcessor):
 
         except Exception as e:
             logger.exception("Failed to process PDF: %s", e)
+            return None
+
+    async def _call_docling(self, file_path: Path) -> ExtractedContentMultimodal | None:
+        """Primary extraction using Docling."""
+        try:
+            from aily.chaos.processors.docling_processor import DoclingProcessor
+
+            processor = DoclingProcessor(self.config, self.llm_client)
+            result = await processor.process(file_path)
+            if result:
+                logger.info("Docling succeeded for %s", file_path.name)
+            return result
+        except Exception as e:
+            logger.warning("Docling extraction failed for %s: %s", file_path.name, e)
             return None
 
     async def _call_glm_ocr(self, file_path: Path) -> dict | None:

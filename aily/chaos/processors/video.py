@@ -324,35 +324,66 @@ class VideoProcessor(ContentProcessor):
             return None
 
     async def _transcribe_with_whisper(self, file_path: Path) -> dict | None:
-        """Fallback transcription using local Whisper."""
+        """Fallback transcription using faster-whisper."""
         try:
-            import whisper
+            from faster_whisper import WhisperModel
 
-            # Load model
-            model = whisper.load_model(self.config.video.whisper_model)
+            # Load model (auto-downloads on first use)
+            model_size = self.config.video.whisper_model
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
-            # Run transcription in thread pool
+            # Extract audio to temp file first (faster-whisper works best with audio files)
+            import tempfile
+            import os
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                audio_path = tmp.name
+
+            cmd = [
+                "ffmpeg",
+                "-i", str(file_path),
+                "-vn",
+                "-acodec", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                audio_path,
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+                logger.warning(" faster-whisper: audio extraction failed")
+                return None
+
+            # Transcribe in thread pool
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
+            segments_iter, info = await loop.run_in_executor(
                 None,
-                lambda: model.transcribe(str(file_path)),
+                lambda: model.transcribe(audio_path, beam_size=5),
             )
 
-            text = result.get("text", "")
+            text_parts = []
             segments = []
-
-            for seg in result.get("segments", []):
+            for seg in segments_iter:
+                text_parts.append(seg.text.strip())
                 segments.append(TimestampedSegment(
-                    start_time=seg.get("start", 0),
-                    end_time=seg.get("end", 0),
-                    text=seg.get("text", ""),
-                    confidence=seg.get("avg_logprob", 0),
+                    start_time=seg.start,
+                    end_time=seg.end,
+                    text=seg.text.strip(),
+                    confidence=seg.avg_logprob,
                 ))
 
-            return {"text": text, "segments": segments}
+            os.unlink(audio_path)
+
+            return {"text": " ".join(text_parts), "segments": segments}
 
         except Exception as e:
-            logger.warning("Whisper transcription failed: %s", e)
+            logger.warning(" faster-whisper transcription failed: %s", e)
             return None
 
     def can_process(self, file_path: Path) -> bool:

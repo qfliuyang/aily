@@ -210,6 +210,7 @@ class ChaosProcessor:
                 ".avi": "video/x-msvideo",
                 ".mkv": "video/x-matroska",
                 ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 ".md": "text/markdown",
                 ".txt": "text/plain",
                 ".png": "image/png",
@@ -247,12 +248,25 @@ class ChaosProcessor:
             return await processor.process(file_path)
 
         elif mime_type in {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         }:
-            from aily.chaos.processors.pptx import PPTXProcessor
+            # Try Docling first for rich document understanding
+            from aily.chaos.processors.docling_processor import DoclingProcessor
 
-            processor = PPTXProcessor(self.config.pptx, self.llm_client)
-            return await processor.process(file_path)
+            processor = DoclingProcessor(self.config, self.llm_client)
+            result = await processor.process(file_path)
+            if result:
+                return result
+
+            # Fallback to PPTX processor for presentations
+            if mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+                from aily.chaos.processors.pptx import PPTXProcessor
+
+                processor = PPTXProcessor(self.config.pptx, self.llm_client)
+                return await processor.process(file_path)
+
+            return None
 
         elif mime_type in {"text/markdown", "text/plain"}:
             from aily.chaos.processors.document import TextProcessor

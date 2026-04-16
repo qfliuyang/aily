@@ -229,14 +229,18 @@ class ChaosDaemon:
         count = 0
         extensions = {
             ".pdf": "pdf",
+            ".docx": "docx",
+            ".pptx": "pptx",
             ".mp4": "video", ".mov": "video", ".avi": "video", ".mkv": "video",
-            ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image",
+            ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image", ".webp": "image",
             ".txt": "text", ".md": "markdown", ".json": "json",
         }
 
         # Max file sizes (MB)
         max_sizes = {
             "pdf": 50,
+            "docx": 50,
+            "pptx": 100,
             "video": 500,
             "image": 20,
             "text": 10,

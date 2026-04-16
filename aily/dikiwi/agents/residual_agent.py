@@ -53,11 +53,15 @@ class ResidualAgent(DikiwiAgent):
                 )
 
             vault_name = ""
+            vault_path = None
             if ctx.dikiwi_obsidian_writer:
                 vault_path = getattr(ctx.dikiwi_obsidian_writer, "vault_path", None)
                 if vault_path:
                     vault_name = Path(vault_path).name
-            obsidian_cli = ObsidianCLI(vault_name=vault_name or None)
+            obsidian_cli = ObsidianCLI(
+                vault_name=vault_name or None,
+                vault_path=vault_path,
+            )
             vault_excerpts = await self._gather_vault_excerpts(obsidian_cli, ctx)
             graph_nodes = await self._gather_graph_nodes(ctx)
             reactor_proposals = self._format_reactor_proposals(ctx)
