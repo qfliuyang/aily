@@ -216,4 +216,4 @@ class ImageProcessor(ContentProcessor):
     def can_process(self, file_path: Path) -> bool:
         """Check if file is an image."""
         ext = file_path.suffix.lower()
-        return ext in self.config.supported_formats
+        return ext.lstrip(".") in self.config.image.supported_formats

@@ -59,9 +59,12 @@ class TestCanTransition:
         assert not can_transition(DikiwiStage.INFORMATION, DikiwiStage.INSIGHT)
 
     def test_invalid_impact_is_terminal(self):
-        """IMPACT is terminal - no transitions allowed."""
+        """IMPACT can only transition to RESIDUAL."""
         for stage in DikiwiStage:
-            assert not can_transition(DikiwiStage.IMPACT, stage)
+            if stage == DikiwiStage.RESIDUAL:
+                assert can_transition(DikiwiStage.IMPACT, stage)
+            else:
+                assert not can_transition(DikiwiStage.IMPACT, stage)
 
 
 class TestStageStateMachine:
@@ -81,7 +84,7 @@ class TestStageStateMachine:
         assert sm.current_stage == DikiwiStage.KNOWLEDGE
         assert stage_context.current_stage == DikiwiStage.KNOWLEDGE
         assert len(stage_context.stage_history) == 1
-        assert stage_context.stage_history[0]["to"] == "KNOWLEDGE"
+        assert stage_context.stage_history[0]["stage"] == "KNOWLEDGE"
 
     def test_invalid_transition_raises(self, stage_context):
         """Invalid transition raises ValueError."""
@@ -99,11 +102,11 @@ class TestStageStateMachine:
 
         sm.transition_to(DikiwiStage.INFORMATION, reason="封驳 - quality too low")
 
-        assert stage_context.rejection_count.get("KNOWLEDGE", 0) == 1
+        assert stage_context.rejection_count.get(DikiwiStage.KNOWLEDGE, 0) == 1
 
     def test_max_rejections_check(self, stage_context):
         """State machine tracks max rejections."""
-        stage_context.rejection_count = {"KNOWLEDGE": 3}
+        stage_context.rejection_count = {DikiwiStage.KNOWLEDGE: 3}
         stage_context.current_stage = DikiwiStage.KNOWLEDGE
         sm = StageStateMachine(stage_context, max_rejections=3)
 
@@ -131,9 +134,7 @@ class TestStageContext:
             correlation_id="corr-001",
             content_id="content-001",
             current_stage=DikiwiStage.DATA,
-            stage_state="PENDING",
-            stage_history=[],
-            rejection_count={},
+            stage_state=StageState.PENDING,
         )
 
         assert ctx.context_id == "ctx-001"

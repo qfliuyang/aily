@@ -24,6 +24,7 @@ class MockLLMClient:
 
     def __init__(self):
         self.chat = AsyncMock(side_effect=self._chat)
+        self.chat_json = AsyncMock(side_effect=self._chat)
         self.close = AsyncMock()
 
     async def _chat(self, *args, **kwargs):
@@ -33,7 +34,7 @@ class MockLLMClient:
 
         if 'TRIZ' in content:
             return {
-                "insights": ["Contradiction: speed vs cost", "Use Principle 1: Segmentation"],
+                "key_insights": ["Contradiction: speed vs cost", "Use Principle 1: Segmentation"],
                 "confidence": 0.85,
                 "priority": "high",
                 "recommendations": ["Segment the process into stages"],
@@ -41,7 +42,7 @@ class MockLLMClient:
             }
         elif 'McKinsey' in content:
             return {
-                "insights": ["MECE structure needed", "Market entry barrier high"],
+                "key_insights": ["MECE structure needed", "Market entry barrier high"],
                 "confidence": 0.80,
                 "priority": "high",
                 "recommendations": ["Conduct competitive analysis"],
@@ -49,14 +50,14 @@ class MockLLMClient:
             }
         elif 'GStack' in content:
             return {
-                "insights": ["PMF score: 40/100", "Shipping velocity too low"],
+                "key_insights": ["PMF score: 40/100", "Shipping velocity too low"],
                 "confidence": 0.75,
                 "priority": "critical",
                 "recommendations": ["Focus on core loop", "Reduce scope by 50%"],
                 "action_items": ["Ship MVP this week"],
             }
         return {
-            "insights": ["General insight"],
+            "key_insights": ["General insight"],
             "confidence": 0.5,
             "priority": "medium",
         }
@@ -86,6 +87,7 @@ def mock_graph_db():
     db = MagicMock()
     db.execute = AsyncMock()
     db.execute_query = AsyncMock(return_value=[])
+    db.fetchall = AsyncMock(return_value=[])
     return db
 
 
@@ -265,6 +267,8 @@ class TestOutputHandlerIntegration:
         result.payload = KnowledgePayload(content="Test")
         result.formatted_output = {"obsidian": "# Test Content"}
         result.top_insights = []
+        result.framework_insights = []
+        result.synthesized_insights = []
 
         delivery = await handler.deliver(
             result,
@@ -284,6 +288,8 @@ class TestOutputHandlerIntegration:
         result.payload = KnowledgePayload(content="Test")
         result.formatted_output = {"feishu": "Test summary"}
         result.top_insights = []
+        result.framework_insights = []
+        result.synthesized_insights = []
 
         delivery = await handler.deliver(
             result,
@@ -308,6 +314,8 @@ class TestOutputHandlerIntegration:
             "feishu": "Summary",
         }
         result.top_insights = []
+        result.framework_insights = []
+        result.synthesized_insights = []
 
         delivery = await handler.deliver(
             result,
@@ -334,6 +342,8 @@ class TestOutputHandlerIntegration:
         result.payload = KnowledgePayload(content="Test")
         result.formatted_output = {"obsidian": "Content", "feishu": "Summary"}
         result.top_insights = []
+        result.framework_insights = []
+        result.synthesized_insights = []
 
         delivery = await handler.deliver(
             result,
@@ -354,7 +364,7 @@ class TestGraphDBClientIntegration:
         """GraphDB client creates thinking tables."""
         client = ThinkingGraphClient(mock_graph_db)
 
-        await client.initialize()
+        await client.initialize_thinking_schema()
 
         # Should execute multiple CREATE TABLE statements
         assert mock_graph_db.execute.call_count >= 3
@@ -362,15 +372,21 @@ class TestGraphDBClientIntegration:
     @pytest.mark.asyncio
     async def test_store_insight(self, mock_graph_db):
         """GraphDB client stores insights."""
+        from aily.thinking.models import SynthesizedInsight
         client = ThinkingGraphClient(mock_graph_db)
 
-        await client.store_insight(
-            request_id="req-123",
-            framework_type=FrameworkType.TRIZ,
+        insight = SynthesizedInsight(
             title="Test Insight",
             description="Test description",
             confidence=0.8,
             priority=InsightPriority.HIGH,
+            supporting_frameworks=[FrameworkType.TRIZ],
+        )
+
+        await client.store_insight(
+            insight_id="ins-1",
+            request_id="req-123",
+            insight=insight,
         )
 
         mock_graph_db.execute.assert_called()
@@ -378,7 +394,7 @@ class TestGraphDBClientIntegration:
     @pytest.mark.asyncio
     async def test_get_insights_for_request(self, mock_graph_db):
         """GraphDB client retrieves insights by request."""
-        mock_graph_db.execute_query.return_value = [
+        mock_graph_db.fetchall.return_value = [
             {
                 "id": "insight-1",
                 "framework_type": "triz",
@@ -389,7 +405,7 @@ class TestGraphDBClientIntegration:
 
         client = ThinkingGraphClient(mock_graph_db)
 
-        insights = await client.get_insights_for_request("req-123")
+        insights = await client.get_insights_by_request("req-123")
 
         assert len(insights) == 1
         assert insights[0]["id"] == "insight-1"

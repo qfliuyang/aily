@@ -75,7 +75,7 @@ from aily.dikiwi.agents import (
     InsightAgent,
     WisdomAgent,
     ImpactAgent,
-    HanlinAgent,
+    ResidualAgent,
     ObsidianCLI,
 )
 
@@ -133,7 +133,7 @@ __all__ = [
     "InsightAgent",
     "WisdomAgent",
     "ImpactAgent",
-    "HanlinAgent",
+    "ResidualAgent",
     "ObsidianCLI",
 ]
 

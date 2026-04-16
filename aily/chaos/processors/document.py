@@ -134,10 +134,7 @@ class TextProcessor(ContentProcessor):
         url: str,
     ):
         """Fetch URL content with the best available strategy for Chaos imports."""
-        url_lower = url.lower()
-        if "monica.im/share" in url_lower:
-            logger.info("Using static Monica share fetch for %s", url)
-            return await markdownizer._fetch_static(url)
+        # Monica share links require browser rendering; let markdownizer route them.
         return await markdownizer.process_url(url, use_browser=True)
 
     def _read_file(self, file_path: Path) -> str:

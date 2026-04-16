@@ -12,6 +12,7 @@ from aily.dikiwi.memorials.models import (
     MemorialDecisionType,
 )
 from aily.dikiwi.memorials.storage import (
+    DualMemorialStore,
     GraphDBMemorialStore,
     MemorialStore,
     ObsidianMemorialStore,
@@ -23,4 +24,5 @@ __all__ = [
     "MemorialStore",
     "GraphDBMemorialStore",
     "ObsidianMemorialStore",
+    "DualMemorialStore",
 ]

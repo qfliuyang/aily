@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from aily.sessions.innolaval_scheduler import InnovationMethod, MethodResult
+from aily.sessions.reactor_scheduler import InnovationMethod, MethodResult
 from aily.sessions.models import Proposal, ProposalType, ProposalStatus
 
 logger = logging.getLogger(__name__)

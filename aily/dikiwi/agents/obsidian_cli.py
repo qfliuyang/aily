@@ -6,6 +6,7 @@ import json
 import logging
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,9 @@ class ObsidianCLI:
     is not installed or the Obsidian desktop app is not running.
     """
 
-    def __init__(self, cli_path: str | None = None) -> None:
+    def __init__(self, cli_path: str | None = None, vault_name: str | None = None) -> None:
         self._cli_path = cli_path or "obsidian-cli"
+        self._vault_name = vault_name
         self._available: bool | None = None
 
     @staticmethod
@@ -60,7 +62,10 @@ class ObsidianCLI:
         if not self._is_available():
             return False, "obsidian-cli not available"
 
-        cmd = [self._cli_path, *args]
+        cmd = [self._cli_path]
+        if self._vault_name:
+            cmd.extend(["--vault", self._vault_name])
+        cmd.extend(args)
         try:
             result = subprocess.run(
                 cmd,
@@ -82,20 +87,70 @@ class ObsidianCLI:
             return False, str(exc)
 
     def search(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
-        """Run obsidian-cli search and parse JSON results."""
-        ok, out = self._run("search", query, "--limit", str(limit), "--json")
-        if not ok:
-            return []
-        try:
-            data = json.loads(out)
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return data.get("results", []) or data.get("data", [])
-            return []
-        except json.JSONDecodeError:
-            logger.warning("[ObsidianCLI] Failed to parse search JSON")
-            return []
+        """Search vault notes matching *query*.
+
+        First tries ``search-content`` with ``--no-interactive --format json``.
+        If the installed ``obsidian-cli`` is too old to support those flags
+        (e.g. v0.2.x), it falls back to ``eval`` with a JavaScript vault scan.
+        """
+        ok, out = self._run(
+            "search-content", query, "--no-interactive", "--format", "json"
+        )
+        if ok and out:
+            try:
+                matches = json.loads(out)
+                results: list[dict[str, Any]] = []
+                for match in matches[:limit]:
+                    if not isinstance(match, dict):
+                        continue
+                    path = match.get("file") or match.get("path") or ""
+                    results.append({"path": path, "label": Path(path).stem if path else ""})
+                return results
+            except json.JSONDecodeError:
+                logger.warning("[ObsidianCLI] Failed to parse search-content JSON output")
+
+        # Fallback for older obsidian-cli versions without --no-interactive
+        if "unknown flag" in out.lower() or "no-interactive" in out.lower():
+            logger.info("[ObsidianCLI] search-content lacks --no-interactive; falling back to eval")
+
+        safe_query = self._escape_js_string(query)
+        script = (
+            "const files = app.vault.getFiles(); "
+            "const results = []; "
+            "const limit = " + str(int(limit)) + "; "
+            f"const query = '{safe_query}'.toLowerCase(); "
+            "for (const file of files) { "
+            "  if (results.length >= limit) break; "
+            "  const cache = app.metadataCache.getFileCache(file); "
+            "  const fm = cache && cache.frontmatter; "
+            "  if (query.endsWith(':') && fm) { "
+            "    const key = query.replace(':', ''); "
+            "    if (fm[key] !== undefined) { "
+            "      results.push({file: file.path}); "
+            "      continue; "
+            "    } "
+            "  } "
+            "  const content = app.vault.cachedRead(file); "
+            "  if (content && content.toLowerCase().includes(query)) { "
+            "    results.push({file: file.path}); "
+            "  } "
+            "} "
+            "JSON.stringify(results)"
+        )
+        eval_result = self.eval_javascript(script)
+        if isinstance(eval_result, str):
+            try:
+                eval_result = json.loads(eval_result)
+            except json.JSONDecodeError:
+                logger.warning("[ObsidianCLI] Failed to parse eval JSON output")
+                return []
+        if isinstance(eval_result, list):
+            return [
+                {"path": item.get("file", ""), "label": Path(item.get("file", "")).stem}
+                for item in eval_result[:limit]
+                if item.get("file")
+            ]
+        return []
 
     def read_note(self, path: str) -> str:
         """Read a note by vault path via obsidian-cli read."""

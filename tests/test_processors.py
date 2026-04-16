@@ -64,6 +64,8 @@ class TestPDFProcessor:
         mock_page.extract_text.return_value = "Page 1 content"
         mock_pdf = MagicMock()
         mock_pdf.pages = [mock_page]
+        mock_pdf.__enter__.return_value = mock_pdf
+        mock_pdf.__exit__.return_value = False
 
         with patch("pdfplumber.open", return_value=mock_pdf):
             result = await processor.process(b"fake pdf data", "test.pdf")

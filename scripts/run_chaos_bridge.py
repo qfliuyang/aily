@@ -16,12 +16,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _split_content_into_jobs(content):
+    """Expand one extracted content item into multiple DIKIWI jobs when appropriate."""
+    from aily.chaos.config import ChaosConfig
+    from aily.chaos.processors.document import TextProcessor
+
+    if content.source_type != "url_markdown":
+        return [content]
+    processor = TextProcessor(ChaosConfig())
+    return processor.split_url_import_items(content)
+
+
 async def process_single_file(json_file: Path, vault_path: Path) -> dict:
     """Process a single JSON file through DIKIWI."""
     from aily.chaos.types import ExtractedContentMultimodal
-    from aily.gating.drainage import RainDrop, RainType, StreamType
-    from aily.graph.db import GraphDB
     from aily.config import SETTINGS
+    from aily.graph.db import GraphDB
     from aily.llm.provider_routes import PrimaryLLMRoute
     from aily.sessions.dikiwi_mind import DikiwiMind
     from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
@@ -44,27 +54,12 @@ async def process_single_file(json_file: Path, vault_path: Path) -> dict:
         processing_method=data.get("processing_method", "unknown"),
     )
 
-    logger.info(f"Processing: {content.title or 'Untitled'}")
-
-    # Create RainDrop
-    content_text = content.text or ""
-    if content.title:
-        content_text = f"# {content.title}\n\n{content_text}"
-    if content.transcript:
-        content_text += f"\n\n## Transcript\n\n{content.transcript}"
-
-    drop = RainDrop(
-        id="",
-        rain_type=RainType.DOCUMENT,
-        content=content_text,
-        source="chaos_processor",
-        source_id=str(content.source_path) if content.source_path else "unknown",
-        stream_type=StreamType.EXTRACT_ANALYZE,
-        metadata={
-            **content.metadata,
-            "title": content.title,
-            "tags": content.tags,
-        },
+    # Split multi-URL imports into individual jobs
+    jobs = _split_content_into_jobs(content)
+    logger.info(
+        "Processing %s through DIKIWI as %d job(s)",
+        json_file.name,
+        len(jobs),
     )
 
     # Setup LLM
@@ -82,39 +77,92 @@ async def process_single_file(json_file: Path, vault_path: Path) -> dict:
         # Setup Obsidian writer
         obsidian_writer = DikiwiObsidianWriter(vault_path=vault_path)
 
+        # Setup browser manager for JS-rendered pages (Monica, etc.)
+        from aily.browser.manager import BrowserUseManager
+        browser_manager = BrowserUseManager()
+        await browser_manager.start()
+
         # Setup DIKIWI mind
         dikiwi_mind = DikiwiMind(
             graph_db=graph_db,
             llm_client=llm_client,
             dikiwi_obsidian_writer=obsidian_writer,
+            browser_manager=browser_manager,
         )
 
-        # Process
-        result = await dikiwi_mind.process_input(drop)
+        total_zettels = 0
+        total_insights = 0
+        max_stage = None
 
-        final_stage = result.final_stage_reached
-        zettels = sum(len(sr.data.get("zettels", [])) for sr in result.stage_results if sr.success)
-        insights = sum(len(sr.data.get("insights", [])) for sr in result.stage_results if sr.success)
+        for job in jobs:
+            logger.info(f"Processing job: {job.title or 'Untitled'}")
 
-        logger.info(f"Done: {content.title} -> Stage {final_stage.name if final_stage else 'NONE'}, {zettels} zettels, {insights} insights")
+            # Create RainDrop
+            content_text = job.text or ""
+            if job.title:
+                content_text = f"# {job.title}\n\n{content_text}"
+            if job.transcript:
+                content_text += f"\n\n## Transcript\n\n{job.transcript}"
+
+            from aily.gating.drainage import RainDrop, RainType, StreamType
+
+            drop = RainDrop(
+                id="",
+                rain_type=RainType.DOCUMENT,
+                content=content_text,
+                source="chaos_processor",
+                source_id=str(job.source_path) if job.source_path else "unknown",
+                stream_type=StreamType.EXTRACT_ANALYZE,
+                metadata={
+                    **job.metadata,
+                    "title": job.title,
+                    "tags": job.tags,
+                },
+            )
+
+            # Process
+            result = await dikiwi_mind.process_input(drop)
+
+            final_stage = result.final_stage_reached
+            zettels = sum(len(sr.data.get("zettels", [])) for sr in result.stage_results if sr.success)
+            insights = sum(len(sr.data.get("insights", [])) for sr in result.stage_results if sr.success)
+
+            logger.info(
+                "Done: %s -> Stage %s, %d zettels, %d insights",
+                job.title or "Untitled",
+                final_stage.name if final_stage else "NONE",
+                zettels,
+                insights,
+            )
+
+            total_zettels += zettels
+            total_insights += insights
+            if max_stage is None and final_stage is not None:
+                max_stage = final_stage
 
         return {
             "file": json_file.name,
-            "stage": final_stage.name if final_stage else None,
-            "zettels": zettels,
-            "insights": insights,
+            "stage": max_stage.name if max_stage else None,
+            "zettels": total_zettels,
+            "insights": total_insights,
+            "jobs": len(jobs),
         }
 
     finally:
+        try:
+            if 'browser_manager' in locals():
+                await browser_manager.stop()
+        except Exception:
+            pass
         await graph_db.close()
 
 
 async def main():
     from aily.config import SETTINGS
 
-    vault_path = Path(SETTINGS.obsidian_vault_path).expanduser() if SETTINGS.obsidian_vault_path else (Path.home() / "Documents/Obsidian Vault")
+    vault_path = Path(SETTINGS.obsidian_vault_path).expanduser() if SETTINGS.obsidian_vault_path else Path(SETTINGS.dikiwi_vault_path).expanduser()
     processed_folder = Path.home() / "aily_chaos/.processed"
-    date_folder = "2026-04-12"
+    date_folder = "2026-04-13"
     max_items = 1
 
     source_dir = processed_folder / date_folder
@@ -141,8 +189,10 @@ async def main():
     print(f"\n{'='*50}")
     print("Chaos → Zettelkasten Complete")
     print(f"{'='*50}")
-    print(f"Total: {len(results)}")
+    print(f"Total files: {len(results)}")
     total_zettels = sum(r.get("zettels", 0) for r in results)
+    total_jobs = sum(r.get("jobs", 1) for r in results)
+    print(f"Total jobs: {total_jobs}")
     print(f"Zettels Created: {total_zettels}")
 
 

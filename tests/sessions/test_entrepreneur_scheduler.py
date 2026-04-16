@@ -28,11 +28,11 @@ def mock_obsidian_writer():
 
 
 @pytest.fixture
-def mock_innolaval_scheduler():
+def mock_reactor_scheduler():
     scheduler = MagicMock()
     scheduler._current_session_proposals = [
         Proposal(
-            mind_name="innolaval",
+            mind_name="reactor",
             title="Latency Reduction",
             content="Build a thinner serving path.",
             summary="Reduce serving latency with a thinner path.",
@@ -58,12 +58,12 @@ class TestEntrepreneurScheduler:
         self,
         mock_llm_client,
         mock_graph_db,
-        mock_innolaval_scheduler,
+        mock_reactor_scheduler,
     ):
         scheduler = EntrepreneurScheduler(
             llm_client=mock_llm_client,
             graph_db=mock_graph_db,
-            innovation_scheduler=mock_innolaval_scheduler,
+            innovation_scheduler=mock_reactor_scheduler,
         )
 
         proposals = scheduler._get_innovation_proposals()

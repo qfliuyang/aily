@@ -234,7 +234,7 @@ class MarkdownizeProcessor:
         # Format as markdown Q&A
         for speaker, message in conversation:
             if speaker == 'User':
-                markdown_parts.append(f"\n## Q: {message[:200]}{'...' if len(message) > 200 else ''}\n")
+                markdown_parts.append(f"\n## Q: {message}\n")
             else:
                 markdown_parts.append(f"**A:** {message}\n")
 

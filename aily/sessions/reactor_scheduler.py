@@ -1,4 +1,4 @@
-"""Innolaval - The Innovation Laval Nozzle.
+"""Reactor - The Innovation Laval Nozzle.
 
 Wide inputs from multiple innovation methodologies running in parallel,
 focused through a synthesis nozzle into high-quality proposals.
@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from aily.dikiwi.agents.llm_tools import chat_json
 from aily.sessions.base import BaseMindScheduler
 from aily.sessions.models import Proposal, ProposalStage
 
@@ -61,7 +62,7 @@ class NozzleConfig:
     })
 
 
-class InnolavalScheduler(BaseMindScheduler):
+class ReactorScheduler(BaseMindScheduler):
     """Innovation Laval Nozzle - wide inputs, focused output.
 
     Architecture:
@@ -84,7 +85,7 @@ class InnolavalScheduler(BaseMindScheduler):
     ) -> None:
         super().__init__(
             llm_client=llm_client,
-            mind_name="innolaval",
+            mind_name="reactor",
             schedule_hour=schedule_hour,
             schedule_minute=schedule_minute,
             circuit_breaker_threshold=circuit_breaker_threshold,
@@ -138,27 +139,31 @@ class InnolavalScheduler(BaseMindScheduler):
             logger.warning(f"Failed to load analyzer for {method.value}: {e}")
             return None
 
-    async def evaluate_context(self, context: dict[str, Any]) -> list[Proposal]:
+    async def evaluate_context(
+        self,
+        context: dict[str, Any],
+        budget: Any | None = None,
+    ) -> list[Proposal]:
         """Run enabled innovation frameworks on a context and return proposals.
 
         Lightweight entrypoint for per-pipeline invocation (e.g. from DikiwiMind).
         Skips scheduler boilerplate and output delivery.
         """
         if not await self.circuit_breaker.can_execute():
-            logger.warning("[Innolaval] evaluate_context skipped: circuit breaker is open")
+            logger.warning("[Reactor] evaluate_context skipped: circuit breaker is open")
             return []
 
         enabled = self.nozzle_config.enabled_methods
         tasks = []
         for method in enabled:
-            task = self._run_method(method, context)
+            task = self._run_method(method, context, budget=budget)
             tasks.append(task)
 
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as exc:
             await self.circuit_breaker.record_failure()
-            logger.error(f"[Innolaval] evaluate_context failed: {exc}")
+            logger.error(f"[Reactor] evaluate_context failed: {exc}")
             return []
 
         valid_results = [
@@ -173,19 +178,19 @@ class InnolavalScheduler(BaseMindScheduler):
         else:
             await self.circuit_breaker.record_success()
 
-        logger.info(f"[Innolaval] evaluate_context: {len(valid_results)}/{len(enabled)} methods produced proposals")
+        logger.info(f"[Reactor] evaluate_context: {len(valid_results)}/{len(enabled)} methods produced proposals")
         proposals = await self._synthesis_nozzle(valid_results)
         return proposals
 
     async def _run_session(self) -> dict[str, Any]:
-        """Execute Innolaval session."""
+        """Execute Reactor session."""
         session_start = datetime.now(timezone.utc)
-        logger.info("Innolaval session starting - wide input phase")
+        logger.info("Reactor session starting - wide input phase")
 
         context = await self._gather_context()
 
-        # Evaluate Hanlin proposals first (business-first curation)
-        hanlin_proposals = await self._evaluate_hanlin_proposals()
+        # Evaluate Residual proposals first (business-first curation)
+        residual_proposals = await self._evaluate_residual_proposals()
 
         # Run all methods in parallel
         tasks = []
@@ -199,14 +204,14 @@ class InnolavalScheduler(BaseMindScheduler):
             if isinstance(r, MethodResult) and r.proposals
         ]
 
-        logger.info(f"Innolaval: {len(valid_results)}/{len(self.nozzle_config.enabled_methods)} methods produced proposals")
+        logger.info(f"Reactor: {len(valid_results)}/{len(self.nozzle_config.enabled_methods)} methods produced proposals")
 
-        # Add Hanlin proposals that passed innovation screening
-        if hanlin_proposals:
+        # Add Residual proposals that passed innovation screening
+        if residual_proposals:
             valid_results.append(MethodResult(
                 method=InnovationMethod.FIRST_PRINCIPLES,
-                proposals=hanlin_proposals,
-                confidence=sum(p.confidence for p in hanlin_proposals) / len(hanlin_proposals),
+                proposals=residual_proposals,
+                confidence=sum(p.confidence for p in residual_proposals) / len(residual_proposals),
             ))
 
         # Synthesis nozzle
@@ -222,7 +227,12 @@ class InnolavalScheduler(BaseMindScheduler):
             "proposals_delivered": len(proposals),
         }
 
-    async def _run_method(self, method: InnovationMethod, context: dict) -> MethodResult | None:
+    async def _run_method(
+        self,
+        method: InnovationMethod,
+        context: dict,
+        budget: Any | None = None,
+    ) -> MethodResult | None:
         """Run a single innovation method."""
         start_time = datetime.now(timezone.utc)
         analyzer = self._get_analyzer(method)
@@ -234,6 +244,10 @@ class InnolavalScheduler(BaseMindScheduler):
                 proposals=[],
                 confidence=0.0,
             )
+
+        # Pass budget through context so analyzers can use it if they support it
+        if budget is not None:
+            context = {**context, "_llm_budget": budget}
 
         try:
             result = await analyzer.analyze(context)
@@ -276,15 +290,15 @@ class InnolavalScheduler(BaseMindScheduler):
         # Limit output
         return filtered[:self.nozzle_config.max_proposals_per_session]
 
-    async def _evaluate_hanlin_proposals(self) -> list[Proposal]:
-        """Score and gate Hanlin proposals through innovation screening."""
+    async def _evaluate_residual_proposals(self) -> list[Proposal]:
+        """Score and gate Residual proposals through innovation screening."""
         if not self.graph_db:
             return []
 
         try:
-            nodes = await self.graph_db.get_nodes_by_type("hanlin_proposal")
+            nodes = await self.graph_db.get_nodes_by_type("residual_proposal")
         except Exception as e:
-            logger.warning(f"[Innolaval] Failed to query hanlin proposals: {e}")
+            logger.warning(f"[Reactor] Failed to query residual proposals: {e}")
             return []
 
         pending = []
@@ -300,14 +314,14 @@ class InnolavalScheduler(BaseMindScheduler):
                 pending.append(node)
 
         if not pending:
-            logger.info("[Innolaval] No pending Hanlin proposals to evaluate")
+            logger.info("[Reactor] No pending Residual proposals to evaluate")
             return []
 
-        logger.info(f"[Innolaval] Evaluating {len(pending)} Hanlin proposals")
+        logger.info(f"[Reactor] Evaluating {len(pending)} Residual proposals")
         approved: list[Proposal] = []
 
         for node in pending:
-            score = await self._score_proposal(node)
+            score = await self._score_proposal(node, budget=None)
             node_id = node["id"]
             if score.get("pass", False):
                 await self.graph_db.set_node_property(node_id, "status", "pending_business")
@@ -321,11 +335,15 @@ class InnolavalScheduler(BaseMindScheduler):
                     node_id, "rejection_reason", score.get("reason", "failed_innovation_screening")
                 )
 
-        logger.info(f"[Innolaval] Approved {len(approved)}/{len(pending)} Hanlin proposals")
+        logger.info(f"[Reactor] Approved {len(approved)}/{len(pending)} Residual proposals")
         return approved
 
-    async def _score_proposal(self, node: dict) -> dict:
-        """Use LLM to score a Hanlin proposal for novelty and feasibility."""
+    async def _score_proposal(
+        self,
+        node: dict,
+        budget: Any | None = None,
+    ) -> dict:
+        """Use LLM to score a Residual proposal for novelty and feasibility."""
         label = node.get("label", "")
         prompt = f"""Evaluate this proposal for innovation potential.
 
@@ -350,14 +368,17 @@ Return JSON:
     "reason": "Why it passed or failed"
 }}"""
         try:
-            result = await self.llm_client.chat_json(
+            result = await chat_json(
+                llm_client=self.llm_client,
+                stage="reactor_score",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
+                budget=budget,
             )
             if isinstance(result, dict):
                 return result
         except Exception as e:
-            logger.warning(f"[Innolaval] Proposal scoring failed: {e}")
+            logger.warning(f"[Reactor] Proposal scoring failed: {e}")
         return {
             "novelty": 0.0,
             "feasibility": 0.0,
@@ -367,13 +388,13 @@ Return JSON:
         }
 
     def _node_to_proposal(self, node: dict, score: dict) -> Proposal:
-        """Convert a Hanlin proposal node to a Proposal object."""
+        """Convert a Residual proposal node to a Proposal object."""
         label = node.get("label", "")
         title = label.split(":")[0] if ":" in label else label
         description = label[len(title) + 1 :].strip() if ":" in label else label
         return Proposal(
-            id=f"innolaval_{node['id']}",
-            mind_name="innolaval",
+            id=f"reactor_{node['id']}",
+            mind_name="reactor",
             title=title,
             content=description,
             summary=description[:200],
@@ -383,7 +404,7 @@ Return JSON:
             stage=ProposalStage.PENDING_BUSINESS,
             source_knowledge_ids=[node["id"]],
             proposal_type=self._proposal_type_for_method(InnovationMethod.FIRST_PRINCIPLES),
-            framework_used="Innolaval-Hanlin",
+            framework_used="Reactor-Residual",
         )
 
     def _proposal_type_for_method(self, method: InnovationMethod) -> Any:
@@ -454,12 +475,12 @@ Return JSON:
         await self.obsidian_writer.write_note(
             title=f"Innovation: {proposal.title}",
             markdown=proposal.to_markdown(),
-            source_url=f"aily://innolaval/{date_str}/{index}",
+            source_url=f"aily://reactor/{date_str}/{index}",
         )
 
     def _format_proposals_message(self, proposals: list[Proposal], start: datetime) -> str:
         """Format proposals for Feishu message."""
-        lines = [f"🚀 **Innolaval Innovation Report** ({start.strftime('%Y-%m-%d %H:%M')})", ""]
+        lines = [f"🚀 **Reactor Innovation Report** ({start.strftime('%Y-%m-%d %H:%M')})", ""]
         for i, p in enumerate(proposals, 1):
             lines.append(f"**{i}. {p.title}** (confidence: {p.confidence:.0%})")
             preview = p.summary or p.content
@@ -474,12 +495,12 @@ Return JSON:
     def add_method(self, method: InnovationMethod) -> None:
         """Enable a new innovation method."""
         self.nozzle_config.enabled_methods.add(method)
-        logger.info(f"Added {method.value} to Innolaval")
+        logger.info(f"Added {method.value} to Reactor")
 
     def remove_method(self, method: InnovationMethod) -> None:
         """Disable an innovation method."""
         self.nozzle_config.enabled_methods.discard(method)
-        logger.info(f"Removed {method.value} from Innolaval")
+        logger.info(f"Removed {method.value} from Reactor")
 
     def list_methods(self) -> dict[str, bool]:
         """List all methods and their status."""

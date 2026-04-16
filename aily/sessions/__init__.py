@@ -9,7 +9,7 @@ from __future__ import annotations
 from aily.sessions.base import BaseMindScheduler, CircuitBreakerMixin
 from aily.sessions.models import Proposal, SessionState, ProposalType, ProposalStatus
 from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiStage, DikiwiResult, StageResult
-from aily.sessions.innolaval_scheduler import InnolavalScheduler
+from aily.sessions.reactor_scheduler import ReactorScheduler
 from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 
 __all__ = [
@@ -23,6 +23,6 @@ __all__ = [
     "DikiwiStage",
     "DikiwiResult",
     "StageResult",
-    "InnolavalScheduler",
+    "ReactorScheduler",
     "EntrepreneurScheduler",
 ]

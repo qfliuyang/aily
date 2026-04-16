@@ -48,7 +48,7 @@ class DikiwiPromptRegistry:
   "data_points": [
     {
       "concept": "Short name for this concept (3-8 words)",
-      "content": "2-5 sentence explanation: what it is, why it matters, and how it works. Must stand alone without reading the source.",
+      "content": "2-5 sentence explanation with specific details: what it is, why it matters, and how it works. Must stand alone without reading the source. Avoid vague abstractions.",
       "context": "Section or topic area this comes from",
       "confidence": 0.0-1.0,
       "type": "mechanism|finding|method|principle|definition|tradeoff|constraint|example|fact|claim"
@@ -128,7 +128,7 @@ class DikiwiPromptRegistry:
   ]
 }"""
 
-    HANLIN_SYNTHESIS_CONTRACT = """Respond with JSON:
+    RESIDUAL_SYNTHESIS_CONTRACT = """Respond with JSON:
 {
   "report_title": "Title for the formal summary report",
   "summary": "3-5 paragraph executive summary of what DIKIWI discovered",
@@ -136,16 +136,16 @@ class DikiwiPromptRegistry:
     "First key finding",
     "Second key finding"
   ],
-  "innolaval_synthesis": "Assessment of how Innolaval framework proposals complement or conflict with vault insights",
+  "reactor_synthesis": "Assessment of how Reactor framework proposals complement or conflict with vault insights",
   "proposals": [
     {
       "title": "Proposal title",
       "description": "Detailed proposal description (2-4 sentences)",
       "domain": "technology|business|science|general",
       "priority": "high|medium|low",
-      "rationale": "Why this proposal is supported by the vault contents and/or Innolaval frameworks",
+      "rationale": "Why this proposal is supported by the vault contents and/or Reactor frameworks",
       "source_evidence": ["Specific note, insight, or framework that supports this"],
-      "framework_contribution": "Which Innolaval framework(s) contributed, if any"
+      "framework_contribution": "Which Reactor framework(s) contributed, if any"
     }
   ],
   "recommended_next_steps": [
@@ -244,6 +244,10 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
                 "Identify the document title if present.",
                 "Skip concepts already listed in 'existing_concepts' to avoid duplication.",
                 "Prefer depth over breadth: fewer rich concepts beat many thin extractions.",
+                "NEVER use generic abstraction filler: 'strategic pathways', 'involves', 'advantages for specialized hardware', 'plays a crucial role', 'is important because', 'has significant implications'.",
+                "Every data point must contain a SPECIFIC claim: a named technology, a numbered threshold, a causal mechanism, or a concrete tradeoff. If the source lacks specifics, return an empty data_points array with quality_assessment 'low'.",
+                "If the source is clearly a landing page, share-page wrapper, or table of contents with no substantive body text, return data_points: [] and quality_assessment: 'low'. Do NOT hallucinate concepts from titles alone.",
+                "State ideas in your own words, but anchor every claim to a specific detail from the source.",
             ),
             context_sections=(
                 ("Source", source),
@@ -495,26 +499,26 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
         return cls._build_messages(spec)
 
     @classmethod
-    def hanlin_synthesis(
+    def residual_synthesis(
         cls,
         *,
         vault_excerpts: str,
         graph_nodes: str,
-        innolaval_proposals: str,
+        reactor_proposals: str,
         memory_context: str = "",
     ) -> list[dict[str, str]]:
         spec = PromptSpec(
-            stage="HANLIN",
-            role="Vault Scholar (翰林)",
+            stage="RESIDUAL",
+            role="Vault Scholar (残差)",
             objective=(
-                "Analyze the DIKIWI vault outputs, knowledge graph, and Innolaval framework proposals "
+                "Analyze the DIKIWI vault outputs, knowledge graph, and Reactor framework proposals "
                 "to draft a formal summary report and concrete proposals for innovation and business evaluation."
             ),
-            output_contract=cls.HANLIN_SYNTHESIS_CONTRACT,
+            output_contract=cls.RESIDUAL_SYNTHESIS_CONTRACT,
             guidelines=(
-                "Synthesize patterns across vault notes, graph nodes, and Innolaval proposals — not just restate them.",
-                "Proposals must be grounded in specific evidence from the vault, graph, or Innolaval frameworks.",
-                "When Innolaval frameworks and vault insights conflict, resolve the tension explicitly.",
+                "Synthesize patterns across vault notes, graph nodes, and Reactor proposals — not just restate them.",
+                "Proposals must be grounded in specific evidence from the vault, graph, or Reactor frameworks.",
+                "When Reactor frameworks and vault insights conflict, resolve the tension explicitly.",
                 "Write as a formal analyst drafting paperwork for the Innovation and Entrepreneur minds.",
                 "Prioritize proposals with clear domains, priorities, and rationale.",
                 "Return valid JSON only.",
@@ -522,7 +526,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             context_sections=(
                 ("Vault Excerpts", vault_excerpts or "No vault excerpts available."),
                 ("Graph Nodes", graph_nodes or "No graph nodes available."),
-                ("Innolaval Framework Proposals", innolaval_proposals or "No Innolaval proposals available."),
+                ("Reactor Framework Proposals", reactor_proposals or "No Reactor proposals available."),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),
         )

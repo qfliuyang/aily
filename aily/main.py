@@ -41,7 +41,7 @@ from aily.voice.downloader import FeishuVoiceDownloader, FeishuVoiceError
 from aily.voice.transcriber import WhisperTranscriber, TranscriptionError
 from aily.network.tailscale import TailscaleClient
 from aily.sessions.dikiwi_mind import DikiwiMind
-from aily.sessions.innolaval_scheduler import InnolavalScheduler
+from aily.sessions.reactor_scheduler import ReactorScheduler
 from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
@@ -69,7 +69,7 @@ ws_client = None
 
 # Three-Mind System schedulers
 dikiwi_mind: DikiwiMind | None = None
-innovation_scheduler: InnolavalScheduler | None = None
+innovation_scheduler: ReactorScheduler | None = None
 entrepreneur_scheduler: EntrepreneurScheduler | None = None
 agent_registry = AgentRegistry()
 tailscale_client = TailscaleClient()
@@ -107,8 +107,35 @@ async def _dispatch_job(job: dict) -> None:
         await _process_file_job(job)
     elif job["type"] == "image_ocr":
         await _process_image_job(job)
+    elif job["type"] == "reactor_evaluate":
+        await _process_reactor_job(job)
+    elif job["type"] == "entrepreneur_evaluate":
+        await _process_entrepreneur_job(job)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
+
+
+async def _process_reactor_job(job: dict) -> None:
+    """Dispatch Reactor evaluation from queue."""
+    if innovation_scheduler is None:
+        logger.warning("Reactor scheduler not available, skipping job %s", job.get("id"))
+        return
+    context = job.get("payload", {}).get("context", {})
+    proposals = await innovation_scheduler.evaluate_context(context)
+    logger.info(
+        "Reactor evaluation completed for job %s: %d proposals",
+        job.get("id"),
+        len(proposals),
+    )
+
+
+async def _process_entrepreneur_job(job: dict) -> None:
+    """Dispatch Entrepreneur evaluation from queue."""
+    if entrepreneur_scheduler is None:
+        logger.warning("Entrepreneur scheduler not available, skipping job %s", job.get("id"))
+        return
+    await entrepreneur_scheduler._run_session_wrapper()
+    logger.info("Entrepreneur evaluation completed for job %s", job.get("id"))
 
 
 async def _process_url_job(job: dict) -> None:
@@ -475,12 +502,22 @@ async def lifespan(app: FastAPI):
     await db.initialize()
     await graph_db.initialize()
 
+    # Initialize browser manager for JS-rendered pages (Monica, etc.)
+    browser_manager = None
+    try:
+        from aily.browser.manager import BrowserUseManager
+        browser_manager = BrowserUseManager()
+        await browser_manager.start()
+    except Exception:
+        logger.warning("Browser manager failed to start, continuing without JS rendering support")
+
     # Initialize Three-Mind System FIRST (needed for WebSocket routing)
     try:
         dikiwi_writer = None
         if SETTINGS.obsidian_vault_path:
             dikiwi_writer = DikiwiObsidianWriter(
                 vault_path=SETTINGS.obsidian_vault_path,
+                folder_prefix="",
                 zettelkasten_only=True,
             )
 
@@ -491,6 +528,8 @@ async def lifespan(app: FastAPI):
             enabled=SETTINGS.minds.dikiwi_enabled,
             obsidian_writer=writer,
             dikiwi_obsidian_writer=dikiwi_writer,
+            queue_db=db,
+            browser_manager=browser_manager,
         )
         logger.info("DIKIWI Mind initialized (enabled=%s)", SETTINGS.minds.dikiwi_enabled)
     except Exception:
@@ -554,13 +593,13 @@ async def lifespan(app: FastAPI):
     # Initialize and start Innovation and Entrepreneur Minds
     # (DIKIWI Mind was already initialized earlier for WebSocket routing)
     try:
-        # Innovation Mind - Innolaval: 8 methods running in parallel
-        from aily.sessions.innolaval_scheduler import NozzleConfig
+        # Innovation Mind - Reactor: 8 methods running in parallel
+        from aily.sessions.reactor_scheduler import NozzleConfig
         nozzle_config = NozzleConfig(
             min_confidence=SETTINGS.minds.proposal_min_confidence,
             max_proposals_per_session=SETTINGS.minds.proposal_max_per_session,
         )
-        innovation_scheduler = InnolavalScheduler(
+        innovation_scheduler = ReactorScheduler(
             llm_client=llm_client,
             graph_db=graph_db,
             obsidian_writer=writer,
@@ -573,7 +612,7 @@ async def lifespan(app: FastAPI):
         )
         if SETTINGS.minds.innovation_enabled:
             innovation_scheduler.start()
-            logger.info("Innolaval Innovation Mind started (8am daily - 8 methods in parallel)")
+            logger.info("Reactor Innovation Mind started (8am daily - 8 methods in parallel)")
 
         # Entrepreneur Mind - 9am daily GStack analysis with agentic execution
         entrepreneur_scheduler = EntrepreneurScheduler(
@@ -594,7 +633,9 @@ async def lifespan(app: FastAPI):
             entrepreneur_scheduler.start()
             logger.info("Entrepreneur Mind (Agentic) started (9am daily GStack with real actions)")
 
-        # Wire Entrepreneur into DIKIWI Mind for per-pipeline business evaluation
+        # Wire Innovation and Entrepreneur into DIKIWI Mind for per-pipeline evaluation
+        if dikiwi_mind and innovation_scheduler:
+            dikiwi_mind.reactor_scheduler = innovation_scheduler
         if dikiwi_mind and entrepreneur_scheduler:
             dikiwi_mind.entrepreneur_scheduler = entrepreneur_scheduler
 
@@ -623,6 +664,11 @@ async def lifespan(app: FastAPI):
     if worker:
         await worker.stop()
     await fetcher.stop()
+    if browser_manager:
+        try:
+            await browser_manager.stop()
+        except Exception:
+            pass
     logger.info("Aily shutdown complete")
 
 

@@ -103,7 +103,7 @@ class GraphDB:
         )
         await self._db.execute(
             """
-            CREATE TABLE IF NOT EXISTS hanlin_feedback (
+            CREATE TABLE IF NOT EXISTS residual_feedback (
                 id TEXT PRIMARY KEY,
                 proposal_label TEXT NOT NULL,
                 reason TEXT NOT NULL,
@@ -112,7 +112,7 @@ class GraphDB:
             """
         )
         await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_hanlin_feedback_created_at ON hanlin_feedback(created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_residual_feedback_created_at ON residual_feedback(created_at)"
         )
         await self._db.commit()
 
@@ -436,20 +436,20 @@ class GraphDB:
             )
         return results
 
-    async def add_hanlin_feedback(self, proposal_label: str, reason: str) -> None:
-        """Append a Hanlin rejection feedback entry."""
+    async def add_residual_feedback(self, proposal_label: str, reason: str) -> None:
+        """Append a Residual rejection feedback entry."""
         import uuid
         await self._execute(
-            "INSERT INTO hanlin_feedback (id, proposal_label, reason) VALUES (?, ?, ?)",
+            "INSERT INTO residual_feedback (id, proposal_label, reason) VALUES (?, ?, ?)",
             (f"hf_{uuid.uuid4().hex[:8]}", proposal_label, reason),
         )
 
-    async def get_hanlin_feedback(self, limit: int = 100) -> list[dict]:
-        """Get recent Hanlin rejection feedback entries."""
+    async def get_residual_feedback(self, limit: int = 100) -> list[dict]:
+        """Get recent Residual rejection feedback entries."""
         rows = await self._fetchall(
             """
             SELECT proposal_label, reason, created_at
-            FROM hanlin_feedback
+            FROM residual_feedback
             ORDER BY created_at DESC
             LIMIT ?
             """,

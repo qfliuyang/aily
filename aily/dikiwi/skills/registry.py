@@ -251,8 +251,8 @@ class SkillRegistry:
             content_type: Content type identifier
             skill_names: List of skill names to load
         """
-        stage_key = stage.value if isinstance(stage, DikiwiStage) else stage
-        self._skill_map[(stage_key.lower(), content_type)] = skill_names
+        stage_key = stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).lower()
+        self._skill_map[(stage_key, content_type)] = skill_names
         logger.debug(
             "Registered skill mapping: (%s, %s) -> %s",
             stage_key,
@@ -322,13 +322,13 @@ class SkillRegistry:
         Returns:
             List of skill instances ready to execute
         """
-        stage_key = stage.value if isinstance(stage, DikiwiStage) else stage
+        stage_key = stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).lower()
         content_type = await self.classify_content_type(content)
 
         # Get skill names from mapping
         skill_names = self._skill_map.get(
-            (stage_key.lower(), content_type),
-            self._skill_map.get((stage_key.lower(), "general"), []),
+            (stage_key, content_type),
+            self._skill_map.get((stage_key, "general"), []),
         )
 
         # Load and cache instances
@@ -398,13 +398,12 @@ class SkillRegistry:
 
     def get_skills_for_stage(self, stage: str | DikiwiStage) -> list[SkillMetadata]:
         """Get all skills that can handle a stage."""
-        stage_key = stage.value if isinstance(stage, DikiwiStage) else stage
-        stage_lower = stage_key.lower()
+        stage_key = stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).lower()
 
         return [
             meta
             for meta in self._skill_metadata.values()
-            if not meta.target_stages or stage_lower in [
+            if not meta.target_stages or stage_key in [
                 s.lower() for s in meta.target_stages
             ]
         ]
@@ -428,7 +427,7 @@ class SkillRegistry:
 
         for skill in skills:
             if skill.can_handle(
-                stage.value if isinstance(stage, DikiwiStage) else stage,
+                stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).lower(),
                 context.metadata.get("content_type", "*"),
             ):
                 try:

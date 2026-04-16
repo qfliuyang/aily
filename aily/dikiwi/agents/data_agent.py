@@ -34,6 +34,31 @@ class DataAgent(DikiwiAgent):
             drop = await self._markdownize_drop(ctx)
             content = drop.content
 
+            # Content quality gate: skip LLM extraction on obviously thin content
+            quality_check = self._assess_content_quality(content)
+            if quality_check["is_too_thin"]:
+                logger.warning(
+                    "[DIKIWI] Content quality too low for %s: %s",
+                    drop.source,
+                    quality_check["reason"],
+                )
+                processing_time = (time.time() - start) * 1000
+                return StageResult(
+                    stage=DikiwiStage.DATA,
+                    success=True,
+                    items_processed=1,
+                    items_output=0,
+                    processing_time_ms=processing_time,
+                    data={
+                        "data_points": [],
+                        "doc_title": "",
+                        "doc_summary": "",
+                        "data_note_id": "",
+                        "quality_assessment": "low",
+                        "quality_reason": quality_check["reason"],
+                    },
+                )
+
             # Add input to memory
             if ctx.memory:
                 ctx.memory.add_user(f"Input to process:\n{content[:3000]}")
@@ -132,7 +157,17 @@ class DataAgent(DikiwiAgent):
             return drop
 
         content = drop.content
-        urls = re.findall(r"https?://\S+", content)
+        # Extract URLs from markdown links/images first
+        md_urls = re.findall(r"!\[.*?\]\((https?://[^\)]+)\)", content)
+        md_urls += re.findall(r"\[.*?\]\((https?://[^\)]+)\)", content)
+        # Extract bare URLs, stopping at common markdown delimiters
+        bare_urls = re.findall(r"https?://[^\s\)\]\>\"']+", content)
+        urls = []
+        for url in md_urls + bare_urls:
+            # Final cleanup: strip trailing punctuation
+            url = url.rstrip(").,;:!?*\"']")
+            if url and url not in urls:
+                urls.append(url)
         if not urls:
             return drop
 
@@ -152,13 +187,59 @@ class DataAgent(DikiwiAgent):
         text_without_urls = re.sub(r"https?://\S+", "", content).strip()
         combined = []
         if text_without_urls:
-            combined.append(f"## User Message\n\n{text_without_urls}")
+            # Only include original text if it's meaningful (not a landing-page wrapper)
+            quality = self._assess_content_quality(text_without_urls)
+            if not quality["is_too_thin"]:
+                combined.append(f"## User Message\n\n{text_without_urls}")
+            else:
+                logger.info("[DIKIWI] Omitting thin original text: %s", quality["reason"])
         combined.extend(markdown_parts)
         markdownized_content = "\n\n---\n\n".join(combined)
         if is_dataclass(drop):
             return replace(drop, content=markdownized_content)
         drop.content = markdownized_content
         return drop
+
+    @staticmethod
+    def _assess_content_quality(content: str) -> dict[str, str | bool]:
+        """Fast heuristic to detect landing-page or wrapper content with no substance."""
+        import re
+
+        text = re.sub(r"https?://\S+", "", content)
+        text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+        text = re.sub(r"\[.*?\]\(.*?\)", "", text)
+        text = re.sub(r"[#*_`>\-|]+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
+        if len(text) < 200:
+            return {"is_too_thin": True, "reason": f"Text too short ({len(text)} chars) after stripping markup"}
+
+        # Generic landing-page markers that indicate no real content was fetched
+        generic_markers = [
+            "monica - your gpt ai assistant chrome extension",
+            "monicamarch",
+            "download#",
+            "continue in chat",
+            "sharecontinue in chat",
+            "checking your browser",
+            "just a moment",
+            "access denied",
+        ]
+        lower = text.lower()
+        marker_hits = sum(1 for m in generic_markers if m in lower)
+        if marker_hits >= 2:
+            return {"is_too_thin": True, "reason": f"Detected {marker_hits} generic landing-page markers"}
+
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        meaningful = [p for p in paragraphs if len(p) > 60 and not p.startswith("!") and not p.startswith("[")]
+        if len(meaningful) < 2:
+            return {"is_too_thin": True, "reason": f"Only {len(meaningful)} meaningful paragraphs found"}
+
+        avg_para_len = sum(len(p) for p in meaningful) / max(len(meaningful), 1)
+        if avg_para_len < 80:
+            return {"is_too_thin": True, "reason": f"Average paragraph length too short ({avg_para_len:.0f} chars)"}
+
+        return {"is_too_thin": False, "reason": "ok"}
 
     @staticmethod
     def _chunk_content(content: str, chunk_size: int = 4000) -> list[str]:

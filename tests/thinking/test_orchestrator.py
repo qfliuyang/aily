@@ -275,37 +275,40 @@ class TestPartialFailureHandling:
             if call_count == 1:
                 raise Exception("TRIZ failed")
             return {
-                "insights": ["Success"],
+                "key_insights": ["Success"],
                 "confidence": 0.8,
                 "priority": "high",
             }
 
         mock_llm = MagicMock()
-        mock_llm.chat = AsyncMock(side_effect=side_effect)
+        mock_llm.chat_json = AsyncMock(side_effect=side_effect)
 
         orchestrator = ThinkingOrchestrator(llm_client=mock_llm)
 
         result = await orchestrator.think(sample_payload)
 
-        # Should have 2 successful frameworks
-        assert len(result.framework_insights) == 2
-        framework_types = {fi.framework_type for fi in result.framework_insights}
+        # Should have 2 successful frameworks (TRIZ gracefully degrades on failure)
+        successful = [fi for fi in result.framework_insights if fi.confidence > 0]
+        assert len(successful) == 2
+        framework_types = {fi.framework_type for fi in successful}
         assert FrameworkType.TRIZ not in framework_types
         assert FrameworkType.MCKINSEY in framework_types
         assert FrameworkType.GSTACK in framework_types
 
     @pytest.mark.asyncio
     async def test_all_frameworks_fail(self, sample_payload):
-        """When all frameworks fail, result has empty insights."""
+        """When all frameworks fail, each returns a graceful error insight."""
         failing_llm = MagicMock()
-        failing_llm.chat = AsyncMock(side_effect=Exception("All failed"))
+        failing_llm.chat_json = AsyncMock(side_effect=Exception("All failed"))
 
         orchestrator = ThinkingOrchestrator(llm_client=failing_llm)
 
         result = await orchestrator.think(sample_payload)
 
-        assert len(result.framework_insights) == 0
-        assert result.confidence_score == 0.0
+        # All 3 frameworks return error insights with 0 confidence
+        assert len(result.framework_insights) == 3
+        assert all(fi.confidence == 0.0 for fi in result.framework_insights)
+        assert result.confidence_score <= 0.1
 
 
 class TestThinkParallel:

@@ -38,7 +38,7 @@ class PPTXProcessor(ContentProcessor):
                 slides_content.append(f"### Slide {i}\n\n{slide_text}")
 
                 # Extract speaker notes
-                if slide.has_notes_slide and self.config.extract_speaker_notes:
+                if slide.has_notes_slide and self.config.pptx.extract_speaker_notes:
                     notes = slide.notes_slide.notes_text_frame.text
                     if notes.strip():
                         speaker_notes.append(f"### Slide {i} Notes\n\n{notes}")
@@ -47,7 +47,7 @@ class PPTXProcessor(ContentProcessor):
                 shape_count = len(slide.shapes)
 
                 # Create visual element placeholder
-                if self.config.extract_slide_images:
+                if self.config.pptx.extract_slide_images:
                     element = VisualElement(
                         element_id=f"slide_{i}",
                         element_type="slide",

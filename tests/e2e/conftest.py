@@ -485,10 +485,19 @@ class TestDataFactory:
     @staticmethod
     def url_drop(url: str = "https://example.com/article", content: str | None = None) -> TestDrop:
         """Create a URL RainDrop."""
+        default_content = (
+            "Artificial intelligence and machine learning are transforming industries worldwide. "
+            "Organizations are investing heavily in AI infrastructure, talent acquisition, and research "
+            "and development to stay competitive in an increasingly automated landscape.\n\n"
+            "Recent advances in large language models have demonstrated remarkable capabilities in "
+            "natural language understanding, code generation, and complex reasoning tasks. These "
+            "breakthroughs are driving adoption across healthcare, finance, education, and manufacturing "
+            "sectors, creating both opportunities and challenges for policymakers and business leaders."
+        )
         return TestDrop(
             id=f"test_drop_{datetime.now(timezone.utc).timestamp()}",
             type="url",
-            content=content or f"Check out this article: {url}",
+            content=content or default_content,
             source=url,
             creator_id="test_user",
             created_at=datetime.now(timezone.utc),
@@ -496,11 +505,19 @@ class TestDataFactory:
 
     @staticmethod
     def voice_drop(file_key: str = "test_voice_123") -> TestDrop:
-        """Create a voice RainDrop."""
+        """Create a voice RainDrop with enough substance to pass the quality gate."""
+        content = (
+            "Voice transcription: We need to rethink how we approach distributed system design in our "
+            "next product iteration. Consensus protocols are critical for maintaining data consistency "
+            "when nodes fail or network partitions occur.\n\n"
+            "Raft and Paxos both offer strong guarantees, but Raft is generally easier to understand "
+            "and implement correctly. We should evaluate whether etcd or Consul fits our operational "
+            "model better before committing to a specific stack for the microservices architecture."
+        )
         return TestDrop(
             id=f"test_voice_{datetime.now(timezone.utc).timestamp()}",
             type="voice",
-            content=f"Voice memo: {file_key}",
+            content=content,
             source="feishu://voice",
             creator_id="test_user",
             created_at=datetime.now(timezone.utc),

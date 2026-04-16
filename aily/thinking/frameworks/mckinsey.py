@@ -93,6 +93,8 @@ class McKinseyAnalyzer(FrameworkAnalyzer):
         }
 
         priority = self._determine_priority(key_insights)
+        if "priority" in analysis_data:
+            priority = self._parse_priority(analysis_data["priority"], priority)
 
         return FrameworkInsight(
             framework_type=self.framework_type,
@@ -304,6 +306,17 @@ Apply MECE structuring (Mutually Exclusive, Collectively Exhaustive) and hypothe
         except Exception:
             pass
         return []
+
+    @staticmethod
+    def _parse_priority(
+        priority_value: str,
+        fallback: InsightPriority = InsightPriority.MEDIUM,
+    ) -> InsightPriority:
+        """Parse a priority string into an InsightPriority enum."""
+        try:
+            return InsightPriority[priority_value.upper()]
+        except (KeyError, AttributeError):
+            return fallback
 
     def _determine_priority(self, key_insights: list[str]) -> InsightPriority:
         """Determine priority level based on insights."""

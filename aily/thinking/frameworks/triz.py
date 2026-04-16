@@ -111,9 +111,12 @@ class TrizAnalyzer(FrameworkAnalyzer):
             ) / len(principle_recommendations)
         else:
             avg_confidence = 0.5
+        avg_confidence = analysis_data.get("confidence", avg_confidence)
 
         # Determine priority based on contradiction severity
         priority = self._determine_priority(contradictions)
+        if "priority" in analysis_data:
+            priority = self._parse_priority(analysis_data["priority"], priority)
 
         # Build raw analysis dict
         raw_analysis = {
@@ -133,6 +136,17 @@ class TrizAnalyzer(FrameworkAnalyzer):
             raw_analysis=raw_analysis,
             processing_time_ms=processing_time_ms,
         )
+
+    @staticmethod
+    def _parse_priority(
+        priority_value: str,
+        fallback: InsightPriority = InsightPriority.MEDIUM,
+    ) -> InsightPriority:
+        """Parse a priority string into an InsightPriority enum."""
+        try:
+            return InsightPriority[priority_value.upper()]
+        except (KeyError, AttributeError):
+            return fallback
 
     def _build_analysis_prompt(self, payload: KnowledgePayload) -> str:
         """Build the user prompt for TRIZ analysis.

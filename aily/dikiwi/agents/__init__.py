@@ -10,7 +10,7 @@ from aily.dikiwi.agents.knowledge_agent import KnowledgeAgent
 from aily.dikiwi.agents.insight_agent import InsightAgent
 from aily.dikiwi.agents.wisdom_agent import WisdomAgent
 from aily.dikiwi.agents.impact_agent import ImpactAgent
-from aily.dikiwi.agents.hanlin_agent import HanlinAgent
+from aily.dikiwi.agents.residual_agent import ResidualAgent
 from aily.dikiwi.agents.obsidian_cli import ObsidianCLI
 
 __all__ = [
@@ -24,6 +24,6 @@ __all__ = [
     "InsightAgent",
     "WisdomAgent",
     "ImpactAgent",
-    "HanlinAgent",
+    "ResidualAgent",
     "ObsidianCLI",
 ]

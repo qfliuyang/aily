@@ -36,7 +36,7 @@ class DikiwiStage(Enum):
     INSIGHT = auto()      # Network → Pattern recognition (尚书省)
     WISDOM = auto()       # Insights → Applied understanding (吏部/CVO gate)
     IMPACT = auto()       # Wisdom → Actionable outcomes (工部)
-    HANLIN = auto()       # Post-pipeline vault analysis and proposal drafting (翰林)
+    RESIDUAL = auto()     # Post-pipeline vault analysis and proposal drafting (残差)
 
     def __str__(self) -> str:
         return self.name
@@ -51,7 +51,7 @@ class DikiwiStage(Enum):
             DikiwiStage.INSIGHT: "尚书省",
             DikiwiStage.WISDOM: "吏部",
             DikiwiStage.IMPACT: "工部",
-            DikiwiStage.HANLIN: "翰林",
+            DikiwiStage.RESIDUAL: "残差",
         }
         return names.get(self, "未知")
 
@@ -84,7 +84,7 @@ class StageTransition(Enum):
     KNOWLEDGE_TO_INSIGHT = (DikiwiStage.KNOWLEDGE, DikiwiStage.INSIGHT)
     INSIGHT_TO_WISDOM = (DikiwiStage.INSIGHT, DikiwiStage.WISDOM)
     WISDOM_TO_IMPACT = (DikiwiStage.WISDOM, DikiwiStage.IMPACT)
-    IMPACT_TO_HANLIN = (DikiwiStage.IMPACT, DikiwiStage.HANLIN)
+    IMPACT_TO_RESIDUAL = (DikiwiStage.IMPACT, DikiwiStage.RESIDUAL)
 
     # Review rejection loops (封驳)
     KNOWLEDGE_REJECT_TO_INFORMATION = (DikiwiStage.KNOWLEDGE, DikiwiStage.INFORMATION)
@@ -120,8 +120,8 @@ PERMISSION_MATRIX: dict[DikiwiStage, list[DikiwiStage]] = {
     DikiwiStage.KNOWLEDGE: [DikiwiStage.INSIGHT, DikiwiStage.INFORMATION],  # Can reject back
     DikiwiStage.INSIGHT: [DikiwiStage.WISDOM],
     DikiwiStage.WISDOM: [DikiwiStage.IMPACT, DikiwiStage.INSIGHT],  # CVO can reject back
-    DikiwiStage.IMPACT: [DikiwiStage.HANLIN],  # Can proceed to Hanlin analysis
-    DikiwiStage.HANLIN: [],  # Terminal stage
+    DikiwiStage.IMPACT: [DikiwiStage.RESIDUAL],  # Can proceed to Residual analysis
+    DikiwiStage.RESIDUAL: [],  # Terminal stage
 }
 
 
@@ -262,13 +262,14 @@ class StageStateMachine:
         if not self.context:
             raise ValueError("No context set")
 
+        from_stage = self.context.current_stage
         success, message = self.transition(self.context, to_stage)
         if not success:
             raise ValueError(message)
 
         # Record in history
         self._history.append({
-            "from": self.context.current_stage.name,
+            "from": from_stage.name,
             "to": to_stage.name,
             "reason": reason,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -318,6 +319,7 @@ class StageStateMachine:
         if to_stage.value < from_stage.value:  # Going backwards
             if not context.can_retry(from_stage, self.max_rejections):
                 return False, f"Max rejections ({self.max_rejections}) reached at {from_stage}"
+            context.record_rejection(from_stage, reason="封驳 - stage rejection")
 
         # Record the transition
         context.record_stage_entry(to_stage)

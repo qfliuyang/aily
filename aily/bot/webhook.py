@@ -123,7 +123,7 @@ async def status() -> dict:
     """Get Aily status including Tailscale connectivity."""
     ts_status = await tailscale_client.get_status()
     return {
-        "aily_version": "0.6.0.0",
+        "aily_version": "0.7.0",
         "tailscale": {
             "is_running": ts_status.is_running,
             "is_logged_in": ts_status.is_logged_in,

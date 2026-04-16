@@ -171,14 +171,21 @@ class ChaosDikiwiBridge:
                 # Convert to ExtractedContentMultimodal
                 content = self._dict_to_content(data)
 
-                # Process through DIKIWI
-                result = await self.process_extracted_content(content)
+                # Split multi-URL imports into individual jobs
+                jobs = self._split_content_into_jobs(content)
+                logger.info(
+                    "Processing %s through DIKIWI as %d job(s)",
+                    json_file.name,
+                    len(jobs),
+                )
 
-                if "error" not in result:
-                    processed += 1
-                    total_zettels += int(result.get("zettels_created", 0))
-                else:
-                    failed += 1
+                for job in jobs:
+                    result = await self.process_extracted_content(job)
+                    if "error" not in result:
+                        processed += 1
+                        total_zettels += int(result.get("zettels_created", 0))
+                    else:
+                        failed += 1
 
             except Exception as e:
                 logger.warning(f"Failed to process {json_file.name}: {e}")
@@ -210,6 +217,18 @@ class ChaosDikiwiBridge:
             else dt.now(),
             processing_method=data.get("processing_method", "unknown"),
         )
+
+    @staticmethod
+    def _split_content_into_jobs(content: ExtractedContentMultimodal) -> list[ExtractedContentMultimodal]:
+        """Expand one extracted content item into multiple DIKIWI jobs when appropriate."""
+        if content.source_type != "url_markdown":
+            return [content]
+
+        from aily.chaos.config import ChaosConfig
+        from aily.chaos.processors.document import TextProcessor
+
+        processor = TextProcessor(ChaosConfig())
+        return processor.split_url_import_items(content)
 
 
 async def run_chaos_to_zettelkasten(
@@ -251,21 +270,33 @@ async def run_chaos_to_zettelkasten(
     # Initialize Obsidian writer
     obsidian_writer = DikiwiObsidianWriter(vault_path=vault_path)
 
-    # Initialize DIKIWI mind
-    dikiwi_mind = DikiwiMind(
-        graph_db=graph_db,
-        llm_client=llm_client,
-        dikiwi_obsidian_writer=obsidian_writer,
-    )
+    # Initialize browser manager for JS-rendered pages
+    from aily.browser.manager import BrowserUseManager
+    browser_manager = BrowserUseManager()
+    await browser_manager.start()
 
-    # Create bridge
-    bridge = ChaosDikiwiBridge(
-        dikiwi_mind=dikiwi_mind,
-        processed_folder=processed_folder,
-    )
+    try:
+        # Initialize DIKIWI mind
+        dikiwi_mind = DikiwiMind(
+            graph_db=graph_db,
+            llm_client=llm_client,
+            dikiwi_obsidian_writer=obsidian_writer,
+            browser_manager=browser_manager,
+        )
 
-    # Process batch
-    stats = await bridge.process_batch(date_folder=date_folder)
+        # Create bridge
+        bridge = ChaosDikiwiBridge(
+            dikiwi_mind=dikiwi_mind,
+            processed_folder=processed_folder,
+        )
+
+        # Process batch
+        stats = await bridge.process_batch(date_folder=date_folder)
+    finally:
+        try:
+            await browser_manager.stop()
+        except Exception:
+            pass
 
     return stats
 

@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aily.sessions.innolaval_scheduler import (
+from aily.sessions.reactor_scheduler import (
     InnovationMethod,
-    InnolavalScheduler,
+    ReactorScheduler,
     MethodResult,
     NozzleConfig,
 )
@@ -34,14 +34,14 @@ def mock_obsidian_writer():
     return writer
 
 
-class TestInnolavalScheduler:
+class TestReactorScheduler:
     def test_init_defaults(self, mock_llm_client, mock_graph_db):
-        scheduler = InnolavalScheduler(
+        scheduler = ReactorScheduler(
             llm_client=mock_llm_client,
             graph_db=mock_graph_db,
         )
 
-        assert scheduler.mind_name == "innolaval"
+        assert scheduler.mind_name == "reactor"
         assert scheduler.schedule_hour == 8
         assert scheduler.schedule_minute == 0
 
@@ -54,13 +54,13 @@ class TestInnolavalScheduler:
         monkeypatch,
     ):
         proposal = Proposal(
-            mind_name="innolaval",
+            mind_name="reactor",
             title="Faster Context Routing",
             content="Route context by task shape before retrieval.",
             summary="Route context by task shape before retrieval.",
             confidence=0.91,
         )
-        scheduler = InnolavalScheduler(
+        scheduler = ReactorScheduler(
             llm_client=mock_llm_client,
             graph_db=mock_graph_db,
             obsidian_writer=mock_obsidian_writer,

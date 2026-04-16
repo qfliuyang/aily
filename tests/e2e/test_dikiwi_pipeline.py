@@ -31,7 +31,14 @@ class TestDIKIWIPipeline:
         # Arrange: Create a URL drop
         drop = test_data.url_drop(
             url="https://example.com/ai-article",
-            content="Artificial intelligence is transforming how we build software",
+            content=(
+                "Artificial intelligence is fundamentally transforming how we build software, "
+                "design systems, and organize teams. Machine learning models can now generate code, "
+                "detect bugs, and optimize performance in ways that were impossible just a few years ago.\n\n"
+                "This shift is not merely about automation. It represents a change in the very nature "
+                "of programming, where human creativity is increasingly focused on problem formulation, "
+                "architectural decisions, and ethical constraints, while algorithms handle implementation details."
+            ),
         )
 
         # Act: Process through DIKIWI mind
@@ -205,7 +212,14 @@ class TestKnowledgeExtraction:
         """Test that processed information becomes knowledge nodes."""
         # Arrange
         drop = test_data.url_drop(
-            content="The key insight is that distributed systems require careful consensus design"
+            content=(
+                "The key insight is that distributed systems require careful consensus design. "
+                "When multiple nodes must agree on a single source of truth, the choice of protocol "
+                "directly affects availability, partition tolerance, and consistency guarantees.\n\n"
+                "Raft offers a leader-follower approach that is easier to reason about and implement, "
+                "while Paxos provides stronger theoretical guarantees at the cost of complexity. "
+                "Engineering teams should evaluate their operational constraints before committing to either model."
+            )
         )
 
         # Act

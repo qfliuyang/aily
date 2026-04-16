@@ -14,7 +14,15 @@ def mock_drop():
     """Create a mock RainDrop."""
     drop = MagicMock()
     drop.id = "test_drop_123"
-    drop.content = "This is test content about artificial intelligence and machine learning."
+    drop.content = (
+        "Artificial intelligence and machine learning are transforming industries worldwide. "
+        "Organizations are investing heavily in AI infrastructure, talent acquisition, and research "
+        "and development to stay competitive in an increasingly automated landscape.\n\n"
+        "Recent advances in large language models have demonstrated remarkable capabilities in "
+        "natural language understanding, code generation, and complex reasoning tasks. These "
+        "breakthroughs are driving adoption across healthcare, finance, education, and manufacturing "
+        "sectors, creating both opportunities and challenges for policymakers and business leaders."
+    )
     drop.source = "https://example.com/article"
     drop.creator_id = "user_123"
     drop.created_at = datetime.now(timezone.utc)

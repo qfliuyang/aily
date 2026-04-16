@@ -64,7 +64,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
         """Execute GStack agentic evaluation - actually takes actions."""
         logger.info("[Entrepreneur] Starting GStack evaluation with real actions")
 
-        # Step 1: Gather pending business proposals from Hanlin/Innolaval
+        # Step 1: Gather pending business proposals from Residual/Reactor
         pending_proposals = await self._query_pending_business_proposals()
         innovation_proposals = self._get_innovation_proposals()
 
@@ -182,7 +182,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
             nodes = []
             async with self.graph_db._db.execute(
                 "SELECT id, label, source, created_at FROM nodes WHERE type IN (?, ?) AND created_at > ? ORDER BY created_at DESC",
-                ("atomic_note", "hanlin_proposal", since.isoformat()),
+                ("atomic_note", "residual_proposal", since.isoformat()),
             ) as cursor:
                 async for row in cursor:
                     nodes.append({"id": row[0], "content": row[1], "source": row[2], "created_at": row[3]})
@@ -223,11 +223,11 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     logger.warning("[Entrepreneur] Obsidian write failed: %s", e)
 
     async def _query_pending_business_proposals(self) -> list[dict]:
-        """Query Hanlin proposals waiting for business evaluation."""
+        """Query Residual proposals waiting for business evaluation."""
         if not self.graph_db:
             return []
         try:
-            nodes = await self.graph_db.get_nodes_by_type("hanlin_proposal")
+            nodes = await self.graph_db.get_nodes_by_type("residual_proposal")
             pending = []
             for node in nodes:
                 props = node.get("properties", {})
@@ -246,7 +246,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
             return []
 
     def _build_hypothesis_from_node(self, node: dict) -> dict:
-        """Build a GStack hypothesis from a Hanlin proposal node."""
+        """Build a GStack hypothesis from a Residual proposal node."""
         label = node.get("label", "")
         title = label.split(":")[0] if ":" in label else label
         description = label[len(title) + 1 :].strip() if ":" in label else label
@@ -323,12 +323,12 @@ class EntrepreneurScheduler(BaseMindScheduler):
         return None
 
     async def _write_rejection_feedback(self, proposal_node: dict, reason: str) -> None:
-        """Append rejection reason to the Hanlin Feedback Index for future learning."""
+        """Append rejection reason to the Residual Feedback Index for future learning."""
         if not self.graph_db:
             return
         try:
             label = proposal_node.get("label", "")[:120]
-            await self.graph_db.add_hanlin_feedback(label, reason)
+            await self.graph_db.add_residual_feedback(label, reason)
             logger.info("[Entrepreneur] Wrote rejection feedback for %s", proposal_node.get("id"))
         except Exception as e:
             logger.warning("[Entrepreneur] Failed to write rejection feedback: %s", e)

@@ -218,11 +218,13 @@ class TestSkillBase:
             async def execute(self, context: SkillContext) -> SkillResult:
                 return SkillResult.success_result("test_run", {"value": 42}, 0.0)
 
+        from unittest.mock import MagicMock
         skill = TestSkill()
         context = SkillContext(
             content="Test",
             content_id="test-001",
             stage="information",
+            llm_client=MagicMock(),
         )
 
         result = await skill.run(context)
@@ -232,6 +234,7 @@ class TestSkillBase:
 
     async def test_run_catches_exceptions(self):
         """Skill.run catches exceptions and returns error result."""
+        from unittest.mock import MagicMock
 
         class FailingSkill(Skill):
             name = "failing"
@@ -243,6 +246,7 @@ class TestSkillBase:
             content="Test",
             content_id="test-001",
             stage="information",
+            llm_client=MagicMock(),
         )
 
         result = await skill.run(context)

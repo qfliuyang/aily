@@ -283,8 +283,9 @@ class DikiwiMind:
         model: str = "moonshot-v1-32k",
         dikiwi_obsidian_writer: DikiwiObsidianWriter | None = None,
         llm_client: Any | None = None,
-        innolaval_scheduler: Any | None = None,
+        reactor_scheduler: Any | None = None,
         entrepreneur_scheduler: Any | None = None,
+        queue_db: Any | None = None,
     ) -> None:
         """Initialize LLM-powered DIKIWI mind.
 
@@ -297,7 +298,7 @@ class DikiwiMind:
             model: Kimi model to use (8k, 32k, or 128k) - Standard API only
             dikiwi_obsidian_writer: Optional enhanced Obsidian writer (file-based with Dataview)
             llm_client: Pre-configured LLM client (e.g., Coding Plan with kimi-k2.5)
-            innolaval_scheduler: Optional InnolavalScheduler to run framework evaluation on DIKIWI outputs
+            reactor_scheduler: Optional ReactorScheduler to run framework evaluation on DIKIWI outputs
             entrepreneur_scheduler: Optional EntrepreneurScheduler for per-pipeline business evaluation
         """
         # Use pre-configured client if provided, otherwise create Standard API client
@@ -311,8 +312,9 @@ class DikiwiMind:
         self.obsidian_writer = obsidian_writer
         self.dikiwi_obsidian_writer = dikiwi_obsidian_writer
         self.browser_manager = browser_manager
-        self.innolaval_scheduler = innolaval_scheduler
+        self.reactor_scheduler = reactor_scheduler
         self.entrepreneur_scheduler = entrepreneur_scheduler
+        self.queue_db = queue_db
 
         self._markdownizer = MarkdownizeProcessor(browser_manager=browser_manager)
 
@@ -449,7 +451,7 @@ class DikiwiMind:
             from aily.dikiwi.agents.insight_agent import InsightAgent
             from aily.dikiwi.agents.wisdom_agent import WisdomAgent
             from aily.dikiwi.agents.impact_agent import ImpactAgent
-            from aily.dikiwi.agents.hanlin_agent import HanlinAgent
+            from aily.dikiwi.agents.residual_agent import ResidualAgent
             from aily.dikiwi.orchestrator import DikiwiOrchestrator, PipelineConfig
             from aily.dikiwi.stages import DikiwiStage as OrchestratorDikiwiStage
 
@@ -486,67 +488,88 @@ class DikiwiMind:
             # Run pipeline
             pipeline = await orchestrator.run_pipeline(ctx)
 
-            # MAC loop: Innolaval (multiply) <-> Hanlin (accumulate)
-            if pipeline.status == "completed" and self.innolaval_scheduler:
-                hanlin_result: StageResult | None = None
+            # MAC loop: Reactor (multiply) <-> Residual (accumulate)
+            residual_result: StageResult | None = None
+            if (
+                pipeline.status == "completed"
+                and self.reactor_scheduler
+                and SETTINGS.minds.mac_enabled
+            ):
+                accumulated_proposals: list[dict[str, Any]] = []
                 for mac_round in range(self._MAC_ITERATIONS):
                     try:
-                        context = await self.innolaval_scheduler._gather_context()
-                        if mac_round > 0 and hanlin_result and hanlin_result.success:
-                            context["hanlin_accumulated"] = {
-                                "summary": hanlin_result.data.get("summary", ""),
-                                "key_findings": hanlin_result.data.get("key_findings", []),
-                                "innolaval_synthesis": hanlin_result.data.get("innolaval_synthesis", ""),
+                        context = await self.reactor_scheduler._gather_context()
+                        if mac_round > 0 and residual_result and residual_result.success:
+                            context["residual_accumulated"] = {
+                                "summary": residual_result.data.get("summary", ""),
+                                "key_findings": residual_result.data.get("key_findings", []),
+                                "reactor_synthesis": residual_result.data.get("reactor_synthesis", ""),
+                                "previous_proposals": accumulated_proposals,
                             }
 
-                        innolaval_proposals = await self.innolaval_scheduler.evaluate_context(context)
-                        ctx.artifact_store["innolaval_proposals"] = innolaval_proposals
+                        reactor_proposals = await self.reactor_scheduler.evaluate_context(
+                            context, budget=ctx.budget
+                        )
+                        ctx.artifact_store["reactor_proposals"] = reactor_proposals
+                        accumulated_proposals.extend(
+                            [
+                                {"title": p.title, "content": p.content, "confidence": p.confidence}
+                                for p in reactor_proposals
+                            ]
+                        )
                         logger.info(
-                            "[DIKIWI] MAC round %d/%d: Innolaval generated %d proposals for pipeline %s",
+                            "[DIKIWI] MAC round %d/%d: Reactor generated %d proposals for pipeline %s",
                             mac_round + 1,
                             self._MAC_ITERATIONS,
-                            len(innolaval_proposals),
+                            len(reactor_proposals),
                             pipeline_id,
                         )
 
-                        agent = HanlinAgent()
+                        agent = ResidualAgent()
                         if mac_round == self._MAC_ITERATIONS - 1:
-                            hanlin_result = await agent.execute(ctx)
+                            residual_result = await agent.execute(ctx)
                         else:
-                            hanlin_result = await agent.synthesize(ctx)
+                            residual_result = await agent.synthesize(ctx)
 
                     except Exception as exc:
                         logger.warning("[DIKIWI] MAC round %d failed: %s", mac_round + 1, exc)
                         break
 
-                if hanlin_result:
-                    ctx.stage_results.append(hanlin_result)
+                if residual_result:
+                    ctx.stage_results.append(residual_result)
 
-            # Fallback: run Hanlin alone if no Innolaval scheduler
-            elif pipeline.status == "completed":
+            # Fallback: run Residual alone if no Reactor scheduler or MAC disabled
+            if pipeline.status == "completed" and not residual_result:
                 try:
-                    hanlin_result = await HanlinAgent().execute(ctx)
-                    ctx.stage_results.append(hanlin_result)
+                    residual_result = await ResidualAgent().execute(ctx)
+                    ctx.stage_results.append(residual_result)
                 except Exception as exc:
-                    logger.warning("[DIKIWI] HanlinAgent failed: %s", exc)
+                    logger.warning("[DIKIWI] ResidualAgent failed: %s", exc)
 
             # Per-pipeline Entrepreneur evaluation for business proposals
             if (
                 pipeline.status == "completed"
                 and self.entrepreneur_scheduler
-                and hanlin_result
-                and hanlin_result.success
-                and hanlin_result.data.get("proposals")
+                and residual_result
+                and residual_result.success
+                and residual_result.data.get("proposals")
             ):
                 try:
                     logger.info(
-                        "[DIKIWI] Triggering Entrepreneur evaluation for %d proposals from pipeline %s",
-                        len(hanlin_result.data["proposals"]),
+                        "[DIKIWI] Enqueuing Entrepreneur evaluation for %d proposals from pipeline %s",
+                        len(residual_result.data["proposals"]),
                         pipeline_id,
                     )
-                    asyncio.create_task(self.entrepreneur_scheduler._run_session_wrapper())
+                    if self.queue_db:
+                        await self.queue_db.enqueue(
+                            "entrepreneur_evaluate",
+                            {
+                                "pipeline_id": pipeline_id,
+                                "proposals": residual_result.data["proposals"],
+                            },
+                        )
                 except Exception as exc:
-                    logger.warning("[DIKIWI] Entrepreneur trigger failed: %s", exc)
+                    logger.warning("[DIKIWI] Entrepreneur enqueue failed: %s", exc)
 
             # Transfer results
             result.stage_results = list(ctx.stage_results)

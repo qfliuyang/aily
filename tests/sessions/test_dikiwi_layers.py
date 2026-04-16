@@ -46,7 +46,7 @@ async def test_layered_zettels_write_levels_to_vault():
             drop,
         )
 
-        notes = sorted((Path(tmpdir) / "3-Resources" / "Zettelkasten").rglob("*.md"))
+        notes = sorted(Path(tmpdir).rglob("*.md"))
         text = "\n".join(p.read_text(encoding="utf-8") for p in notes)
         assert 'dikiwi_level: "data"' in text
         assert 'dikiwi_level: "information"' in text

@@ -22,8 +22,8 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
         dikiwi_level="knowledge",
     )
 
-    index_path = tmp_path / "3-Resources" / "Zettelkasten" / "00 Zettelkasten Index.md"
-    moc_path = tmp_path / "3-Resources" / "MOCs" / "attention.md"
+    index_path = tmp_path / "00-Chaos" / "00 Zettelkasten Index.md"
+    moc_path = tmp_path / "00-Chaos" / "attention.md"
 
     assert note_path.exists()
     assert index_path.exists()
@@ -40,7 +40,7 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
 
     index = index_path.read_text(encoding="utf-8")
     assert 'WHERE note_type = "permanent"' in index
-    assert 'FROM "3-Resources/MOCs"' in index
+    assert 'FROM "00-Chaos"' in index
 
     moc = moc_path.read_text(encoding="utf-8")
     assert "# attention" in moc

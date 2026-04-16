@@ -31,7 +31,7 @@ class ProposalStatus(Enum):
 class ProposalStage(Enum):
     """Venture-funnel stage for a proposal."""
 
-    PENDING_INNOVATION = auto()  # Waiting for Innolaval scoring
+    PENDING_INNOVATION = auto()  # Waiting for Reactor scoring
     PENDING_BUSINESS = auto()    # Passed innovation, waiting for GStack
     INCUBATING = auto()          # Approved by GStack (build_it)
     REJECTED_INNOVATION = auto()  # Failed innovation screening

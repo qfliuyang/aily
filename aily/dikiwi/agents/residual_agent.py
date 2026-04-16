@@ -1,4 +1,4 @@
-"""HanlinAgent (翰林) - Post-pipeline vault analyst and proposal drafter."""
+"""ResidualAgent (残差) - Post-pipeline vault analyst and proposal drafter."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from aily.sessions.dikiwi_mind import DikiwiStage, StageResult
 logger = logging.getLogger(__name__)
 
 
-class HanlinAgent(DikiwiAgent):
+class ResidualAgent(DikiwiAgent):
     """Post-pipeline agent that analyzes the Obsidian vault and drafts formal reports.
 
-    Hanlin runs after the IMPACT stage completes. It uses obsidian-cli to inspect
+    Residual runs after the IMPACT stage completes. It uses obsidian-cli to inspect
     the vault, queries the GraphDB for recent pipeline outputs, and synthesizes a
     formal report with concrete proposals for the Innovation and Entrepreneur minds.
     """
@@ -33,18 +33,18 @@ class HanlinAgent(DikiwiAgent):
     _MAX_GRAPH_NODES = 30
 
     async def synthesize(self, ctx: AgentContext) -> StageResult:
-        """Run Hanlin synthesis without persisting to external stores.
+        """Run Residual synthesis without persisting to external stores.
 
-        Used inside the Innolaval-Hanlin MAC loop for intermediate iterations.
+        Used inside the Reactor-Residual MAC loop for intermediate iterations.
         """
         start = time.time()
 
         try:
             impact_result = self._find_stage_result(ctx, DikiwiStage.IMPACT)
             if not impact_result or not impact_result.success:
-                logger.info("[HANLIN] Skipping: IMPACT stage did not complete successfully")
+                logger.info("[RESIDUAL] Skipping: IMPACT stage did not complete successfully")
                 return StageResult(
-                    stage=DikiwiStage.HANLIN,
+                    stage=DikiwiStage.RESIDUAL,
                     success=True,
                     items_processed=0,
                     items_output=0,
@@ -52,10 +52,15 @@ class HanlinAgent(DikiwiAgent):
                     data={"skipped": True, "reason": "impact_not_successful"},
                 )
 
-            obsidian_cli = ObsidianCLI()
+            vault_name = ""
+            if ctx.dikiwi_obsidian_writer:
+                vault_path = getattr(ctx.dikiwi_obsidian_writer, "vault_path", None)
+                if vault_path:
+                    vault_name = Path(vault_path).name
+            obsidian_cli = ObsidianCLI(vault_name=vault_name or None)
             vault_excerpts = await self._gather_vault_excerpts(obsidian_cli, ctx)
             graph_nodes = await self._gather_graph_nodes(ctx)
-            innolaval_proposals = self._format_innolaval_proposals(ctx)
+            reactor_proposals = self._format_reactor_proposals(ctx)
 
             memory_context = (
                 DikiwiPromptRegistry.render_memory(ctx.memory, limit=1200)
@@ -65,7 +70,7 @@ class HanlinAgent(DikiwiAgent):
             llm_result = await self._llm_synthesize(
                 vault_excerpts=vault_excerpts,
                 graph_nodes=graph_nodes,
-                innolaval_proposals=innolaval_proposals,
+                reactor_proposals=reactor_proposals,
                 memory_context=memory_context,
                 ctx=ctx,
             )
@@ -74,7 +79,7 @@ class HanlinAgent(DikiwiAgent):
             processing_time = (time.time() - start) * 1000
 
             return StageResult(
-                stage=DikiwiStage.HANLIN,
+                stage=DikiwiStage.RESIDUAL,
                 success=True,
                 items_processed=1,
                 items_output=len(proposals),
@@ -84,22 +89,22 @@ class HanlinAgent(DikiwiAgent):
                     "report_title": llm_result.get("report_title", ""),
                     "summary": llm_result.get("summary", ""),
                     "key_findings": llm_result.get("key_findings", []),
-                    "innolaval_synthesis": llm_result.get("innolaval_synthesis", ""),
+                    "reactor_synthesis": llm_result.get("reactor_synthesis", ""),
                     "report_note_id": "",
                 },
             )
 
         except Exception as exc:
-            logger.exception("[HANLIN] Synthesis failed: %s", exc)
+            logger.exception("[RESIDUAL] Synthesis failed: %s", exc)
             return StageResult(
-                stage=DikiwiStage.HANLIN,
+                stage=DikiwiStage.RESIDUAL,
                 success=False,
                 error_message=str(exc),
                 processing_time_ms=(time.time() - start) * 1000,
             )
 
     async def execute(self, ctx: AgentContext) -> StageResult:
-        """Run Hanlin and persist results to Obsidian and GraphDB."""
+        """Run Residual and persist results to Obsidian and GraphDB."""
         result = await self.synthesize(ctx)
 
         if not result.success or result.data.get("skipped"):
@@ -111,7 +116,7 @@ class HanlinAgent(DikiwiAgent):
             "report_title": result.data.get("report_title", ""),
             "summary": result.data.get("summary", ""),
             "key_findings": result.data.get("key_findings", []),
-            "innolaval_synthesis": result.data.get("innolaval_synthesis", ""),
+            "reactor_synthesis": result.data.get("reactor_synthesis", ""),
         }
         proposals = llm_result["proposals"]
 
@@ -123,21 +128,21 @@ class HanlinAgent(DikiwiAgent):
                     ctx=ctx,
                 )
             except Exception as exc:
-                logger.warning("[HANLIN] Failed to write report: %s", exc)
+                logger.warning("[RESIDUAL] Failed to write report: %s", exc)
 
         if ctx.graph_db and proposals:
             try:
                 await self._persist_proposals(proposals, report_note_id, ctx)
             except Exception as exc:
-                logger.warning("[HANLIN] Failed to persist proposals: %s", exc)
+                logger.warning("[RESIDUAL] Failed to persist proposals: %s", exc)
 
         feedback = await self._read_rejection_feedback(ctx)
         if feedback and ctx.memory:
-            ctx.memory.add_system(f"Hanlin feedback from past rejections:\n{feedback}")
+            ctx.memory.add_system(f"Residual feedback from past rejections:\n{feedback}")
 
         if ctx.memory:
             ctx.memory.add_assistant(
-                f"HANLIN Complete: Drafted report with {len(proposals)} proposals."
+                f"RESIDUAL Complete: Drafted report with {len(proposals)} proposals."
             )
 
         result.data["report_note_id"] = report_note_id
@@ -148,11 +153,11 @@ class HanlinAgent(DikiwiAgent):
         try:
             results = obsidian_cli.search("dikiwi_level:", limit=self._MAX_VAULT_NOTES)
         except Exception as exc:
-            logger.warning("[HANLIN] Vault search failed: %s", exc)
+            logger.warning("[RESIDUAL] Vault search failed: %s", exc)
             return ""
 
         if not results:
-            logger.info("[HANLIN] No vault notes found via obsidian-cli")
+            logger.info("[RESIDUAL] No vault notes found via obsidian-cli")
             return ""
 
         excerpts: list[str] = []
@@ -181,11 +186,11 @@ class HanlinAgent(DikiwiAgent):
         try:
             nodes = await ctx.graph_db.get_nodes_within_hours(24)
         except Exception as exc:
-            logger.warning("[HANLIN] GraphDB query failed: %s", exc)
+            logger.warning("[RESIDUAL] GraphDB query failed: %s", exc)
             return ""
 
         # Filter to DIKIWI-relevant types and limit count
-        relevant_types = {"information", "knowledge", "insight", "atomic_note", "hanlin_proposal"}
+        relevant_types = {"information", "knowledge", "insight", "atomic_note", "residual_proposal"}
         filtered = [n for n in nodes if n.get("type") in relevant_types][: self._MAX_GRAPH_NODES]
 
         if not filtered:
@@ -204,30 +209,30 @@ class HanlinAgent(DikiwiAgent):
         self,
         vault_excerpts: str,
         graph_nodes: str,
-        innolaval_proposals: str,
+        reactor_proposals: str,
         memory_context: str,
         ctx: AgentContext,
     ) -> dict:
         """Call LLM to synthesize report and proposals."""
-        messages = DikiwiPromptRegistry.hanlin_synthesis(
+        messages = DikiwiPromptRegistry.residual_synthesis(
             vault_excerpts=vault_excerpts,
             graph_nodes=graph_nodes,
-            innolaval_proposals=innolaval_proposals,
+            reactor_proposals=reactor_proposals,
             memory_context=memory_context,
         )
-        stage_key = f"hanlin:synth:{hashlib.sha1(vault_excerpts[:200].encode()).hexdigest()[:8]}"
+        stage_key = f"residual:synth:{hashlib.sha1(vault_excerpts[:200].encode()).hexdigest()[:8]}"
 
         try:
             result = await chat_json(
                 llm_client=ctx.llm_client,
-                stage="hanlin",
+                stage="residual",
                 stage_key=stage_key,
                 messages=messages,
                 temperature=0.3,
                 budget=ctx.budget,
             )
         except Exception as exc:
-            logger.warning("[HANLIN] Synthesis LLM call failed: %s", exc)
+            logger.warning("[RESIDUAL] Synthesis LLM call failed: %s", exc)
             return {}
 
         if not isinstance(result, dict):
@@ -236,24 +241,24 @@ class HanlinAgent(DikiwiAgent):
         return result
 
     async def _write_report(self, llm_result: dict, ctx: AgentContext) -> str:
-        """Write the Hanlin report to Obsidian."""
+        """Write the Residual report to Obsidian."""
         if not ctx.dikiwi_obsidian_writer:
             return ""
 
         vault_path = getattr(ctx.dikiwi_obsidian_writer, "vault_path", None)
         if not vault_path:
-            logger.warning("[HANLIN] Cannot write report: no vault_path available")
+            logger.warning("[RESIDUAL] Cannot write report: no vault_path available")
             return ""
 
-        title = llm_result.get("report_title", "Hanlin Report")
+        title = llm_result.get("report_title", "Residual Report")
         if not title or title.strip() == "":
-            title = "Hanlin Report"
+            title = "Residual Report"
 
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         safe_title = "".join(c for c in title if c.isalnum() or c in " -_").rstrip()
         filename = f"{date_str} - {safe_title}.md"
 
-        report_dir = Path(vault_path) / "10-Knowledge" / "Hanlin Reports"
+        report_dir = Path(vault_path) / "07-Proposal"
         report_dir.mkdir(parents=True, exist_ok=True)
         note_path = report_dir / filename
 
@@ -265,7 +270,7 @@ class HanlinAgent(DikiwiAgent):
         lines: list[str] = [
             "---",
             'note_type: "report"',
-            'dikiwi_level: "hanlin"',
+            'dikiwi_level: "residual"',
             f"date_created: {datetime.now(timezone.utc).isoformat()}",
             f"proposals_count: {len(proposals)}",
             "---",
@@ -326,20 +331,20 @@ class HanlinAgent(DikiwiAgent):
 
         lines.append("---")
         lines.append("")
-        lines.append("*Drafted by Hanlin (翰林) for Innovation and Entrepreneur review.*")
+        lines.append("*Drafted by Residual (残差) for Innovation and Entrepreneur review.*")
 
         try:
             note_path.write_text("\n".join(lines), encoding="utf-8")
-            logger.info("[HANLIN] Wrote report to %s", note_path)
+            logger.info("[RESIDUAL] Wrote report to %s", note_path)
             return str(note_path.relative_to(vault_path))
         except Exception as exc:
-            logger.warning("[HANLIN] Failed to write report: %s", exc)
+            logger.warning("[RESIDUAL] Failed to write report: %s", exc)
             return ""
 
     async def _persist_proposals(
         self, proposals: list[dict], report_note_id: str, ctx: AgentContext
     ) -> None:
-        """Insert proposals into GraphDB as hanlin_proposal nodes with initial status."""
+        """Insert proposals into GraphDB as residual_proposal nodes with initial status."""
         if not ctx.graph_db:
             return
 
@@ -347,7 +352,7 @@ class HanlinAgent(DikiwiAgent):
             if not isinstance(proposal, dict):
                 continue
 
-            node_id = f"hanlin_{uuid.uuid4().hex[:8]}"
+            node_id = f"residual_{uuid.uuid4().hex[:8]}"
             title = proposal.get("title", "Untitled Proposal")
             description = proposal.get("description", "")
             label = f"{title}: {description[:200]}"
@@ -355,44 +360,44 @@ class HanlinAgent(DikiwiAgent):
             try:
                 await ctx.graph_db.insert_node(
                     node_id=node_id,
-                    node_type="hanlin_proposal",
+                    node_type="residual_proposal",
                     label=label,
-                    source="hanlin",
+                    source="residual",
                 )
                 await ctx.graph_db.set_node_property(
                     node_id, "status", "pending_innovation"
                 )
                 if report_note_id:
                     await ctx.graph_db.set_node_property(
-                        node_id, "hanlin_report_path", report_note_id
+                        node_id, "residual_report_path", report_note_id
                     )
                 await ctx.graph_db.set_node_property(
                     node_id, "validation_attempts", 0
                 )
             except Exception as exc:
-                logger.warning("[HANLIN] Failed to insert proposal node: %s", exc)
+                logger.warning("[RESIDUAL] Failed to insert proposal node: %s", exc)
 
     async def _read_rejection_feedback(self, ctx: AgentContext) -> str:
-        """Read the Hanlin Feedback Index for self-correction."""
+        """Read the Residual Feedback Index for self-correction."""
         if not ctx.graph_db:
             return ""
         try:
-            entries = await ctx.graph_db.get_hanlin_feedback(limit=20)
+            entries = await ctx.graph_db.get_residual_feedback(limit=20)
             if not entries:
                 return ""
-            lines = ["# Hanlin Feedback Index", ""]
+            lines = ["# Residual Feedback Index", ""]
             for entry in entries:
                 lines.append(
                     f"- [{entry['created_at']}] **{entry['proposal_label']}** — {entry['reason']}"
                 )
             return "\n".join(lines)[:2000]
         except Exception as exc:
-            logger.warning("[HANLIN] Failed to read feedback index: %s", exc)
+            logger.warning("[RESIDUAL] Failed to read feedback index: %s", exc)
             return ""
 
-    def _format_innolaval_proposals(self, ctx: AgentContext) -> str:
-        """Format Innolaval proposals from artifact store for the LLM prompt."""
-        proposals = ctx.artifact_store.get("innolaval_proposals", [])
+    def _format_reactor_proposals(self, ctx: AgentContext) -> str:
+        """Format Reactor proposals from artifact store for the LLM prompt."""
+        proposals = ctx.artifact_store.get("reactor_proposals", [])
         if not proposals:
             return ""
         lines: list[str] = []

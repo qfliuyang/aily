@@ -57,37 +57,46 @@ class DikiwiObsidianWriter:
     """Full-featured Obsidian integration for DIKIWI knowledge system.
 
     Creates a hierarchical, query-able, visual knowledge structure:
-    DIKIWI/
-    ├── 00-Input/          # Raw captured inputs
-    ├── 01-Data/           # Extracted facts (Dataview)
-    ├── 02-Information/    # Classified nodes (MOC)
-    ├── 03-Knowledge/      # Relationships (Graph)
-    ├── 04-Insights/       # Patterns (Dashboards)
-    ├── 05-Wisdom/         # Principles (Library)
-    ├── 06-Impact/         # Actions (Tasks)
-    └── Canvas/            # Visual maps
+    00-Chaos/           # Raw captured inputs
+    01-Data/            # Extracted facts (Dataview)
+    02-Information/     # Classified nodes (MOC)
+    03-Knowledge/       # Relationships (Graph)
+    04-Insight/         # Patterns (Dashboards)
+    05-Wisdom/          # Principles (Library)
+    06-Impact/          # Actions (Tasks)
+    07-Proposal/        # Reactor-Residual proposals
+    08-Entrepreneurship/# Reviewed business plans
     """
 
     STAGE_NAMES = {
-        0: "00-Input",
+        0: "00-Chaos",
         1: "01-Data",
         2: "02-Information",
         3: "03-Knowledge",
-        4: "04-Insights",
+        4: "04-Insight",
         5: "05-Wisdom",
         6: "06-Impact",
+    }
+
+    LEVEL_TO_FOLDER = {
+        "chaos": "00-Chaos",
+        "data": "01-Data",
+        "information": "02-Information",
+        "knowledge": "03-Knowledge",
+        "insight": "04-Insight",
+        "wisdom": "05-Wisdom",
+        "impact": "06-Impact",
     }
 
     def __init__(
         self,
         vault_path: str | Path,
-        folder_prefix: str = "DIKIWI",
+        folder_prefix: str = "",
         zettelkasten_only: bool = True,
     ) -> None:
         self.vault_path = Path(vault_path)
-        self.dikiwi_root = self.vault_path / folder_prefix
-        self.zettelkasten_root = self.vault_path / "3-Resources" / "Zettelkasten"
-        self.zettelkasten_maps_root = self.vault_path / "3-Resources" / "MOCs"
+        self.dikiwi_root = self.vault_path / folder_prefix if folder_prefix else self.vault_path
+        self.zettelkasten_maps_root = self.vault_path / "00-Chaos"
         self.zettelkasten_only = zettelkasten_only
         self._ensure_zettelkasten_structure()
 
@@ -98,11 +107,13 @@ class DikiwiObsidianWriter:
             logger.info("DikiwiObsidianWriter initialized (Zettelkasten-only mode)")
 
     def _ensure_zettelkasten_structure(self) -> None:
-        """Create the permanent-note home inside the Obsidian vault."""
-        self.zettelkasten_root.mkdir(parents=True, exist_ok=True)
-        self.zettelkasten_maps_root.mkdir(parents=True, exist_ok=True)
+        """Create the flat numbered directories for the DIKIWI Zettelkasten."""
+        for stage_name in self.STAGE_NAMES.values():
+            (self.vault_path / stage_name).mkdir(parents=True, exist_ok=True)
+        (self.vault_path / "07-Proposal").mkdir(parents=True, exist_ok=True)
+        (self.vault_path / "08-Entrepreneurship").mkdir(parents=True, exist_ok=True)
 
-        index_path = self.zettelkasten_root / "00 Zettelkasten Index.md"
+        index_path = self.vault_path / "00-Chaos" / "00 Zettelkasten Index.md"
         if not index_path.exists():
             index_path.write_text(self._build_zettelkasten_index(), encoding="utf-8")
 
@@ -120,7 +131,7 @@ Permanent notes produced by DIKIWI live here. Browse by recency, tags, or Maps o
 ## Recent Notes
 ```dataview
 TABLE dikiwi_level, zettel_id, date_created, source
-FROM "3-Resources/Zettelkasten"
+FROM "00-Chaos"
 WHERE note_type = "permanent" AND file.name != "00 Zettelkasten Index"
 SORT date_created DESC
 LIMIT 50
@@ -129,7 +140,7 @@ LIMIT 50
 ## By Level
 ```dataview
 TABLE length(rows) as Notes
-FROM "3-Resources/Zettelkasten"
+FROM "00-Chaos"
 WHERE note_type = "permanent" AND dikiwi_level
 GROUP BY dikiwi_level
 SORT dikiwi_level ASC
@@ -138,14 +149,14 @@ SORT dikiwi_level ASC
 ## Maps Of Content
 ```dataview
 LIST
-FROM "3-Resources/MOCs"
+FROM "00-Chaos"
 SORT file.name ASC
 ```
 
 ## Tag Clusters
 ```dataview
 TABLE length(rows) as Notes
-FROM "3-Resources/Zettelkasten"
+FROM "00-Chaos"
 WHERE note_type = "permanent"
 FLATTEN tags AS tag
 GROUP BY tag
@@ -167,7 +178,7 @@ tags:
 ## Notes
 ```dataview
 TABLE date_created, source
-FROM "3-Resources/Zettelkasten"
+FROM "00-Chaos"
 WHERE note_type = "permanent" AND contains(tags, "{tag}")
 SORT date_created DESC
 ```
@@ -226,8 +237,8 @@ tags: [MOC, dikiwi, input, inbox]
 ## Recent Inputs
 ```dataview
 TABLE source, date_created
-FROM "DIKIWI/00-Input"
-WHERE file.name != "00-Input-MOC"
+FROM "00-Chaos"
+WHERE file.name != "00-Chaos-MOC"
 SORT date_created DESC
 LIMIT 20
 ```
@@ -235,12 +246,12 @@ LIMIT 20
 ## By Source
 ```dataview
 TABLE length(rows) as Count
-FROM "DIKIWI/00-Input"
+FROM "00-Chaos"
 GROUP BY source
 ```
 
 ## Navigation
-- [[DIKIWI/01-Data/01-Data-MOC|Data Stage →]]
+- [[01-Data/01-Data-MOC|Data Stage →]]
 """,
             1: """---
 tags: [MOC, dikiwi, data]
@@ -251,7 +262,7 @@ tags: [MOC, dikiwi, data]
 ## Recent Data Points
 ```dataview
 TABLE data_type, confidence, source
-FROM "DIKIWI/01-Data"
+FROM "01-Data"
 WHERE file.name != "01-Data-MOC"
 SORT date_created DESC
 LIMIT 20
@@ -260,7 +271,7 @@ LIMIT 20
 ## By Type
 ```dataview
 LIST
-FROM "DIKIWI/01-Data"
+FROM "01-Data"
 WHERE data_type
 GROUP BY data_type
 ```
@@ -268,14 +279,14 @@ GROUP BY data_type
 ## High Confidence Data
 ```dataview
 LIST
-FROM "DIKIWI/01-Data"
+FROM "01-Data"
 WHERE confidence >= 0.9
 SORT confidence DESC
 ```
 
 ## Navigation
-- [[DIKIWI/00-Input/00-Input-MOC|← Input]]
-- [[DIKIWI/02-Information/02-Information-MOC|Information →]]
+- [[00-Chaos/00-Chaos-MOC|← Input]]
+- [[02-Information/02-Information-MOC|Information →]]
 """,
             2: """---
 tags: [MOC, dikiwi, information]
@@ -286,7 +297,7 @@ tags: [MOC, dikiwi, information]
 ## Recent Nodes
 ```dataview
 TABLE domain, info_type, confidence
-FROM "DIKIWI/02-Information"
+FROM "02-Information"
 WHERE file.name != "02-Information-MOC"
 SORT date_created DESC
 LIMIT 20
@@ -295,7 +306,7 @@ LIMIT 20
 ## By Domain
 ```dataview
 LIST
-FROM "DIKIWI/02-Information"
+FROM "02-Information"
 WHERE domain
 GROUP BY domain
 ```
@@ -303,14 +314,14 @@ GROUP BY domain
 ## By Type
 ```dataview
 TABLE length(rows) as Count
-FROM "DIKIWI/02-Information"
+FROM "02-Information"
 WHERE info_type
 GROUP BY info_type
 ```
 
 ## Navigation
-- [[DIKIWI/01-Data/01-Data-MOC|← Data]]
-- [[DIKIWI/03-Knowledge/03-Knowledge-MOC|Knowledge →]]
+- [[01-Data/01-Data-MOC|← Data]]
+- [[03-Knowledge/03-Knowledge-MOC|Knowledge →]]
 """,
             3: """---
 tags: [MOC, dikiwi, knowledge, links]
@@ -321,7 +332,7 @@ tags: [MOC, dikiwi, knowledge, links]
 ## Recent Links
 ```dataview
 TABLE relation_type, strength
-FROM "DIKIWI/03-Knowledge"
+FROM "03-Knowledge"
 WHERE file.name != "03-Knowledge-MOC"
 SORT date_created DESC
 LIMIT 20
@@ -330,7 +341,7 @@ LIMIT 20
 ## Relationship Types
 ```dataview
 TABLE length(rows) as Count
-FROM "DIKIWI/03-Knowledge"
+FROM "03-Knowledge"
 WHERE relation_type
 GROUP BY relation_type
 ```
@@ -338,14 +349,14 @@ GROUP BY relation_type
 ## Strong Connections (≥0.8)
 ```dataview
 LIST
-FROM "DIKIWI/03-Knowledge"
+FROM "03-Knowledge"
 WHERE strength >= 0.8
 SORT strength DESC
 ```
 
 ## Navigation
-- [[DIKIWI/02-Information/02-Information-MOC|← Information]]
-- [[DIKIWI/04-Insights/04-Insights-MOC|Insights →]]
+- [[02-Information/02-Information-MOC|← Information]]
+- [[04-Insight/04-Insight-MOC|Insights →]]
 """,
             4: """---
 tags: [MOC, dikiwi, insights, dashboard]
@@ -356,8 +367,8 @@ tags: [MOC, dikiwi, insights, dashboard]
 ## Recent Insights
 ```dataview
 TABLE insight_type, confidence, source_message
-FROM "DIKIWI/04-Insights"
-WHERE file.name != "04-Insights-MOC"
+FROM "04-Insight"
+WHERE file.name != "04-Insight-MOC"
 SORT date_created DESC
 LIMIT 20
 ```
@@ -366,7 +377,7 @@ LIMIT 20
 ### Themes
 ```dataview
 LIST confidence
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = "theme"
 SORT confidence DESC
 ```
@@ -374,7 +385,7 @@ SORT confidence DESC
 ### Patterns
 ```dataview
 LIST confidence
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = "pattern"
 SORT confidence DESC
 ```
@@ -382,7 +393,7 @@ SORT confidence DESC
 ### Opportunities
 ```dataview
 LIST confidence
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = "opportunity"
 SORT confidence DESC
 ```
@@ -390,7 +401,7 @@ SORT confidence DESC
 ### Gaps
 ```dataview
 LIST confidence
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = "gap"
 SORT confidence DESC
 ```
@@ -398,17 +409,17 @@ SORT confidence DESC
 ## High Confidence Insights
 ```dataview
 LIST
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE confidence >= 0.8
 SORT confidence DESC
 ```
 
 ## Dashboard
-→ [[DIKIWI/04-Insights/Insight-Dashboard|View Dashboard]]
+→ [[04-Insight/Insight-Dashboard|View Dashboard]]
 
 ## Navigation
-- [[DIKIWI/03-Knowledge/03-Knowledge-MOC|← Knowledge]]
-- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom →]]
+- [[03-Knowledge/03-Knowledge-MOC|← Knowledge]]
+- [[05-Wisdom/05-Wisdom-MOC|Wisdom →]]
 """,
             5: """---
 tags: [MOC, dikiwi, wisdom, principles]
@@ -419,7 +430,7 @@ tags: [MOC, dikiwi, wisdom, principles]
 ## Principles Library
 ```dataview
 TABLE confidence, supporting_insights
-FROM "DIKIWI/05-Wisdom"
+FROM "05-Wisdom"
 WHERE file.name != "05-Wisdom-MOC"
 SORT confidence DESC
 ```
@@ -427,7 +438,7 @@ SORT confidence DESC
 ## By Domain
 ```dataview
 LIST
-FROM "DIKIWI/05-Wisdom"
+FROM "05-Wisdom"
 WHERE applicable_domain
 GROUP BY applicable_domain
 ```
@@ -435,14 +446,14 @@ GROUP BY applicable_domain
 ## Actionable Principles
 ```dataview
 LIST
-FROM "DIKIWI/05-Wisdom"
+FROM "05-Wisdom"
 WHERE actionable = true
 SORT confidence DESC
 ```
 
 ## Navigation
-- [[DIKIWI/04-Insights/04-Insights-MOC|← Insights]]
-- [[DIKIWI/06-Impact/06-Impact-MOC|Impact →]]
+- [[04-Insight/04-Insight-MOC|← Insights]]
+- [[06-Impact/06-Impact-MOC|Impact →]]
 """,
             6: """---
 tags: [MOC, dikiwi, impact, proposals, tasks]
@@ -453,7 +464,7 @@ tags: [MOC, dikiwi, impact, proposals, tasks]
 ## Active Proposals
 ```dataview
 TABLE proposal_type, priority, due_date
-FROM "DIKIWI/06-Impact"
+FROM "06-Impact"
 WHERE status = "active"
 SORT priority DESC
 ```
@@ -461,20 +472,20 @@ SORT priority DESC
 ## Tasks
 ```tasks
 not done
-path includes DIKIWI/06-Impact
+path includes 06-Impact
 ```
 
 ## By Type
 ```dataview
 TABLE length(rows) as Count
-FROM "DIKIWI/06-Impact"
+FROM "06-Impact"
 WHERE proposal_type
 GROUP BY proposal_type
 ```
 
 ## Navigation
-- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|← Wisdom]]
-- [[DIKIWI/Canvas/DIKIWI-Overview|View Overview Canvas]]
+- [[05-Wisdom/05-Wisdom-MOC|← Wisdom]]
+- [[Canvas/DIKIWI-Overview|View Overview Canvas]]
 """,
         }
 
@@ -510,8 +521,8 @@ tags: ["dikiwi", "data", "{{source}}"]
 - **Extracted**: {{date_created}}
 
 ## Related
-- [[DIKIWI/01-Data/01-Data-MOC|Data Index]]
-- Next Stage: [[DIKIWI/02-Information/02-Information-MOC|Information]]
+- [[01-Data/01-Data-MOC|Data Index]]
+- Next Stage: [[02-Information/02-Information-MOC|Information]]
 """
         (templates_dir / "Data-Template.md").write_text(data_template, encoding="utf-8")
 
@@ -551,15 +562,15 @@ related_domains: [{{domains}}]
 ## Related Insights
 ```dataview
 TABLE insight_type, confidence, date_created
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = this.insight_type AND confidence > 0.7
 SORT confidence DESC
 LIMIT 10
 ```
 
 ## Connections
-- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom Stage]]
-- [[DIKIWI/04-Insights/Insight-Dashboard|Dashboard]]
+- [[05-Wisdom/05-Wisdom-MOC|Wisdom Stage]]
+- [[04-Insight/Insight-Dashboard|Dashboard]]
 """
         (templates_dir / "Insight-Template.md").write_text(insight_template, encoding="utf-8")
 
@@ -572,7 +583,7 @@ LIMIT 10
                 {
                     "id": "input",
                     "type": "text",
-                    "text": "# 00-Input\n\n📥 Raw captures\n\n[[DIKIWI/00-Input/00-Input-MOC|View All]]",
+                    "text": "# 00-Chaos\n\n📥 Raw captures\n\n[[00-Chaos/00-Chaos-MOC|View All]]",
                     "x": 0,
                     "y": 0,
                     "width": 220,
@@ -582,7 +593,7 @@ LIMIT 10
                 {
                     "id": "data",
                     "type": "text",
-                    "text": "# 01-Data\n\n📊 Extracted facts\n\n[[DIKIWI/01-Data/01-Data-MOC|View All]]",
+                    "text": "# 01-Data\n\n📊 Extracted facts\n\n[[01-Data/01-Data-MOC|View All]]",
                     "x": 350,
                     "y": 0,
                     "width": 220,
@@ -592,7 +603,7 @@ LIMIT 10
                 {
                     "id": "information",
                     "type": "text",
-                    "text": "# 02-Information\n\n📝 Classified nodes\n\n[[DIKIWI/02-Information/02-Information-MOC|View All]]",
+                    "text": "# 02-Information\n\n📝 Classified nodes\n\n[[02-Information/02-Information-MOC|View All]]",
                     "x": 700,
                     "y": 0,
                     "width": 220,
@@ -602,7 +613,7 @@ LIMIT 10
                 {
                     "id": "knowledge",
                     "type": "text",
-                    "text": "# 03-Knowledge\n\n🔗 Linked network\n\n[[DIKIWI/03-Knowledge/03-Knowledge-MOC|View All]]",
+                    "text": "# 03-Knowledge\n\n🔗 Linked network\n\n[[03-Knowledge/03-Knowledge-MOC|View All]]",
                     "x": 1050,
                     "y": 0,
                     "width": 220,
@@ -612,7 +623,7 @@ LIMIT 10
                 {
                     "id": "insights",
                     "type": "text",
-                    "text": "# 04-Insights\n\n💡 Pattern detection\n\n[[DIKIWI/04-Insights/04-Insights-MOC|View All]]\n\n[[DIKIWI/04-Insights/Insight-Dashboard|📊 Dashboard]]",
+                    "text": "# 04-Insight\n\n💡 Pattern detection\n\n[[04-Insight/04-Insight-MOC|View All]]\n\n[[04-Insight/Insight-Dashboard|📊 Dashboard]]",
                     "x": 700,
                     "y": 350,
                     "width": 220,
@@ -622,7 +633,7 @@ LIMIT 10
                 {
                     "id": "wisdom",
                     "type": "text",
-                    "text": "# 05-Wisdom\n\n🧠 Synthesized principles\n\n[[DIKIWI/05-Wisdom/05-Wisdom-MOC|View All]]",
+                    "text": "# 05-Wisdom\n\n🧠 Synthesized principles\n\n[[05-Wisdom/05-Wisdom-MOC|View All]]",
                     "x": 350,
                     "y": 350,
                     "width": 220,
@@ -632,7 +643,7 @@ LIMIT 10
                 {
                     "id": "impact",
                     "type": "text",
-                    "text": "# 06-Impact\n\n🚀 Actionable proposals\n\n[[DIKIWI/06-Impact/06-Impact-MOC|View All]]",
+                    "text": "# 06-Impact\n\n🚀 Actionable proposals\n\n[[06-Impact/06-Impact-MOC|View All]]",
                     "x": 0,
                     "y": 350,
                     "width": 220,
@@ -877,7 +888,7 @@ LIMIT 10
             *(([f"- {k}" for k in from_knowledge]) or ["- *(no linked knowledge notes)*"]),
         ])
 
-        return self._write_dikiwi_note("04-Insights", dikiwi_id, title, fm, body, source_paths)
+        return self._write_dikiwi_note("04-Insight", dikiwi_id, title, fm, body, source_paths)
 
     async def write_wisdom_note(
         self,
@@ -899,7 +910,7 @@ LIMIT 10
         grounded_in = [f"[[{iid}]]" for iid in insight_note_ids if iid]
         deduped_tags = _dedupe_preserve_order(["wisdom"] + tags)
 
-        zettel_dir = self.zettelkasten_root / datetime.now(timezone.utc).strftime("%Y-%m")
+        zettel_dir = self.vault_path / "05-Wisdom" / datetime.now(timezone.utc).strftime("%Y-%m")
         zettel_dir.mkdir(parents=True, exist_ok=True)
         safe_title = _slugify_title(title, max_length=80)
         filename = f"{dikiwi_id}-{safe_title}.md"
@@ -978,11 +989,11 @@ LIMIT 10
         return self._write_dikiwi_note("06-Impact", dikiwi_id, title, fm, body, source_paths)
 
     async def write_input(self, message_id: str, content: str, source: str) -> Path | None:
-        """Write raw input to 00-Input."""
+        """Write raw input to 00-Chaos."""
         if self.zettelkasten_only:
             return None
 
-        month_dir = self._get_month_dir("00-Input")
+        month_dir = self._get_month_dir("00-Chaos")
         note_path = month_dir / f"{datetime.now().strftime('%Y-%m-%d-%H%M%S')}-{message_id}.md"
 
         frontmatter = {
@@ -993,7 +1004,7 @@ LIMIT 10
             "tags": ["dikiwi", "input", source],
         }
 
-        content = f"{self._format_frontmatter(frontmatter)}\n\n# Input: {message_id[:8]}\n\n{content}\n\n---\n\n→ [[DIKIWI/01-Data/01-Data-MOC|Process to Data]]"
+        content = f"{self._format_frontmatter(frontmatter)}\n\n# Input: {message_id[:8]}\n\n{content}\n\n---\n\n→ [[01-Data/01-Data-MOC|Process to Data]]"
 
         note_path.write_text(content, encoding="utf-8")
         logger.info("Wrote input: %s", note_path)
@@ -1040,8 +1051,8 @@ LIMIT 10
                 f"- **Source**: {source}",
                 f"",
                 f"## Navigation",
-                f"- [[DIKIWI/01-Data/01-Data-MOC|Data Index]]",
-                f"- [[DIKIWI/02-Information/02-Information-MOC|→ Information]]",
+                f"- [[01-Data/01-Data-MOC|Data Index]]",
+                f"- [[02-Information/02-Information-MOC|→ Information]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1094,7 +1105,7 @@ LIMIT 10
 
 ---
 
-→ [[DIKIWI/03-Knowledge/03-Knowledge-MOC|Link to Knowledge]]
+→ [[03-Knowledge/03-Knowledge-MOC|Link to Knowledge]]
 """
             note_path.write_text(note_content, encoding="utf-8")
             paths.append(note_path)
@@ -1151,7 +1162,7 @@ LIMIT 10
 
 ---
 
-→ [[DIKIWI/04-Insights/04-Insights-MOC|Extract Insights]]
+→ [[04-Insight/04-Insight-MOC|Extract Insights]]
 """
             note_path.write_text(note_content, encoding="utf-8")
             paths.append(note_path)
@@ -1165,11 +1176,11 @@ LIMIT 10
         insights: list[Insight_v2],
         source_title: str,
     ) -> list[Path]:
-        """Write insights to 04-Insights with rich Dataview metadata."""
+        """Write insights to 04-Insight with rich Dataview metadata."""
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("04-Insights")
+        month_dir = self._get_month_dir("04-Insight")
         paths = []
 
         for i, insight in enumerate(insights):
@@ -1180,7 +1191,7 @@ LIMIT 10
                 "insight_id": f"{message_id}-{i}",
                 "insight_type": insight.insight_type,
                 "confidence": round(insight.confidence, 2),
-                "source_message": f"DIKIWI/00-Input/{message_id}",
+                "source_message": f"00-Chaos/{message_id}",
                 "source_title": source_title,
                 "date_created": datetime.now(timezone.utc).isoformat(),
                 "tags": [
@@ -1220,15 +1231,15 @@ LIMIT 10
                 f"## Related Insights",
                 f"```dataview",
                 f"TABLE insight_type, confidence",
-                f'FROM "DIKIWI/04-Insights"',
+                f'FROM "04-Insight"',
                 f"WHERE insight_type = this.insight_type AND confidence > 0.7",
                 f"SORT confidence DESC",
                 f"LIMIT 10",
                 f"```",
                 f"",
                 f"## Navigation",
-                f"- [[DIKIWI/04-Insights/04-Insights-MOC|Insights Index]]",
-                f"- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|→ Wisdom]]",
+                f"- [[04-Insight/04-Insight-MOC|Insights Index]]",
+                f"- [[05-Wisdom/05-Wisdom-MOC|→ Wisdom]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1288,8 +1299,8 @@ LIMIT 10
                 f"---",
                 f"",
                 f"## Navigation",
-                f"- [[DIKIWI/05-Wisdom/05-Wisdom-MOC|Wisdom Library]]",
-                f"- [[DIKIWI/06-Impact/06-Impact-MOC|→ Impact]]",
+                f"- [[05-Wisdom/05-Wisdom-MOC|Wisdom Library]]",
+                f"- [[06-Impact/06-Impact-MOC|→ Impact]]",
             ])
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1358,8 +1369,8 @@ LIMIT 10
                 f"---",
                 f"",
                 f"## Navigation",
-                f"- [[DIKIWI/06-Impact/06-Impact-MOC|Proposals Queue]]",
-                f"- [[DIKIWI/Canvas/DIKIWI-Overview|📊 Overview Canvas]]",
+                f"- [[06-Impact/06-Impact-MOC|Proposals Queue]]",
+                f"- [[Canvas/DIKIWI-Overview|📊 Overview Canvas]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1386,7 +1397,8 @@ LIMIT 10
         - Full content (300-500 words)
         - Tags and links sections
         """
-        zettel_dir = self.zettelkasten_root
+        folder = self.LEVEL_TO_FOLDER.get(dikiwi_level, "05-Wisdom")
+        zettel_dir = self.vault_path / folder
         zettel_dir.mkdir(parents=True, exist_ok=True)
 
         # Create date-based subfolder for organization
@@ -1501,7 +1513,7 @@ LIMIT 10
 
     async def create_insight_dashboard(self) -> Path:
         """Create a comprehensive insight dashboard."""
-        dashboard_path = self.dikiwi_root / "04-Insights" / "Insight-Dashboard.md"
+        dashboard_path = self.dikiwi_root / "04-Insight" / "Insight-Dashboard.md"
 
         content = """---
 tags: [dashboard, dikiwi, insights]
@@ -1511,9 +1523,9 @@ tags: [dashboard, dikiwi, insights]
 
 ## Overview Stats
 ```dataviewjs
-const insights = dv.pages('"DIKIWI/04-Insights"').where(p => p.insight_type);
-const wisdom = dv.pages('"DIKIWI/05-Wisdom"').where(p => p.dikiwi_stage == "wisdom");
-const impact = dv.pages('"DIKIWI/06-Impact"').where(p => p.dikiwi_stage == "impact");
+const insights = dv.pages('"04-Insight"').where(p => p.insight_type);
+const wisdom = dv.pages('"05-Wisdom"').where(p => p.dikiwi_stage == "wisdom");
+const impact = dv.pages('"06-Impact"').where(p => p.dikiwi_stage == "impact");
 
 const highConfidence = insights.where(p => p.confidence >= 0.8).length;
 const medConfidence = insights.where(p => p.confidence >= 0.6 && p.confidence < 0.8).length;
@@ -1531,7 +1543,7 @@ dv.table(["Metric", "Count"], [
 
 ## Insights by Type
 ```dataviewjs
-const byType = dv.pages('"DIKIWI/04-Insights"')
+const byType = dv.pages('"04-Insight"')
   .groupBy(p => p.insight_type)
   .sort(g => g.rows.length, 'desc');
 
@@ -1547,7 +1559,7 @@ dv.table(["Type", "Count", "Avg Confidence"],
 ## Recent High-Confidence Insights
 ```dataview
 TABLE insight_type, confidence, source_title
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE confidence >= 0.8
 SORT date_created DESC
 LIMIT 10
@@ -1556,7 +1568,7 @@ LIMIT 10
 ## Top Opportunities
 ```dataview
 TABLE confidence, source_title
-FROM "DIKIWI/04-Insights"
+FROM "04-Insight"
 WHERE insight_type = "opportunity"
 SORT confidence DESC
 LIMIT 5
@@ -1565,7 +1577,7 @@ LIMIT 5
 ## Active Proposals
 ```dataview
 TABLE proposal_type, priority
-FROM "DIKIWI/06-Impact"
+FROM "06-Impact"
 WHERE status = "active"
 SORT priority DESC
 ```
@@ -1573,7 +1585,7 @@ SORT priority DESC
 ## Tasks
 ```tasks
 not done
-path includes DIKIWI/06-Impact
+path includes 06-Impact
 ```
 
 ---

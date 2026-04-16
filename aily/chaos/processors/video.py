@@ -358,4 +358,4 @@ class VideoProcessor(ContentProcessor):
     def can_process(self, file_path: Path) -> bool:
         """Check if file is a video."""
         ext = file_path.suffix.lower()
-        return ext in self.config.supported_formats
+        return ext.lstrip(".") in self.config.video.supported_formats
