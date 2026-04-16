@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     feishu_encrypt_key: str = ""
     obsidian_rest_api_key: str = ""
     obsidian_vault_path: str = ""
-    dikiwi_vault_path: str = "/Users/luzi/Documents/aily"
+    dikiwi_vault_path: str = "/Users/luzi/Documents/aily/aily"
     obsidian_rest_api_port: int = 27123
     llm_provider: str = "zhipu"
     llm_api_key: str = ""
