@@ -44,13 +44,16 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
     return result
 
 
-def _slugify_title(title: str, max_length: int = 160) -> str:
-    """Create a readable filesystem-safe slug without aggressively truncating titles."""
+def _slugify_title(title: str, max_length: int = 300) -> str:
+    """Create a readable filesystem-safe slug. Uses underscores for spaces."""
     cleaned = "".join(c for c in str(title) if c.isalnum() or c in " -_").strip()
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         return "Untitled"
-    return cleaned[:max_length].rstrip().replace(" ", "-")
+    cleaned = cleaned.replace(" ", "_")
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned[:max_length].rstrip("_")
 
 
 class DikiwiObsidianWriter:
@@ -96,7 +99,7 @@ class DikiwiObsidianWriter:
     ) -> None:
         self.vault_path = Path(vault_path)
         self.dikiwi_root = self.vault_path / folder_prefix if folder_prefix else self.vault_path
-        self.zettelkasten_maps_root = self.vault_path / "00-Chaos"
+        self.zettelkasten_maps_root = self.vault_path / "99-MOC"
         self.zettelkasten_only = zettelkasten_only
         self._ensure_zettelkasten_structure()
 
@@ -112,6 +115,7 @@ class DikiwiObsidianWriter:
             (self.vault_path / stage_name).mkdir(parents=True, exist_ok=True)
         (self.vault_path / "07-Proposal").mkdir(parents=True, exist_ok=True)
         (self.vault_path / "08-Entrepreneurship").mkdir(parents=True, exist_ok=True)
+        (self.vault_path / "99-MOC").mkdir(parents=True, exist_ok=True)
 
         index_path = self.vault_path / "00-Chaos" / "00 Zettelkasten Index.md"
         if not index_path.exists():
@@ -663,12 +667,12 @@ LIMIT 10
 
         canvas_path.write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")
 
-    def _get_month_dir(self, stage: str) -> Path:
-        """Get or create month-based directory for a stage."""
+    def _get_day_dir(self, stage: str) -> Path:
+        """Get or create day-based directory for a stage."""
         now = datetime.now(timezone.utc)
-        month_dir = self.dikiwi_root / stage / f"{now.year}-{now.month:02d}"
-        month_dir.mkdir(parents=True, exist_ok=True)
-        return month_dir
+        day_dir = self.dikiwi_root / stage / f"{now.year}-{now.month:02d}-{now.day:02d}"
+        day_dir.mkdir(parents=True, exist_ok=True)
+        return day_dir
 
     def _format_frontmatter(self, data: dict[str, Any]) -> str:
         """Format dict as YAML frontmatter."""
@@ -706,10 +710,10 @@ LIMIT 10
         source_paths: list[str] | None = None,
     ) -> str:
         """Write a note to a DIKIWI stage folder. Returns dikiwi_id for linking."""
-        month_dir = self._get_month_dir(stage_folder)
-        safe_title = _slugify_title(title, max_length=80)
+        day_dir = self._get_day_dir(stage_folder)
+        safe_title = _slugify_title(title)
         filename = f"{dikiwi_id}-{safe_title}.md"
-        path = month_dir / filename
+        path = day_dir / filename
 
         fm: dict[str, Any] = {
             "dikiwi_id": dikiwi_id,
@@ -910,9 +914,8 @@ LIMIT 10
         grounded_in = [f"[[{iid}]]" for iid in insight_note_ids if iid]
         deduped_tags = _dedupe_preserve_order(["wisdom"] + tags)
 
-        zettel_dir = self.vault_path / "05-Wisdom" / datetime.now(timezone.utc).strftime("%Y-%m")
-        zettel_dir.mkdir(parents=True, exist_ok=True)
-        safe_title = _slugify_title(title, max_length=80)
+        zettel_dir = self._get_day_dir("05-Wisdom")
+        safe_title = _slugify_title(title, max_length=200)
         filename = f"{dikiwi_id}-{safe_title}.md"
         path = zettel_dir / filename
 
@@ -993,8 +996,8 @@ LIMIT 10
         if self.zettelkasten_only:
             return None
 
-        month_dir = self._get_month_dir("00-Chaos")
-        note_path = month_dir / f"{datetime.now().strftime('%Y-%m-%d-%H%M%S')}-{message_id}.md"
+        day_dir = self._get_day_dir("00-Chaos")
+        note_path = day_dir / f"{datetime.now().strftime('%Y-%m-%d-%H%M%S')}-{message_id}.md"
 
         frontmatter = {
             "dikiwi_stage": "input",
@@ -1010,6 +1013,36 @@ LIMIT 10
         logger.info("Wrote input: %s", note_path)
         return note_path
 
+    async def write_note(
+        self,
+        title: str,
+        markdown: str,
+        source_url: str = "",
+    ) -> str:
+        """Write a generic note to the vault (compatible with ObsidianWriter interface)."""
+        safe_title = _slugify_title(title).replace("/", "_").replace("..", "_")[:120]
+
+        # Route entrepreneur notes to dedicated folder
+        if source_url and source_url.startswith("aily://entrepreneur"):
+            note_dir = self._get_day_dir("08-Entrepreneurship")
+        else:
+            note_dir = self.vault_path
+        path = note_dir / f"{safe_title}.md"
+
+        if source_url:
+            frontmatter = {
+                "title": title,
+                "source_url": source_url,
+                "date_created": datetime.now(timezone.utc).isoformat(),
+            }
+            content = f"{self._format_frontmatter(frontmatter)}\n\n{markdown}\n"
+        else:
+            content = markdown
+
+        path.write_text(content, encoding="utf-8")
+        logger.info("Wrote note: %s", path)
+        return str(path)
+
     async def write_data_points(
         self,
         message_id: str,
@@ -1020,11 +1053,11 @@ LIMIT 10
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("01-Data")
+        day_dir = self._get_day_dir("01-Data")
         paths = []
 
         for i, dp in enumerate(data_points):
-            note_path = month_dir / f"data-{message_id}-{i}.md"
+            note_path = day_dir / f"data-{message_id}-{i}.md"
 
             frontmatter = {
                 "dikiwi_stage": "data",
@@ -1070,11 +1103,11 @@ LIMIT 10
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("02-Information")
+        day_dir = self._get_day_dir("02-Information")
         paths = []
 
         for i, node in enumerate(nodes):
-            note_path = month_dir / f"info-{message_id}-{i}.md"
+            note_path = day_dir / f"info-{message_id}-{i}.md"
 
             # Handle both dataclass objects and dicts
             if isinstance(node, dict):
@@ -1122,11 +1155,11 @@ LIMIT 10
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("03-Knowledge")
+        day_dir = self._get_day_dir("03-Knowledge")
         paths = []
 
         for i, relation in enumerate(relations):
-            note_path = month_dir / f"knowledge-{message_id}-{i}.md"
+            note_path = day_dir / f"knowledge-{message_id}-{i}.md"
 
             # Handle both dataclass objects and dicts
             if isinstance(relation, dict):
@@ -1180,11 +1213,11 @@ LIMIT 10
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("04-Insight")
+        day_dir = self._get_day_dir("04-Insight")
         paths = []
 
         for i, insight in enumerate(insights):
-            note_path = month_dir / f"insight-{message_id}-{i}.md"
+            note_path = day_dir / f"insight-{message_id}-{i}.md"
 
             frontmatter = {
                 "dikiwi_stage": "insight",
@@ -1254,11 +1287,11 @@ LIMIT 10
         wisdom_items: list[Any],
     ) -> list[Path]:
         """Write wisdom principles to 05-Wisdom."""
-        month_dir = self._get_month_dir("05-Wisdom")
+        day_dir = self._get_day_dir("05-Wisdom")
         paths = []
 
         for i, wisdom in enumerate(wisdom_items):
-            note_path = month_dir / f"wisdom-{message_id}-{i}.md"
+            note_path = day_dir / f"wisdom-{message_id}-{i}.md"
 
             # Handle both dataclass objects and dicts
             if isinstance(wisdom, dict):
@@ -1318,11 +1351,11 @@ LIMIT 10
         if self.zettelkasten_only:
             return []
 
-        month_dir = self._get_month_dir("06-Impact")
+        day_dir = self._get_day_dir("06-Impact")
         paths = []
 
         for i, impact in enumerate(impacts):
-            note_path = month_dir / f"impact-{message_id}-{i}.md"
+            note_path = day_dir / f"impact-{message_id}-{i}.md"
 
             # Handle both dataclass objects and dicts
             if isinstance(impact, dict):
@@ -1398,13 +1431,7 @@ LIMIT 10
         - Tags and links sections
         """
         folder = self.LEVEL_TO_FOLDER.get(dikiwi_level, "05-Wisdom")
-        zettel_dir = self.vault_path / folder
-        zettel_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create date-based subfolder for organization
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m")
-        date_dir = zettel_dir / date_str
-        date_dir.mkdir(exist_ok=True)
+        date_dir = self._get_day_dir(folder)
 
         # Sanitize title for filename
         safe_title = _slugify_title(title)

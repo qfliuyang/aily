@@ -23,6 +23,7 @@ class ProposalStatus(Enum):
     """Status of a proposal in its lifecycle."""
 
     PENDING = auto()  # Generated but not yet delivered
+    PROPOSED = auto()  # Proposed by a thinking framework
     DELIVERED = auto()  # Sent to Feishu/Obsidian
     ARCHIVED = auto()  # Moved to archive after 30 days
     REJECTED = auto()  # Below quality threshold

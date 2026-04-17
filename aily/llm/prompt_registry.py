@@ -86,44 +86,44 @@ class DikiwiPromptRegistry:
 {
   "insights": [
     {
-      "type": "theme|contradiction|opportunity|gap|pattern|tension",
-      "description": "Clear description of what you found",
+      "type": "theme|contradiction|opportunity|gap|pattern|tension|path",
+      "description": "Clear description of the short path formed by linked information. Show how 2-4 connected nodes reveal something neither node shows alone.",
       "confidence": 0.0-1.0,
       "related_node_indices": [0, 1, 2],
-      "significance": "Why this matters"
+      "significance": "Why traversing this small path matters"
     }
   ],
-  "synthesis": "Overall summary of what this knowledge network represents",
-  "knowledge_gaps": ["Areas where more information would be valuable"]
+  "synthesis": "Overall summary of what this knowledge network represents as a set of short traversable paths",
+  "knowledge_gaps": ["Areas where more information would create longer paths"]
 }"""
 
     WISDOM_CONTRACT = """Respond with JSON:
 {
   "zettels": [
     {
-      "title": "Full sentence describing the core idea",
-      "content": "Complete markdown content (150-400 words) in full paragraphs focused on one idea",
+      "title": "Full sentence describing the core idea or long-path principle",
+      "content": "Complete markdown content (150-400 words) in full paragraphs. Synthesize several paths and long paths into a more complex graph structure. Show how multiple insights interlock into durable principles.",
       "tags": ["domain", "concept", "application"],
-      "links_to": ["Related concept 1", "Related concept 2", "Contrasting idea"],
+      "links_to": ["Related concept 1", "Related concept 2", "Contrasting idea", "Long-path principle"],
       "confidence": 0.0-1.0,
       "source_evidence": [
         "Specific information fragment from the source that supports this note"
       ]
     }
   ],
-  "note_strategy": "Explain how you split the source into separate permanent notes"
+  "note_strategy": "Explain how you split the source into separate permanent notes and how they form interlocking paths"
 }"""
 
     IMPACT_CONTRACT = """Respond with JSON:
 {
   "impacts": [
     {
-      "type": "innovation|opportunity|action|research|exploration",
-      "description": "Concrete actionable proposal",
+      "type": "innovation|opportunity|action|research|exploration|breakthrough",
+      "description": "High-leverage actionable proposal — the center that could explode as the next big thing",
       "priority": "high|medium|low",
-      "rationale": "Why this follows from the wisdom",
+      "rationale": "Why this follows from the wisdom and why it has explosive potential",
       "effort_estimate": "small|medium|large",
-      "potential_value": "Brief description of expected value"
+      "potential_value": "Brief description of expected value and explosive upside"
     }
   ]
 }"""
@@ -423,11 +423,12 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
     ) -> list[dict[str, str]]:
         spec = PromptSpec(
             stage="INSIGHT",
-            role="Pattern Synthesizer",
-            objective="Discover non-obvious themes, contradictions, tensions, and gaps that emerge from connected knowledge.",
+            role="Path Synthesizer",
+            objective="Discover short paths formed by linked information. Traverse 2-4 connected nodes to find what none of them reveal alone.",
             output_contract=cls.INSIGHT_CONTRACT,
             guidelines=(
-                "Look for emergent understanding, not restatements.",
+                "An insight is a traversable short path across linked information, not a restatement of a single node.",
+                "Show how connected nodes produce emergent understanding.",
                 "Prefer insights that would justify a permanent note.",
                 "Use contradictions and tensions to deepen the slip-box.",
             ),
@@ -450,17 +451,18 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
         spec = PromptSpec(
             stage="WISDOM",
             role="Zettelkasten Author",
-            objective="Turn source-backed information and emerging insights into multiple high-quality permanent notes that can live in Obsidian for years.",
+            objective="Synthesize several paths and long paths into a more complex graph structure. Turn source-backed information and short-path insights into durable, interlocking permanent notes.",
             output_contract=cls.WISDOM_CONTRACT,
             guidelines=(
                 "Do not produce a source summary masquerading as a note.",
-                "One clear idea per note, but develop it fully.",
+                "Each note should synthesize multiple short paths into a longer, more complex principle.",
                 "Split long sources into multiple notes when they contain multiple mechanisms, claims, examples, workflows, constraints, tradeoffs, or definitions.",
                 "Write in your own words, not copied fragments.",
                 "Make each note timeless, standalone, and link-worthy.",
                 "Anchor each note in the source material and preserve its useful informational content.",
                 "Prefer several atomic notes over one blended synthesis note.",
                 "Include examples, scope, and connections to broader principles when they strengthen the note.",
+                "Wisdom is where short paths interlock into a dense, reusable graph structure.",
             ),
             context_sections=(
                 ("Insights", insights_desc or "No insights available. You must still create permanent notes from the source-backed information when possible."),
@@ -484,12 +486,14 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
     ) -> list[dict[str, str]]:
         spec = PromptSpec(
             stage="IMPACT",
-            role="Action Strategist",
-            objective="Convert durable knowledge into concrete next actions without losing fidelity to the underlying principles.",
+            role="Breakthrough Strategist",
+            objective="Identify the center that will explode as the next big thing. Convert the dense graph of wisdom into high-leverage, breakthrough actions.",
             output_contract=cls.IMPACT_CONTRACT,
             guidelines=(
                 "Base actions on the permanent notes, not on raw input.",
-                "Prefer proposals that can compound the knowledge system.",
+                "Look for the single highest-leverage point where action could create explosive, compounding effects.",
+                "Prefer proposals that feel like the center of a growing force, not incremental improvements.",
+                "An impact is not just an action — it is the ignition point for what comes next.",
             ),
             context_sections=(
                 ("Zettelkasten Principles", zettels_desc or "No zettels available."),

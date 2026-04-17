@@ -193,8 +193,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[1st Principles] {response.get('title', 'Fundamental Innovation')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
                 metadata={
@@ -249,8 +249,8 @@ Format as JSON:
 
             return Proposal(
                 title="[1st Principles] Strategic Synthesis",
-                description=response.get("synthesis", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("synthesis", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.8,
                 metadata={

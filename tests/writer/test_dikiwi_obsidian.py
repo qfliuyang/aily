@@ -23,7 +23,7 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
     )
 
     index_path = tmp_path / "00-Chaos" / "00 Zettelkasten Index.md"
-    moc_path = tmp_path / "00-Chaos" / "attention.md"
+    moc_path = tmp_path / "99-MOC" / "attention.md"
 
     assert note_path.exists()
     assert index_path.exists()

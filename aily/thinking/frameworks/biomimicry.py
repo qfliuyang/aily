@@ -179,8 +179,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[Bio-{level_key.title()}] {response.get('title', 'Nature-Inspired Solution')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.7,
                 metadata={

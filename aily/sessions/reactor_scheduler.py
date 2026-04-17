@@ -53,7 +53,6 @@ class NozzleConfig:
     max_proposals_per_session: int = 10
     diversity_threshold: float = 0.7
     enabled_methods: set = field(default_factory=lambda: {
-        InnovationMethod.TRIZ,
         InnovationMethod.SIT,
         InnovationMethod.SIX_HATS,
         InnovationMethod.SCAMPER,
@@ -109,8 +108,8 @@ class ReactorScheduler(BaseMindScheduler):
                 from aily.thinking.frameworks.triz import TrizAnalyzer
                 analyzer = TrizAnalyzer(self.llm_client)
             elif method == InnovationMethod.SIT:
-                from aily.thinking.frameworks.sit import SitAnalyzer
-                analyzer = SitAnalyzer(self.llm_client)
+                from aily.thinking.frameworks.sit import SITAnalyzer
+                analyzer = SITAnalyzer(self.llm_client)
             elif method == InnovationMethod.SIX_HATS:
                 from aily.thinking.frameworks.six_hats import SixHatsAnalyzer
                 analyzer = SixHatsAnalyzer(self.llm_client)

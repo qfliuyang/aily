@@ -134,8 +134,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[SIT-{operator['name']}] {response.get('title', 'Untitled')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
                 metadata={

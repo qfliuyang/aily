@@ -30,8 +30,16 @@ class PDFProcessor(ContentProcessor):
         try:
             # Method 1: Docling (best quality, handles layout/tables/images)
             docling_result = await self._call_docling(file_path)
-            if docling_result:
+            if docling_result and not self._is_docling_poor_quality(docling_result):
                 return docling_result
+
+            if docling_result:
+                logger.warning(
+                    "Docling result for %s was poor quality (%d words, %.2f words/line); using fallback",
+                    file_path.name,
+                    len(docling_result.text.split()),
+                    self._avg_words_per_line(docling_result.text),
+                )
 
             # Method 2: Try GLM-OCR API
             ocr_result = await self._call_glm_ocr(file_path)
@@ -65,6 +73,23 @@ class PDFProcessor(ContentProcessor):
         except Exception as e:
             logger.exception("Failed to process PDF: %s", e)
             return None
+
+    def _avg_words_per_line(self, text: str) -> float:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return 0.0
+        return sum(len(line.split()) for line in lines) / len(lines)
+
+    def _is_docling_poor_quality(self, result: ExtractedContentMultimodal) -> bool:
+        """Check if Docling output is too short or too fragmented to be useful."""
+        text = result.text or ""
+        word_count = len(text.split())
+        if word_count < 100:
+            return True
+        avg_wpl = self._avg_words_per_line(text)
+        if avg_wpl < 1.5:
+            return True
+        return False
 
     async def _call_docling(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Primary extraction using Docling."""

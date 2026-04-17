@@ -180,8 +180,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[Morph] {response.get('title', 'Config')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=confidence,
                 metadata={

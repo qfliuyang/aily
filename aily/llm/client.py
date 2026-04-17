@@ -38,6 +38,7 @@ class LLMClient:
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self._pace_lock = asyncio.Lock()
         self._last_request_started = 0.0
+        self.usage_stats = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
 
     async def _wait_for_rate_window(self) -> None:
         """Ensure request starts are spaced out to avoid bursty imports."""
@@ -123,7 +124,15 @@ class LLMClient:
         if not choices:
             raise LLMError("Empty response from LLM")
         content = choices[0].get("message", {}).get("content", "")
+        usage = data.get("usage", {})
+        self.usage_stats["prompt_tokens"] += usage.get("prompt_tokens", 0)
+        self.usage_stats["completion_tokens"] += usage.get("completion_tokens", 0)
+        self.usage_stats["total_tokens"] += usage.get("total_tokens", 0)
+        self.usage_stats["calls"] += 1
         return content.strip()
+
+    def get_usage_stats(self) -> dict[str, int]:
+        return self.usage_stats.copy()
 
     async def chat_json(
         self,

@@ -130,8 +130,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[{letter}] {response.get('title', 'Untitled')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.7,
                 metadata={

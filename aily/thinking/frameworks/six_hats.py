@@ -151,8 +151,8 @@ Format as JSON:
             if hat_key == "green":
                 return Proposal(
                     title=f"[{hat['name']}] {response.get('innovation_title', 'Creative Idea')}",
-                    description=response.get("innovation_description", response.get("perspective", "")),
-                    type=ProposalType.INNOVATION,
+                    content=response.get("innovation_description", response.get("perspective", "")),
+                    proposal_type=ProposalType.INNOVATION,
                     status=ProposalStatus.PROPOSED,
                     confidence=0.7,
                     metadata={
@@ -211,8 +211,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[Blue Hat - Synthesis] {response.get('title', 'Strategic Direction')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.8,
                 metadata={

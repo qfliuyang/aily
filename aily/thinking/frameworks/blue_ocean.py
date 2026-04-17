@@ -149,8 +149,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[Blue Ocean - {action_key.title()}] {response.get('title', 'Untitled')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
                 metadata={
@@ -199,8 +199,8 @@ Format as JSON:
 
             return Proposal(
                 title=f"[Six Paths - {path_info['path']}] {response.get('title', 'Untitled')}",
-                description=response.get("description", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("description", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.7,
                 metadata={
@@ -254,8 +254,8 @@ Format as JSON:
 
             return Proposal(
                 title="[Strategy Canvas] Blue Ocean Synthesis",
-                description=response.get("synthesis", ""),
-                type=ProposalType.INNOVATION,
+                content=response.get("synthesis", ""),
+                proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.8,
                 metadata={
