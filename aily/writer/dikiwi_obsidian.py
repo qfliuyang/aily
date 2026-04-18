@@ -1147,14 +1147,17 @@ LIMIT 10
         message_id: str,
         chunks: list[str],
         source: str,
-    ) -> list[Path]:
+    ) -> list[str]:
         """Write raw unclassified content chunks to 01-Data.
 
         These are atomic segments of the original source material, not
         LLM-extracted concepts. Classification happens in 02-Information.
+
+        Returns a list of dikiwi_ids (one per chunk written) so downstream
+        stages can link back to the raw data.
         """
         day_dir = self._get_day_dir("01-Data")
-        paths = []
+        ids: list[str] = []
 
         for i, chunk in enumerate(chunks):
             chunk = chunk.strip()
@@ -1179,7 +1182,11 @@ LIMIT 10
                 slug = f"chunk-{i}"
             # Prefix with message_id to avoid collisions across pipelines
             safe_id = f"{message_id[:8]}_{slug}-{i}"
-            note_path = day_dir / f"data-{safe_id}.md"
+            dikiwi_id = f"data-{safe_id}"
+            note_path = day_dir / f"{dikiwi_id}.md"
+
+            # Register title for link resolution
+            self._id_to_title[dikiwi_id] = slug
 
             frontmatter = {
                 "dikiwi_stage": "data",
@@ -1208,10 +1215,10 @@ LIMIT 10
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
-            paths.append(note_path)
+            ids.append(dikiwi_id)
 
-        logger.info("Wrote %d raw data chunks for %s", len(paths), message_id[:8])
-        return paths
+        logger.info("Wrote %d raw data chunks for %s", len(ids), message_id[:8])
+        return ids
 
     async def write_information_nodes(
         self,

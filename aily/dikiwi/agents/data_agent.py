@@ -109,15 +109,14 @@ class DataAgent(DikiwiAgent):
             raw_chunks = self._chunk_content(content, chunk_size=800)
 
             # Write raw unclassified chunks to 01-Data
-            data_note_paths: list[str] = []
+            data_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer:
                 try:
-                    paths = await ctx.dikiwi_obsidian_writer.write_raw_data_chunks(
+                    data_note_ids = await ctx.dikiwi_obsidian_writer.write_raw_data_chunks(
                         message_id=ctx.pipeline_id,
                         chunks=raw_chunks,
                         source=drop.source,
                     )
-                    data_note_paths = [str(p) for p in paths]
                 except Exception as e:
                     logger.warning("[DIKIWI] Failed to write raw data chunks: %s", e)
 
@@ -131,7 +130,8 @@ class DataAgent(DikiwiAgent):
                     "data_points": data_points,
                     "doc_title": doc_title,
                     "doc_summary": doc_summary,
-                    "data_note_paths": data_note_paths,
+                    "data_note_id": data_note_ids[0] if data_note_ids else "",
+                    "data_note_ids": data_note_ids,
                 },
             )
 
