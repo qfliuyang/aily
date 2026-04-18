@@ -55,14 +55,21 @@ All three are wired up and started in `aily/main.py`'s `lifespan()` context mana
 
 ### LLM routing
 
-`aily/llm/provider_routes.py` → `PrimaryLLMRoute.from_settings()` builds the app-wide `LLMClient`. Default provider is **Zhipu AI (GLM-4-flash)**. The `LLMRouter` in `aily/llm/llm_router.py` handles rate limiting (configurable via `llm_max_concurrency` / `llm_min_interval_seconds`).
+`aily/llm/provider_routes.py` → `PrimaryLLMRoute.from_settings()` builds the app-wide `LLMClient`. Default provider is **Kimi (kimi-k2.5)**. The `LLMRouter` in `aily/llm/llm_router.py` handles rate limiting (configurable via `llm_max_concurrency` / `llm_min_interval_seconds`).
 
 ### Output
 
-All notes go to **Obsidian** via its Local REST API (`aily/writer/obsidian.py`). The vault layout is:
-- `10-Knowledge/` — Zettelkasten notes
-- `20-Innovation/` — Innolaval proposals
-- `30-Business/` — Entrepreneur analyses
+All notes go to **Obsidian** via its Local REST API (`aily/writer/obsidian.py`). The DIKIWI vault layout is:
+- `00-Chaos/` — Raw input transcripts
+- `01-Data/` — Unclassified raw content chunks
+- `02-Information/` — Classified information nodes
+- `03-Knowledge/` — Connected knowledge relationships
+- `04-Insight/` — Pattern insights
+- `05-Wisdom/` — Synthesized wisdom zettels
+- `06-Impact/` — Action items
+- `07-Proposal/` — Innovation proposals
+- `08-Entrepreneurship/` — Business evaluations
+- `99-MOC/` — Maps of Content and indexes
 
 ### Key subsystems at a glance
 
@@ -80,7 +87,7 @@ All notes go to **Obsidian** via its Local REST API (`aily/writer/obsidian.py`).
 ### Required env vars
 
 ```
-ZHIPU_API_KEY          # Zhipu AI (primary LLM)
+KIMI_API_KEY           # Kimi / Moonshot AI (primary LLM)
 OBSIDIAN_VAULT_PATH    # absolute path to Obsidian vault
 OBSIDIAN_REST_API_KEY  # Obsidian Local REST API plugin key
 FEISHU_APP_ID          # Feishu bot credentials
