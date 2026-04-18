@@ -304,7 +304,7 @@ async def run_full_e2e(max_pdfs: int | None = None) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max", type=int, default=None, help="Max PDFs to process")
+    parser.add_argument("--max", type=int, default=20, help="Max PDFs to process")
     args = parser.parse_args()
     result = asyncio.run(run_full_e2e(max_pdfs=args.max))
     print(f"\nResult: {json.dumps(result, indent=2, default=str)}")

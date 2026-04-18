@@ -258,9 +258,15 @@ class ResidualAgent(DikiwiAgent):
         if not title or title.strip() == "":
             title = "Residual Report"
 
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-        safe_title = "".join(c for c in title if c.isalnum() or c in " -_").rstrip()
-        filename = f"{date_str} - {safe_title}.md"
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
+        # Slugify: keep alphanumerics, replace everything else with underscore
+        safe_title = "_".join("".join(c if c.isalnum() else "_" for c in w) for w in title.split())
+        safe_title = safe_title.strip("_")
+        while "__" in safe_title:
+            safe_title = safe_title.replace("__", "_")
+        if not safe_title:
+            safe_title = "Residual_Report"
+        filename = f"{date_str}_{safe_title}.md"
 
         report_dir = Path(vault_path) / "07-Proposal"
         report_dir.mkdir(parents=True, exist_ok=True)

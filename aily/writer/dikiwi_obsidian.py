@@ -101,7 +101,12 @@ class DikiwiObsidianWriter:
         self.dikiwi_root = self.vault_path / folder_prefix if folder_prefix else self.vault_path
         self.zettelkasten_maps_root = self.vault_path / "99-MOC"
         self.zettelkasten_only = zettelkasten_only
+        self._id_to_title: dict[str, str] = {}
         self._ensure_zettelkasten_structure()
+
+    def register_note_title(self, dikiwi_id: str, title: str) -> None:
+        """Register a note title so _make_link can build full-filename wikilinks."""
+        self._id_to_title[dikiwi_id] = _slugify_title(title, max_length=200)
 
         if not zettelkasten_only:
             self._ensure_structure()
@@ -669,7 +674,7 @@ LIMIT 10
 
     def _get_day_dir(self, stage: str) -> Path:
         """Get or create day-based directory for a stage."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now().astimezone()
         day_dir = self.dikiwi_root / stage / f"{now.year}-{now.month:02d}-{now.day:02d}"
         day_dir.mkdir(parents=True, exist_ok=True)
         return day_dir
@@ -681,7 +686,11 @@ LIMIT 10
             if isinstance(value, list):
                 lines.append(f"{key}:")
                 for item in value:
-                    lines.append(f"  - {item}")
+                    if isinstance(item, str):
+                        escaped = item.replace('"', '\\"')
+                        lines.append(f'  - "{escaped}"')
+                    else:
+                        lines.append(f"  - {item}")
             elif isinstance(value, str):
                 # Escape quotes in strings
                 escaped = value.replace('"', '\\"')
@@ -700,6 +709,21 @@ LIMIT 10
         candidate = sentence if 8 <= len(sentence) <= max_len else cleaned
         return (candidate[:max_len].rstrip() or fallback)
 
+    def _make_link(self, note_id: str, display: str | None = None) -> str:
+        """Build an Obsidian wikilink that resolves by filename.
+
+        Uses the full ``{id}-{title}`` filename so links work immediately
+        without waiting for Obsidian's alias index.
+        """
+        safe_title = self._id_to_title.get(note_id, "")
+        if safe_title:
+            target = f"{note_id}-{safe_title}"
+        else:
+            target = note_id
+        if display and display != target:
+            return f"[[{target}|{display}]]"
+        return f"[[{target}]]"
+
     def _write_dikiwi_note(
         self,
         stage_folder: str,
@@ -712,13 +736,14 @@ LIMIT 10
         """Write a note to a DIKIWI stage folder. Returns dikiwi_id for linking."""
         day_dir = self._get_day_dir(stage_folder)
         safe_title = _slugify_title(title)
+        self._id_to_title[dikiwi_id] = safe_title
         filename = f"{dikiwi_id}-{safe_title}.md"
         path = day_dir / filename
 
         fm: dict[str, Any] = {
             "dikiwi_id": dikiwi_id,
             "aliases": [dikiwi_id],
-            "date_created": datetime.now(timezone.utc).isoformat(),
+            "date_created": datetime.now().astimezone().isoformat(),
         }
         fm.update(frontmatter)
         if source_paths:
@@ -790,21 +815,24 @@ LIMIT 10
 
         fm: dict[str, Any] = {
             "type": "information",
-            "source": f"[[{data_note_id}]]",
             "domain": domain,
             "info_type": info_type,
             "confidence": round(confidence, 2),
             "tags": _dedupe_preserve_order(["information", domain] + tags),
         }
-        body = "\n".join([
+        if data_note_id:
+            fm["source"] = self._make_link(data_note_id)
+        body_lines = [
             content,
             "",
             "## Classification",
             f"- Domain: {domain}",
             f"- Type: {info_type}",
             f"- Confidence: {confidence:.0%}",
-            f"- From: [[{data_note_id}]]",
-        ])
+        ]
+        if data_note_id:
+            body_lines.append(f"- From: {self._make_link(data_note_id)}")
+        body = "\n".join(body_lines)
 
         return self._write_dikiwi_note("02-Information", dikiwi_id, title, fm, body, source_paths)
 
@@ -832,7 +860,7 @@ LIMIT 10
         tgt_title = self._title_short(tgt_content, "Target Concept", max_len=40)
         title = f"{src_title} {relation.replace('_', ' ')} {tgt_title}"
 
-        nodes_list = [f"[[{src_info_id}]]", f"[[{tgt_info_id}]]"] if src_info_id and tgt_info_id else []
+        nodes_list = [self._make_link(src_info_id), self._make_link(tgt_info_id)] if src_info_id and tgt_info_id else []
 
         fm: dict[str, Any] = {
             "type": "knowledge",
@@ -846,11 +874,11 @@ LIMIT 10
             body_lines += [reasoning, ""]
         body_lines += [
             "## Connected Ideas",
-            f"**A**: {src_content[:200]}",
+            f"**A**: {src_content}",
             "",
             f"**{relation.replace('_', ' ').title()}**",
             "",
-            f"**B**: {tgt_content[:200]}",
+            f"**B**: {tgt_content}",
         ]
         if nodes_list:
             body_lines += ["", "## Related", *[f"- {n}" for n in nodes_list]]
@@ -873,7 +901,7 @@ LIMIT 10
         dikiwi_id = f"insight_{hashlib.sha1(insight_id.encode()).hexdigest()[:8]}"
         title = self._title_short(description, f"{insight_type.title()} Insight")
 
-        from_knowledge = [f"[[{k}]]" for k in knowledge_note_ids if k]
+        from_knowledge = [self._make_link(k) for k in knowledge_note_ids if k]
         fm: dict[str, Any] = {
             "type": "insight",
             "from_knowledge": from_knowledge,
@@ -900,6 +928,7 @@ LIMIT 10
         insight_note_ids: list[str],
         drop: Any,
         source_paths: list[str] | None = None,
+        link_map: dict[str, str] | None = None,
     ) -> str:
         """Write WISDOM stage permanent note with grounded_in links. Returns dikiwi_id."""
         zettel_id_base = getattr(zettel, "id", hashlib.sha1(str(zettel).encode()).hexdigest()[:6])
@@ -911,13 +940,15 @@ LIMIT 10
         source = getattr(drop, "source", "")
 
         dikiwi_id = f"wisdom_{zettel_id_base}"
-        grounded_in = [f"[[{iid}]]" for iid in insight_note_ids if iid]
         deduped_tags = _dedupe_preserve_order(["wisdom"] + tags)
 
         zettel_dir = self._get_day_dir("05-Wisdom")
         safe_title = _slugify_title(title, max_length=200)
+        self._id_to_title[dikiwi_id] = safe_title
         filename = f"{dikiwi_id}-{safe_title}.md"
         path = zettel_dir / filename
+
+        grounded_in = [self._make_link(iid) for iid in insight_note_ids if iid]
 
         fm: dict[str, Any] = {
             "type": "wisdom",
@@ -925,7 +956,7 @@ LIMIT 10
             "aliases": [dikiwi_id],
             "title": title,
             "source": source,
-            "date_created": datetime.now(timezone.utc).isoformat(),
+            "date_created": datetime.now().astimezone().isoformat(),
             "note_type": "permanent",
             "dikiwi_level": "wisdom",
             "word_count": len(content.split()),
@@ -942,7 +973,21 @@ LIMIT 10
             content, "",
         ]
         if links_to:
-            body_lines += ["## Related", "", *[f"- [[{link}]]" for link in links_to], ""]
+            body_lines += ["## Related", ""]
+            for link in links_to:
+                link_lower = link.lower()
+                matched_id = link_map.get(link_lower) if link_map else None
+                if not matched_id and link_map:
+                    # Fuzzy fallback: substring match against map keys
+                    for key, zid in link_map.items():
+                        if link_lower in key or key in link_lower:
+                            matched_id = zid
+                            break
+                if matched_id:
+                    body_lines.append(f"- {self._make_link(matched_id, link)}")
+                else:
+                    body_lines.append(f"- [[{link}]]")
+            body_lines.append("")
         if grounded_in:
             body_lines += ["## Grounded In", "", *[f"- {g}" for g in grounded_in], ""]
         body_lines += ["---", "", f"*Source: {source}*"]
@@ -969,7 +1014,7 @@ LIMIT 10
         dikiwi_id = f"impact_{hashlib.sha1(description[:50].encode()).hexdigest()[:8]}"
         title = self._title_short(description, "Action Item")
 
-        based_on = [f"[[{wid}]]" for wid in wisdom_note_ids if wid]
+        based_on = [self._make_link(wid) for wid in wisdom_note_ids if wid]
         fm: dict[str, Any] = {
             "type": "impact",
             "based_on": based_on,
@@ -1003,11 +1048,11 @@ LIMIT 10
             "dikiwi_stage": "input",
             "message_id": message_id,
             "source": source,
-            "date_created": datetime.now(timezone.utc).isoformat(),
+            "date_created": datetime.now().astimezone().isoformat(),
             "tags": ["dikiwi", "input", source],
         }
 
-        content = f"{self._format_frontmatter(frontmatter)}\n\n# Input: {message_id[:8]}\n\n{content}\n\n---\n\n→ [[01-Data/01-Data-MOC|Process to Data]]"
+        content = f"{self._format_frontmatter(frontmatter)}\n\n# Input: {message_id[:8]}\n\n{content}\n"
 
         note_path.write_text(content, encoding="utf-8")
         logger.info("Wrote input: %s", note_path)
@@ -1033,7 +1078,7 @@ LIMIT 10
             frontmatter = {
                 "title": title,
                 "source_url": source_url,
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
             }
             content = f"{self._format_frontmatter(frontmatter)}\n\n{markdown}\n"
         else:
@@ -1046,27 +1091,32 @@ LIMIT 10
     async def write_data_points(
         self,
         message_id: str,
-        data_points: list[DataPoint_v2],
+        data_points: list[DataPoint],
         source: str,
     ) -> list[Path]:
         """Write data points to 01-Data with Dataview metadata."""
-        if self.zettelkasten_only:
-            return []
-
         day_dir = self._get_day_dir("01-Data")
         paths = []
 
         for i, dp in enumerate(data_points):
-            note_path = day_dir / f"data-{message_id}-{i}.md"
+            concept = getattr(dp, "concept", "") or ""
+            content = getattr(dp, "content", "") or ""
+            base = concept.strip() or content.strip()
+            words = base.split()[:6]
+            slug = "_".join(words).lower()[:40].rstrip("_")
+            if not slug:
+                slug = f"dp-{i}"
+            safe_dp_id = f"{slug}-{i}"
+            note_path = day_dir / f"data-{safe_dp_id}.md"
 
             frontmatter = {
                 "dikiwi_stage": "data",
                 "pipeline_id": message_id,
                 "data_point_index": i,
                 "source": source,
-                "date_created": datetime.now(timezone.utc).isoformat(),
-                "confidence": round(dp.confidence, 2),
-                "data_type": dp.type if hasattr(dp, 'type') else "fact",
+                "date_created": datetime.now().astimezone().isoformat(),
+                "confidence": round(float(getattr(dp, "confidence", 0.8)), 2),
+                "data_type": getattr(dp, "concept", "") or "fact",
                 "tags": ["dikiwi", "data", source],
             }
 
@@ -1075,17 +1125,13 @@ LIMIT 10
                 f"",
                 f"# Data Point {i}",
                 f"",
-                f"{dp.content}",
+                f"{getattr(dp, 'content', '')}",
                 f"",
                 f"---",
                 f"",
                 f"## Metadata",
-                f"- **Confidence**: {dp.confidence:.0%}",
+                f"- **Confidence**: {float(getattr(dp, 'confidence', 0.8)):.0%}",
                 f"- **Source**: {source}",
-                f"",
-                f"## Navigation",
-                f"- [[01-Data/01-Data-MOC|Data Index]]",
-                f"- [[02-Information/02-Information-MOC|→ Information]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1126,7 +1172,7 @@ LIMIT 10
                 "message_id": message_id,
                 "domain": domain,
                 "info_type": info_type,
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
                 "tags": ["dikiwi", "information", domain] + tags,
             }
 
@@ -1135,10 +1181,6 @@ LIMIT 10
 # Information: {domain}
 
 {content}
-
----
-
-→ [[03-Knowledge/03-Knowledge-MOC|Link to Knowledge]]
 """
             note_path.write_text(note_content, encoding="utf-8")
             paths.append(note_path)
@@ -1180,7 +1222,7 @@ LIMIT 10
                 "target_id": target_id,
                 "relation_type": relation_type,
                 "strength": strength,
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
                 "tags": ["dikiwi", "knowledge", relation_type],
             }
 
@@ -1192,10 +1234,6 @@ LIMIT 10
 **Target:** {target_id}
 **Relation:** {relation_type}
 **Strength:** {strength}
-
----
-
-→ [[04-Insight/04-Insight-MOC|Extract Insights]]
 """
             note_path.write_text(note_content, encoding="utf-8")
             paths.append(note_path)
@@ -1226,7 +1264,7 @@ LIMIT 10
                 "confidence": round(insight.confidence, 2),
                 "source_message": f"00-Chaos/{message_id}",
                 "source_title": source_title,
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
                 "tags": [
                     "dikiwi",
                     "insight",
@@ -1269,10 +1307,6 @@ LIMIT 10
                 f"SORT confidence DESC",
                 f"LIMIT 10",
                 f"```",
-                f"",
-                f"## Navigation",
-                f"- [[04-Insight/04-Insight-MOC|Insights Index]]",
-                f"- [[05-Wisdom/05-Wisdom-MOC|→ Wisdom]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1306,7 +1340,7 @@ LIMIT 10
             frontmatter = {
                 "dikiwi_stage": "wisdom",
                 "wisdom_id": f"{message_id}-{i}",
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
                 "tags": ["dikiwi", "wisdom", "principle"],
             }
 
@@ -1327,14 +1361,7 @@ LIMIT 10
             if not implications:
                 content_lines.append("- _No specific implications recorded_")
 
-            content_lines.extend([
-                f"",
-                f"---",
-                f"",
-                f"## Navigation",
-                f"- [[05-Wisdom/05-Wisdom-MOC|Wisdom Library]]",
-                f"- [[06-Impact/06-Impact-MOC|→ Impact]]",
-            ])
+            content_lines.extend([])
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
             paths.append(note_path)
@@ -1377,7 +1404,7 @@ LIMIT 10
                 "proposal_type": proposal_type,
                 "priority": priority,
                 "status": "active",
-                "date_created": datetime.now(timezone.utc).isoformat(),
+                "date_created": datetime.now().astimezone().isoformat(),
                 "tags": ["dikiwi", "impact", "proposal", str(proposal_type)],
             }
 
@@ -1399,11 +1426,6 @@ LIMIT 10
                 f"## Task",
                 f"- [ ] {proposal}",
                 f"",
-                f"---",
-                f"",
-                f"## Navigation",
-                f"- [[06-Impact/06-Impact-MOC|Proposals Queue]]",
-                f"- [[Canvas/DIKIWI-Overview|📊 Overview Canvas]]",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")
@@ -1435,6 +1457,7 @@ LIMIT 10
 
         # Sanitize title for filename
         safe_title = _slugify_title(title)
+        self._id_to_title[zettel_id] = safe_title
         filename = f"{zettel_id}-{safe_title}.md"
         note_path = date_dir / filename
 
@@ -1444,7 +1467,7 @@ LIMIT 10
             "title": title,
             "aliases": [title],
             "source": source,
-            "date_created": datetime.now(timezone.utc).isoformat(),
+            "date_created": datetime.now().astimezone().isoformat(),
             "note_type": "permanent",
             "dikiwi_level": dikiwi_level,
             "word_count": len(content.split()),

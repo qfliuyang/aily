@@ -10,6 +10,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from aily.llm.conversation_logger import get_conversation_logger
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 
 if TYPE_CHECKING:
@@ -51,7 +52,15 @@ async def chat_json(
             budget.stage_calls.get(reserve_key, 0),
             budget.stage_round_limit,
         )
-    return await llm_client.chat_json(messages=messages, temperature=temperature)
+    result = await llm_client.chat_json(messages=messages, temperature=temperature)
+    get_conversation_logger().log(
+        stage=stage,
+        stage_key=reserve_key,
+        messages=messages,
+        response=result,
+        temperature=temperature,
+    )
+    return result
 
 
 async def multi_agent_json(

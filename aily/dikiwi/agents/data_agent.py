@@ -92,6 +92,7 @@ class DataAgent(DikiwiAgent):
                 doc_title = meta.get("title", "")
                 doc_summary = meta.get("summary", "")
 
+            # Let quality gates filter ideas naturally; do not artificially cap volume
             data_points = all_data_points
             if not data_points:
                 data_points = await self._llm_fallback_extraction(content, drop.source, ctx)
@@ -104,22 +105,20 @@ class DataAgent(DikiwiAgent):
                     f"Examples: {', '.join(dp.concept or dp.content[:50] for dp in data_points[:3])}..."
                 )
 
-            # Write source note
-            data_note_id = ""
+            # Write individual data point notes to 01-Data
+            data_note_paths: list[str] = []
             if ctx.dikiwi_obsidian_writer:
                 try:
-                    source_paths = getattr(drop, "metadata", {}).get("source_paths", [])
-                    concepts = [dp.concept for dp in data_points if dp.concept]
-                    data_note_id = await ctx.dikiwi_obsidian_writer.write_data_note(
-                        drop,
-                        ctx.pipeline_id,
-                        source_paths,
-                        title=doc_title,
-                        summary=doc_summary,
-                        concepts=concepts,
-                    )
+                    from aily.sessions.dikiwi_mind import DataPoint as DP
+                    if data_points and isinstance(data_points[0], DP):
+                        paths = await ctx.dikiwi_obsidian_writer.write_data_points(
+                            message_id=ctx.pipeline_id,
+                            data_points=data_points,
+                            source=drop.source,
+                        )
+                        data_note_paths = [str(p) for p in paths]
                 except Exception as e:
-                    logger.warning("[DIKIWI] Failed to write data note: %s", e)
+                    logger.warning("[DIKIWI] Failed to write data points: %s", e)
 
             return StageResult(
                 stage=DikiwiStage.DATA,
@@ -131,7 +130,7 @@ class DataAgent(DikiwiAgent):
                     "data_points": data_points,
                     "doc_title": doc_title,
                     "doc_summary": doc_summary,
-                    "data_note_id": data_note_id,
+                    "data_note_paths": data_note_paths,
                 },
             )
 

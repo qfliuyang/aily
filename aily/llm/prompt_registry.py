@@ -56,7 +56,8 @@ class DikiwiPromptRegistry:
   ],
   "summary": "One paragraph summary of the entire content section",
   "quality_assessment": "high|medium|low"
-}"""
+}
+Prefer depth over breadth."""
 
     FALLBACK_EXTRACTION_CONTRACT = """Respond with JSON:
 {
@@ -95,7 +96,8 @@ class DikiwiPromptRegistry:
   ],
   "synthesis": "Overall summary of what this knowledge network represents as a set of short traversable paths",
   "knowledge_gaps": ["Areas where more information would create longer paths"]
-}"""
+}
+"""
 
     WISDOM_CONTRACT = """Respond with JSON:
 {
@@ -112,7 +114,8 @@ class DikiwiPromptRegistry:
     }
   ],
   "note_strategy": "Explain how you split the source into separate permanent notes and how they form interlocking paths"
-}"""
+}
+"""
 
     IMPACT_CONTRACT = """Respond with JSON:
 {
@@ -126,7 +129,8 @@ class DikiwiPromptRegistry:
       "potential_value": "Brief description of expected value and explosive upside"
     }
   ]
-}"""
+}
+"""
 
     RESIDUAL_SYNTHESIS_CONTRACT = """Respond with JSON:
 {
@@ -244,6 +248,7 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
                 "Identify the document title if present.",
                 "Skip concepts already listed in 'existing_concepts' to avoid duplication.",
                 "Prefer depth over breadth: fewer rich concepts beat many thin extractions.",
+                "Return at most 8 data points. If there are more ideas, keep only the most significant.",
                 "NEVER use generic abstraction filler: 'strategic pathways', 'involves', 'advantages for specialized hardware', 'plays a crucial role', 'is important because', 'has significant implications'.",
                 "Every data point must contain a SPECIFIC claim: a named technology, a numbered threshold, a causal mechanism, or a concrete tradeoff. If the source lacks specifics, return an empty data_points array with quality_assessment 'low'.",
                 "If the source is clearly a landing page, share-page wrapper, or table of contents with no substantive body text, return data_points: [] and quality_assessment: 'low'. Do NOT hallucinate concepts from titles alone.",
@@ -465,7 +470,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
                 "Wisdom is where short paths interlock into a dense, reusable graph structure.",
             ),
             context_sections=(
-                ("Insights", insights_desc or "No insights available. You must still create permanent notes from the source-backed information when possible."),
+                ("Insights", insights_desc or "No insights available. Return an empty zettels array."),
                 ("Knowledge Base", info_samples or "No information samples available."),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),

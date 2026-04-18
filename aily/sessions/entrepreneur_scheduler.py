@@ -12,7 +12,7 @@ from typing import Any
 
 from aily.sessions.base import BaseMindScheduler
 from aily.sessions.models import Proposal, ProposalType, ProposalStatus, ProposalStage
-from aily.sessions.gstack_agent import GStackAgent, GStackPanelResult
+from aily.sessions.gstack_agent import GStackAgent, GStackPanelResult, GSTACK_PERSONAS
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,12 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 entrepreneur_proposal = await self._process_gstack_verdict(
                     proposal_node, session
                 )
+
+            await self._write_proposal_note(
+                proposal_node,
+                panel if self.use_gstack_panel else session,
+                approved=entrepreneur_proposal is not None,
+            )
 
             if entrepreneur_proposal:
                 approved_proposals.append(entrepreneur_proposal)
@@ -476,3 +482,91 @@ class EntrepreneurScheduler(BaseMindScheduler):
             )
         except Exception as e:
             logger.warning("[Entrepreneur] Failed to create incubation task: %s", e)
+
+    async def _write_proposal_note(
+        self, proposal_node: dict, panel_or_session: Any, approved: bool
+    ) -> None:
+        """Write a detailed proposal note with full GStack reasoning to Obsidian."""
+        if not self.obsidian_writer:
+            return
+        try:
+            title = self._build_hypothesis_from_node(proposal_node)["title"]
+            prefix = "approved" if approved else "denied"
+            safe_title = "".join(c for c in title if c.isalnum() or c in "_- ").rstrip("_- ")[:80]
+            note_title = f"{prefix}-{safe_title}"
+
+            lines = [f"# {title}", ""]
+
+            if isinstance(panel_or_session, GStackPanelResult):
+                panel = panel_or_session
+                lines.extend([
+                    f"**Final Verdict:** {panel.final_verdict}",
+                    f"**Final Confidence:** {panel.final_confidence:.0%}",
+                    f"**Split Verdict:** {'Yes' if panel.split_verdict else 'No'}",
+                    "",
+                    "## Synthesis Reasoning",
+                    "",
+                    panel.synthesis_reasoning or "No synthesis reasoning provided.",
+                    "",
+                    "## Panel Deliberation",
+                    "",
+                ])
+                for session in panel.sessions:
+                    persona_label = GSTACK_PERSONAS.get(session.persona, {}).get("name", session.persona)
+                    lines.extend([
+                        f"### {persona_label}",
+                        "",
+                        f"- **Verdict:** {session.verdict}",
+                        f"- **Confidence:** {session.confidence:.0%}",
+                        "",
+                        "#### Key Findings",
+                    ])
+                    for finding in session.key_findings:
+                        lines.append(f"- {finding}")
+                    lines.append("")
+                    lines.append("#### Blockers")
+                    for blocker in session.blockers:
+                        lines.append(f"- {blocker}")
+                    lines.append("")
+                    lines.append("#### Opportunities")
+                    for opp in session.opportunities:
+                        lines.append(f"- {opp}")
+                    lines.append("")
+                    lines.append("#### Actions Taken")
+                    for action in session.actions:
+                        lines.append(f"- [{action.status}] {action.action}: {action.output[:200]}")
+                    lines.append("")
+            else:
+                session = panel_or_session
+                lines.extend([
+                    f"**Verdict:** {session.verdict}",
+                    f"**Confidence:** {session.confidence:.0%}",
+                    "",
+                    "## Reasoning & Findings",
+                    "",
+                    "#### Key Findings",
+                ])
+                for finding in session.key_findings:
+                    lines.append(f"- {finding}")
+                lines.append("")
+                lines.append("#### Blockers")
+                for blocker in session.blockers:
+                    lines.append(f"- {blocker}")
+                lines.append("")
+                lines.append("#### Opportunities")
+                for opp in session.opportunities:
+                    lines.append(f"- {opp}")
+                lines.append("")
+                lines.append("#### Actions Taken")
+                for action in session.actions:
+                    lines.append(f"- [{action.status}] {action.action}: {action.output[:200]}")
+                lines.append("")
+
+            await self.obsidian_writer.write_note(
+                title=note_title,
+                markdown="\n".join(lines),
+                source_url="aily://entrepreneur",
+            )
+            logger.info("[Entrepreneur] Wrote %s proposal note: %s", prefix, note_title)
+        except Exception as e:
+            logger.warning("[Entrepreneur] Failed to write proposal note: %s", e)

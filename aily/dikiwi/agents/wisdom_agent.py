@@ -36,6 +36,22 @@ class WisdomAgent(DikiwiAgent):
             if info_nodes:
                 zettels = await self._llm_synthesize_wisdom(insights, info_nodes, ctx)
 
+            # Build title -> dikiwi_id map so Related links resolve exactly
+            title_map: dict[str, str] = {}
+            for z in zettels:
+                zid = f"wisdom_{z.id}"
+                title_map[z.title.lower()] = zid
+                # Also index by slugified title for robust matching
+                slug = "".join(c for c in z.title.lower() if c.isalnum())
+                title_map[slug] = zid
+
+            # Pre-register all zettel titles so cross-links use full filenames
+            if ctx.dikiwi_obsidian_writer and zettels:
+                for z in zettels:
+                    ctx.dikiwi_obsidian_writer.register_note_title(
+                        f"wisdom_{z.id}", z.title
+                    )
+
             # Write wisdom notes
             wisdom_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer and zettels:
@@ -43,7 +59,7 @@ class WisdomAgent(DikiwiAgent):
                 for zettel in zettels:
                     try:
                         wid = await ctx.dikiwi_obsidian_writer.write_wisdom_note(
-                            zettel, insight_note_ids, ctx.drop, source_paths
+                            zettel, insight_note_ids, ctx.drop, source_paths, link_map=title_map
                         )
                         wisdom_note_ids.append(wid)
                         logger.info(

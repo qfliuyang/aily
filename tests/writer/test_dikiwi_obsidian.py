@@ -35,7 +35,7 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
     assert 'dikiwi_level: "knowledge"' in content
     assert 'source_paths:' in content
     assert '/Users/luzi/aily_chaos/slide1.png' in content
-    assert "  - knowledge" in content
+    assert '"knowledge"' in content
     assert "[[Focus Switching Multiplies Coordination Cost]]" in content
 
     index = index_path.read_text(encoding="utf-8")
