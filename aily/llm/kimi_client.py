@@ -46,9 +46,9 @@ class KimiClient(LLMClient):
         self,
         api_key: str,
         model: str = DEFAULT_MODEL,
-        timeout: float = 120.0,
+        timeout: float = 300.0,
         max_retries: int = 2,
-        thinking: bool = True,
+        thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
     ) -> None:
@@ -59,7 +59,7 @@ class KimiClient(LLMClient):
             model: Model name (recommended: kimi-k2.5)
             timeout: Request timeout in seconds (higher for long contexts)
             max_retries: Number of retries on failure
-            thinking: Enable thinking mode for kimi-k2.5 (default True for complex reasoning)
+            thinking: Enable thinking mode for kimi-k2.5 (default False for batch speed)
         """
         super().__init__(
             base_url=self.BASE_URL,

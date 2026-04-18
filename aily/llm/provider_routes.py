@@ -56,7 +56,7 @@ class PrimaryLLMRoute:
         *,
         api_key: str,
         model: str = "kimi-k2.5",
-        thinking: bool = True,
+        thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 3.0,
     ) -> LLMClient:

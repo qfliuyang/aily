@@ -103,7 +103,7 @@ class LLMRouter:
     def standard_kimi(
         api_key: str,
         model: str = "kimi-k2.5",
-        thinking: bool = True,
+        thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
     ) -> KimiClient:
@@ -120,7 +120,7 @@ class LLMRouter:
         return KimiClient(
             api_key=api_key,
             model=model,
-            timeout=120.0,
+            timeout=300.0,
             max_retries=2,
             thinking=thinking,
             max_concurrency=max_concurrency,
