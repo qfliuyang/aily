@@ -40,8 +40,10 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
 
     index = index_path.read_text(encoding="utf-8")
     assert 'WHERE note_type = "permanent"' in index
-    assert 'FROM "00-Chaos"' in index
+    assert 'FROM "/"' in index
+    assert 'FROM "99-MOC"' in index
 
     moc = moc_path.read_text(encoding="utf-8")
     assert "# attention" in moc
     assert 'contains(tags, "attention")' in moc
+    assert 'FROM "/"' in moc

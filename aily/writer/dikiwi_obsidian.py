@@ -45,7 +45,7 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
     return result
 
 
-def _slugify_title(title: str, max_length: int = 300) -> str:
+def _slugify_title(title: str, max_length: int = 150) -> str:
     """Create a readable filesystem-safe slug. Uses underscores for spaces."""
     cleaned = "".join(c for c in str(title) if c.isalnum() or c in " -_").strip()
     cleaned = " ".join(cleaned.split())
@@ -141,7 +141,7 @@ Permanent notes produced by DIKIWI live here. Browse by recency, tags, or Maps o
 ## Recent Notes
 ```dataview
 TABLE dikiwi_level, zettel_id, date_created, source
-FROM "00-Chaos"
+FROM "/"
 WHERE note_type = "permanent" AND file.name != "00 Zettelkasten Index"
 SORT date_created DESC
 LIMIT 50
@@ -150,7 +150,7 @@ LIMIT 50
 ## By Level
 ```dataview
 TABLE length(rows) as Notes
-FROM "00-Chaos"
+FROM "/"
 WHERE note_type = "permanent" AND dikiwi_level
 GROUP BY dikiwi_level
 SORT dikiwi_level ASC
@@ -159,14 +159,14 @@ SORT dikiwi_level ASC
 ## Maps Of Content
 ```dataview
 LIST
-FROM "00-Chaos"
+FROM "99-MOC"
 SORT file.name ASC
 ```
 
 ## Tag Clusters
 ```dataview
 TABLE length(rows) as Notes
-FROM "00-Chaos"
+FROM "/"
 WHERE note_type = "permanent"
 FLATTEN tags AS tag
 GROUP BY tag
@@ -188,7 +188,7 @@ tags:
 ## Notes
 ```dataview
 TABLE date_created, source
-FROM "00-Chaos"
+FROM "/"
 WHERE note_type = "permanent" AND contains(tags, "{tag}")
 SORT date_created DESC
 ```
@@ -857,9 +857,10 @@ LIMIT 10
         tgt_content = getattr(tgt_node, "content", "")
 
         dikiwi_id = f"knowledge_{hashlib.sha1((src_id + tgt_id).encode()).hexdigest()[:8]}"
-        src_title = self._title_short(src_content, "Source Concept", max_len=40)
-        tgt_title = self._title_short(tgt_content, "Target Concept", max_len=40)
-        title = f"{src_title} {relation.replace('_', ' ')} {tgt_title}"
+        src_title = self._title_short(src_content, "Src", max_len=25)
+        tgt_title = self._title_short(tgt_content, "Tgt", max_len=25)
+        rel_short = relation.replace("_", " ")
+        title = f"{src_title} → {rel_short} → {tgt_title}"
 
         nodes_list = [self._make_link(src_info_id), self._make_link(tgt_info_id)] if src_info_id and tgt_info_id else []
 
@@ -1160,8 +1161,12 @@ LIMIT 10
             if not chunk:
                 continue
 
-            # Slug from first few meaningful words of the chunk (skip HTML comments / noise)
+            # Skip chunks that are only HTML comments / images with no meaningful text
             cleaned = re.sub(r"<!--.*?-->", "", chunk).strip()
+            if len(cleaned.split()) < 3:
+                continue
+
+            # Slug from first few meaningful words of the chunk
             words = cleaned.split()[:6]
             slug_parts = []
             for w in words:
