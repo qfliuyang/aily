@@ -30,9 +30,32 @@ class InformationAgent(DikiwiAgent):
 
             data_points: list[DataPoint] = data_result.data.get("data_points", [])
             data_note_id: str = data_result.data.get("data_note_id", "")
+            data_note_ids: list[str] = data_result.data.get("data_note_ids", [])
             source = ctx.drop.source
 
+            logger.info(
+                "[DIKIWI] INFORMATION: %d data points, %d data_note_ids, first=%s",
+                len(data_points), len(data_note_ids), data_note_ids[0] if data_note_ids else "(none)"
+            )
+
             classifications = await self._llm_classify_batch(data_points, source, ctx)
+
+            # Build a map from data_point chunk index to the corresponding data note id
+            def _dp_to_data_note_id(dp_id: str) -> str:
+                """Extract chunk index from dp_id (format: dp_{uuid}_{chunk_index}_{i}) and look up data_note_id."""
+                if not data_note_ids:
+                    logger.warning("[DIKIWI] data_note_ids is empty, falling back to data_note_id=%s", data_note_id)
+                    return data_note_id
+                parts = dp_id.split("_")
+                if len(parts) >= 3:
+                    try:
+                        chunk_idx = int(parts[-2])
+                        if 0 <= chunk_idx < len(data_note_ids):
+                            return data_note_ids[chunk_idx]
+                    except ValueError:
+                        pass
+                logger.warning("[DIKIWI] Could not map dp_id=%s to data_note_id", dp_id)
+                return data_note_id
 
             info_nodes: list[InformationNode] = []
             for dp, cls in zip(data_points, classifications):
@@ -62,8 +85,10 @@ class InformationAgent(DikiwiAgent):
                 source_paths = ctx.drop.metadata.get("source_paths", [])
                 for node in info_nodes:
                     try:
+                        # Link to the specific data chunk this concept was extracted from
+                        specific_data_note_id = _dp_to_data_note_id(node.data_point_id)
                         nid = await ctx.dikiwi_obsidian_writer.write_information_note(
-                            node, data_note_id, source, source_paths
+                            node, specific_data_note_id, source, source_paths, data_point_id=node.data_point_id
                         )
                         info_note_ids[node.id] = nid
                     except Exception as e:

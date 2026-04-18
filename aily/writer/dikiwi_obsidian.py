@@ -11,6 +11,7 @@ Leverages Obsidian's advanced features:
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import re
@@ -140,7 +141,7 @@ Permanent notes produced by DIKIWI live here. Browse by recency, tags, or Maps o
 
 ## Recent Notes
 ```dataview
-TABLE dikiwi_level, zettel_id, date_created, source
+TABLE dikiwi_level, dikiwi_id, date_created, source
 FROM "/"
 WHERE note_type = "permanent" AND file.name != "00 Zettelkasten Index"
 SORT date_created DESC
@@ -708,7 +709,72 @@ LIMIT 10
             return fallback
         sentence = cleaned.split(".")[0].strip()
         candidate = sentence if 8 <= len(sentence) <= max_len else cleaned
-        return (candidate[:max_len].rstrip() or fallback)
+        if len(candidate) <= max_len:
+            return candidate
+        # Truncate at last word boundary, add ellipsis if truncated
+        truncated = candidate[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
+        return (truncated or fallback)
+
+    @staticmethod
+    def _extract_chunk_title(cleaned_chunk: str, chunk_index: int, max_len: int = 60) -> str:
+        """Extract a meaningful title from raw chunk content.
+
+        Prefers markdown headings, then the first meaningful sentence.
+        Falls back to 'Data Chunk N' if nothing usable is found.
+        """
+        import re
+
+        def _is_meaningful(line: str) -> bool:
+            """Reject single-word ALL CAPS, bare numbers, short fragments, and slide junk."""
+            text = line.strip()
+            if not text or len(text) < 4:
+                return False
+            words = text.split()
+            if len(words) < 3:
+                return False
+            # Reject lines that are mostly ALL CAPS (e.g. "WORKER3", "P1", "FIGURE 1")
+            if all(w.isupper() and len(w) <= 8 for w in words):
+                return False
+            # Reject lines with very short average word length (fragments like "e 6nus snug")
+            avg_word_len = sum(len(w) for w in words) / len(words)
+            if avg_word_len < 2.5:
+                return False
+            # Reject lines that are just bullet markers or image placeholders
+            if text in ("•", "-", "*", "<!-- image -->"):
+                return False
+            # Reject HTML comments
+            if text.startswith("<!--") and text.endswith("-->"):
+                return False
+            return True
+
+        # Generic headings that offer no semantic value — skip them
+        GENERIC_HEADINGS = {
+            "outline", "summary", "agenda", "contents", "table of contents",
+            "introduction", "conclusion", "future work", "references",
+            "acknowledgements", "thank you", "questions", "overview",
+            "background", "motivation", "related work", "results",
+            "discussion", "appendix", "notes", "details",
+        }
+
+        # 1. Look for a markdown heading (scan all lines — presentations often
+        # have title slides / logos before the first real heading)
+        for line in cleaned_chunk.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                title = stripped.lstrip("#").strip()
+                if len(title) >= 3 and title.lower() not in GENERIC_HEADINGS:
+                    return title if len(title) <= max_len else title[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
+
+        # 2. Find first meaningful sentence across all lines
+        for line in cleaned_chunk.splitlines():
+            if _is_meaningful(line):
+                candidate = " ".join(line.split())
+                if len(candidate) <= max_len:
+                    return candidate
+                return candidate[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
+
+        # 3. Fallback
+        return f"Data Chunk {chunk_index}"
 
     def _make_link(self, note_id: str, display: str | None = None) -> str:
         """Build an Obsidian wikilink that resolves by filename.
@@ -733,6 +799,7 @@ LIMIT 10
         frontmatter: dict[str, Any],
         body: str,
         source_paths: list[str] | None = None,
+        h1_title: str | None = None,
     ) -> str:
         """Write a note to a DIKIWI stage folder. Returns dikiwi_id for linking."""
         day_dir = self._get_day_dir(stage_folder)
@@ -750,7 +817,8 @@ LIMIT 10
         if source_paths:
             fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
 
-        note_content = f"{self._format_frontmatter(fm)}\n\n# {title}\n\n{body}\n"
+        heading = h1_title if h1_title else title
+        note_content = f"{self._format_frontmatter(fm)}\n\n# {heading}\n\n{body}\n"
         path.write_text(note_content, encoding="utf-8")
         logger.info("Wrote DIKIWI note: %s", filename)
         return dikiwi_id
@@ -802,6 +870,7 @@ LIMIT 10
         data_note_id: str,
         source: str,
         source_paths: list[str] | None = None,
+        data_point_id: str = "",
     ) -> str:
         """Write INFORMATION stage note for one classified idea chunk. Returns dikiwi_id."""
         nid = getattr(node, "id", "")
@@ -823,6 +892,8 @@ LIMIT 10
         }
         if data_note_id:
             fm["source"] = self._make_link(data_note_id)
+        if data_point_id:
+            fm["data_point_id"] = data_point_id
         body_lines = [
             content,
             "",
@@ -987,8 +1058,7 @@ LIMIT 10
                             break
                 if matched_id:
                     body_lines.append(f"- {self._make_link(matched_id, link)}")
-                else:
-                    body_lines.append(f"- [[{link}]]")
+                # Skip unresolved conceptual links to avoid broken wiki-links in the vault
             body_lines.append("")
         if grounded_in:
             body_lines += ["## Grounded In", "", *[f"- {g}" for g in grounded_in], ""]
@@ -1033,10 +1103,10 @@ LIMIT 10
             "## Based On",
             *(([f"- {b}" for b in based_on]) or ["- *(no linked wisdom notes)*"]), "",
             "## Task",
-            f"- [ ] {description[:100]}",
+            f"- [ ] {description}",
         ])
 
-        return self._write_dikiwi_note("06-Impact", dikiwi_id, title, fm, body, source_paths)
+        return self._write_dikiwi_note("06-Impact", dikiwi_id, title, fm, body, source_paths, h1_title=description)
 
     async def write_input(self, message_id: str, content: str, source: str) -> Path | None:
         """Write raw input to 00-Chaos."""
@@ -1159,36 +1229,69 @@ LIMIT 10
         day_dir = self._get_day_dir("01-Data")
         ids: list[str] = []
 
+        # Pre-filter to count only chunks that will actually be written
+        valid_chunks: list[tuple[int, str, str]] = []
         for i, chunk in enumerate(chunks):
             chunk = chunk.strip()
             if not chunk:
                 continue
-
-            # Skip chunks that are only HTML comments / images with no meaningful text
             cleaned = re.sub(r"<!--.*?-->", "", chunk).strip()
             if len(cleaned.split()) < 3:
                 continue
+            # Decode HTML entities so titles and slugs are readable
+            cleaned = html.unescape(cleaned)
+            valid_chunks.append((i, chunk, cleaned))
 
-            # Slug from first few meaningful words of the chunk
-            words = cleaned.split()[:6]
-            slug_parts = []
-            for w in words:
-                part = "".join(c if c.isalnum() else "_" for c in w).lower()
-                part = part.strip("_")
-                if part:
-                    slug_parts.append(part)
-            slug = "_".join(slug_parts)[:40]
+        total_written = len(valid_chunks)
+
+        for write_idx, (orig_idx, chunk, cleaned) in enumerate(valid_chunks):
+            # Use the same title extraction for filename slug as for the heading
+            chunk_title = self._extract_chunk_title(cleaned, orig_idx)
+            if chunk_title.startswith("Data Chunk "):
+                # Fallback: find the first meaningful line and slugify it
+                # Re-use the same heuristics _extract_chunk_title uses
+                def _line_ok(line: str) -> bool:
+                    text = line.strip()
+                    if not text or len(text) < 4:
+                        return False
+                    words = text.split()
+                    if len(words) < 3:
+                        return False
+                    if all(w.isupper() and len(w) <= 8 for w in words):
+                        return False
+                    avg = sum(len(w) for w in words) / len(words)
+                    if avg < 2.5:
+                        return False
+                    if text in ("•", "-", "*", "<!-- image -->"):
+                        return False
+                    if text.startswith("<!--") and text.endswith("-->"):
+                        return False
+                    return True
+
+                fallback_title = None
+                for line in cleaned.splitlines():
+                    if _line_ok(line):
+                        fallback_title = " ".join(line.split())
+                        break
+                if fallback_title:
+                    slug = _slugify_title(fallback_title, max_length=40).replace("-", "_")
+                else:
+                    slug = f"chunk-{orig_idx}"
+            else:
+                # Slugify the extracted title for a meaningful filename
+                slug = _slugify_title(chunk_title, max_length=40).replace("-", "_")
             if not slug:
-                slug = f"chunk-{i}"
+                slug = f"chunk-{orig_idx}"
             # Prefix with message_id to avoid collisions across pipelines
-            safe_id = f"{message_id[:8]}_{slug}-{i}"
+            safe_id = f"{message_id[:8]}_{slug}-{orig_idx}"
             dikiwi_id = f"data-{safe_id}"
-            note_path = day_dir / f"{dikiwi_id}.md"
+            self._id_to_title[dikiwi_id] = slug
+            note_path = day_dir / f"{dikiwi_id}-{slug}.md"
 
             frontmatter = {
                 "dikiwi_stage": "data",
                 "pipeline_id": message_id,
-                "chunk_index": i,
+                "chunk_index": orig_idx,
                 "source": source,
                 "date_created": datetime.now().astimezone().isoformat(),
                 "word_count": len(chunk.split()),
@@ -1196,19 +1299,21 @@ LIMIT 10
                 "tags": ["dikiwi", "data", "unclassified"],
             }
 
+            # Decode HTML entities from pdfplumber extraction for readability
+            readable_chunk = html.unescape(chunk)
             content_lines = [
                 self._format_frontmatter(frontmatter),
                 "",
-                f"# Data Chunk {i}",
+                f"# {chunk_title}",
                 "",
-                chunk,
+                readable_chunk,
                 "",
                 "---",
                 "",
                 "## Metadata",
                 f"- **Source**: {source}",
-                f"- **Chunk**: {i + 1} of {len(chunks)}",
-                f"- **Words**: {len(chunk.split())}",
+                f"- **Chunk**: {write_idx + 1} of {total_written}",
+                f"- **Words**: {len(readable_chunk.split())}",
             ]
 
             note_path.write_text("\n".join(content_lines), encoding="utf-8")

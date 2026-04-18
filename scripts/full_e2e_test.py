@@ -127,11 +127,14 @@ def get_dir_sizes(dir_name: str) -> list[tuple[str, int]]:
     return [(str(f.relative_to(VAULT_PATH)), f.stat().st_size) for f in files]
 
 
-async def run_full_e2e(max_pdfs: int | None = None) -> dict:
+async def run_full_e2e(max_pdfs: int | None = None, no_clean: bool = False) -> dict:
     if os.environ.get("EMPTY_VAULT_BEFORE_TEST") == "1":
         empty_vault_completely()
 
-    clean_vault()
+    if not no_clean:
+        clean_vault()
+    else:
+        print("[SKIP] Vault cleaning disabled (--no-clean)")
 
     api_key = os.environ.get("ZHIPU_API_KEY", SETTINGS.zhipu_api_key)
     llm_client = PrimaryLLMRoute.route_zhipu(
@@ -305,6 +308,7 @@ async def run_full_e2e(max_pdfs: int | None = None) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--max", type=int, default=20, help="Max PDFs to process")
+    parser.add_argument("--no-clean", action="store_true", help="Skip vault cleaning (useful for resuming)")
     args = parser.parse_args()
-    result = asyncio.run(run_full_e2e(max_pdfs=args.max))
+    result = asyncio.run(run_full_e2e(max_pdfs=args.max, no_clean=args.no_clean))
     print(f"\nResult: {json.dumps(result, indent=2, default=str)}")
