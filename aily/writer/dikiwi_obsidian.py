@@ -105,15 +105,15 @@ class DikiwiObsidianWriter:
         self._id_to_title: dict[str, str] = {}
         self._ensure_zettelkasten_structure()
 
-    def register_note_title(self, dikiwi_id: str, title: str) -> None:
-        """Register a note title so _make_link can build full-filename wikilinks."""
-        self._id_to_title[dikiwi_id] = _slugify_title(title, max_length=200)
-
         if not self.zettelkasten_only:
             self._ensure_structure()
             logger.info("DikiwiObsidianWriter initialized at %s", self.dikiwi_root)
         else:
             logger.info("DikiwiObsidianWriter initialized (Zettelkasten-only mode)")
+
+    def register_note_title(self, dikiwi_id: str, title: str) -> None:
+        """Register a note title so _make_link can build full-filename wikilinks."""
+        self._id_to_title[dikiwi_id] = _slugify_title(title, max_length=200)
 
     def _ensure_zettelkasten_structure(self) -> None:
         """Create the flat numbered directories for the DIKIWI Zettelkasten."""
