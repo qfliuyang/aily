@@ -111,15 +111,25 @@ Generate:
 1. A specific innovation idea using this operator
 2. Title (concise, clear)
 3. Description (2-3 sentences explaining the innovation)
-4. Expected impact (high/medium/low)
-5. Feasibility (high/medium/low)
-6. Novelty score (0.0-1.0)
-7. Which existing component was modified/removed
+4. Target user
+5. Current workaround
+6. Workflow insertion point
+7. Adoption wedge
+8. Proof artifact
+9. Expected impact (high/medium/low)
+10. Feasibility (high/medium/low)
+11. Novelty score (0.0-1.0)
+12. Which existing component was modified/removed
 
 Format as JSON:
 {{
     "title": "...",
     "description": "...",
+    "target_user": "...",
+    "current_workaround": "...",
+    "workflow_insertion": "...",
+    "adoption_wedge": "...",
+    "proof_artifact": "...",
     "impact": "high",
     "feasibility": "high",
     "novelty": 0.8,
@@ -128,18 +138,39 @@ Format as JSON:
 
         try:
             response = await self.llm_client.chat_json([
-                {"role": "system", "content": "You are a SIT innovation expert. Apply Closed World principle strictly."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a SIT innovation expert. Apply Closed World principle strictly. "
+                        "Prefer concrete workflow innovations over vague platform concepts."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ])
 
+            content = "\n".join([
+                response.get("description", ""),
+                "",
+                f"Target user: {response.get('target_user', 'unknown')}",
+                f"Current workaround: {response.get('current_workaround', 'unknown')}",
+                f"Workflow insertion: {response.get('workflow_insertion', 'unknown')}",
+                f"Adoption wedge: {response.get('adoption_wedge', 'unknown')}",
+                f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
+            ]).strip()
+
             return Proposal(
                 title=f"[SIT-{operator['name']}] {response.get('title', 'Untitled')}",
-                content=response.get("description", ""),
+                content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
                 metadata={
                     "sit_operator": operator_key,
+                    "target_user": response.get("target_user", ""),
+                    "current_workaround": response.get("current_workaround", ""),
+                    "workflow_insertion": response.get("workflow_insertion", ""),
+                    "adoption_wedge": response.get("adoption_wedge", ""),
+                    "proof_artifact": response.get("proof_artifact", ""),
                     "impact": response.get("impact", "medium"),
                     "feasibility": response.get("feasibility", "medium"),
                     "novelty": response.get("novelty", 0.5),

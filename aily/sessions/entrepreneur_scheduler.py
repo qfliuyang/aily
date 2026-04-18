@@ -16,6 +16,33 @@ from aily.sessions.gstack_agent import GStackAgent, GStackPanelResult, GSTACK_PE
 
 logger = logging.getLogger(__name__)
 
+PROPOSAL_CONTEXT_KEYS = (
+    "title",
+    "description",
+    "summary",
+    "hypothesis",
+    "problem",
+    "solution",
+    "target_user",
+    "economic_buyer",
+    "current_workaround",
+    "why_existing_tools_fail",
+    "adoption_wedge",
+    "pilot_design_partner",
+    "integration_boundary",
+    "integration_surface",
+    "workflow_insertion",
+    "workflow_trigger",
+    "proof_artifact",
+    "proof_of_value",
+    "success_metric",
+    "recommended_next_validation",
+    "risks",
+    "why_now",
+    "killer_risk",
+    "focus_areas",
+)
+
 
 class EntrepreneurScheduler(BaseMindScheduler):
     """Entrepreneur Mind that actually takes actions - evaluates by doing."""
@@ -81,44 +108,48 @@ class EntrepreneurScheduler(BaseMindScheduler):
         # Step 2: Evaluate each pending proposal with GStack
         for proposal_node in pending_proposals[: self.proposal_max_per_session]:
             hypothesis = self._build_hypothesis_from_node(proposal_node)
-            context = {
-                "knowledge": [],
-                "innovation_proposals": innovation_proposals,
-                "session_type": "entrepreneur",
-                "proposal_node_id": proposal_node["id"],
-            }
+            context = self._build_gstack_context(
+                proposal_node=proposal_node,
+                hypothesis=hypothesis,
+                innovation_proposals=innovation_proposals,
+            )
 
             if self.use_gstack_panel:
-                panel = await self.gstack_agent.evaluate_panel(
+                evaluation_result = await self.gstack_agent.evaluate_panel(
                     hypothesis=hypothesis["hypothesis"],
                     problem=hypothesis["problem"],
                     solution=hypothesis["solution"],
                     target_user=hypothesis["target_user"],
                     context=context,
                 )
-                total_actions += sum(len(s.actions) for s in panel.sessions)
+                total_actions += sum(len(s.actions) for s in evaluation_result.sessions)
 
                 # Step 3: Process verdict and update GraphDB
                 entrepreneur_proposal = await self._process_gstack_panel_verdict(
-                    proposal_node, panel
+                    proposal_node, evaluation_result
                 )
             else:
-                session = await self.gstack_agent.evaluate(
+                evaluation_result = await self.gstack_agent.evaluate(
                     hypothesis=hypothesis["hypothesis"],
                     problem=hypothesis["problem"],
                     solution=hypothesis["solution"],
                     target_user=hypothesis["target_user"],
                     context=context,
                 )
-                total_actions += len(session.actions)
+                total_actions += len(evaluation_result.actions)
                 entrepreneur_proposal = await self._process_gstack_verdict(
-                    proposal_node, session
+                    proposal_node, evaluation_result
                 )
 
             await self._write_proposal_note(
                 proposal_node,
-                panel if self.use_gstack_panel else session,
+                evaluation_result,
                 approved=entrepreneur_proposal is not None,
+            )
+            await self._write_guru_appendix(
+                proposal_node=proposal_node,
+                panel_or_session=evaluation_result,
+                innovation_proposals=innovation_proposals,
             )
 
             if entrepreneur_proposal:
@@ -219,14 +250,20 @@ class EntrepreneurScheduler(BaseMindScheduler):
             return []
         try:
             proposals = getattr(self.innovation_scheduler, '_current_session_proposals', [])
-            return [
-                {
-                    "title": p.title,
-                    "description": p.summary or p.content,
-                    "confidence": p.confidence,
+            formatted: list[dict] = []
+            for proposal in proposals:
+                item = {
+                    "title": proposal.title,
+                    "description": proposal.summary or proposal.content,
+                    "confidence": proposal.confidence,
                 }
-                for p in proposals
-            ]
+                metadata = getattr(proposal, "metadata", {}) or {}
+                for key in PROPOSAL_CONTEXT_KEYS:
+                    value = metadata.get(key)
+                    if value not in ("", None, [], {}):
+                        item[key] = value
+                formatted.append(item)
+            return formatted
         except Exception:
             return []
 
@@ -259,16 +296,231 @@ class EntrepreneurScheduler(BaseMindScheduler):
 
     def _build_hypothesis_from_node(self, node: dict) -> dict:
         """Build a GStack hypothesis from a Residual proposal node."""
+        props = node.get("properties", {}) or {}
         label = node.get("label", "")
-        title = label.split(":")[0] if ":" in label else label
-        description = label[len(title) + 1 :].strip() if ":" in label else label
+        parsed_title = label.split(":")[0] if ":" in label else label
+        parsed_description = label[len(parsed_title) + 1 :].strip() if ":" in label else label
+        title = props.get("title") or parsed_title or "Business Opportunity"
+        description = (
+            props.get("description")
+            or props.get("summary")
+            or props.get("problem")
+            or parsed_description
+        )
+        problem = props.get("problem") or description or "Problem not clearly defined"
+        solution = props.get("solution") or description or "Solution not clearly defined"
+        target_user = props.get("target_user") or "Users who face this problem"
+        hypothesis = props.get("hypothesis") or f"Building {title} will solve a real problem for {target_user}"
         return {
-            "title": title or "Business Opportunity",
-            "hypothesis": f"Building {title} will solve a real problem",
-            "problem": description or "Problem not clearly defined",
-            "solution": description or "Solution not clearly defined",
-            "target_user": "Users who face this problem",
+            "title": title,
+            "description": description,
+            "summary": props.get("summary", ""),
+            "hypothesis": hypothesis,
+            "problem": problem,
+            "solution": solution,
+            "target_user": target_user,
+            "economic_buyer": props.get("economic_buyer", ""),
+            "current_workaround": props.get("current_workaround", ""),
+            "why_existing_tools_fail": props.get("why_existing_tools_fail", ""),
+            "adoption_wedge": props.get("adoption_wedge", ""),
+            "pilot_design_partner": props.get("pilot_design_partner", ""),
+            "integration_boundary": props.get("integration_boundary", ""),
+            "integration_surface": props.get("integration_surface", ""),
+            "workflow_insertion": props.get("workflow_insertion", ""),
+            "workflow_trigger": props.get("workflow_trigger", ""),
+            "proof_artifact": props.get("proof_artifact", ""),
+            "proof_of_value": props.get("proof_of_value", ""),
+            "success_metric": props.get("success_metric", ""),
+            "recommended_next_validation": props.get("recommended_next_validation", ""),
+            "risks": props.get("risks", []),
+            "why_now": props.get("why_now", ""),
+            "killer_risk": props.get("killer_risk", ""),
+            "focus_areas": props.get("focus_areas", []),
         }
+
+    def _build_gstack_context(
+        self,
+        proposal_node: dict,
+        hypothesis: dict[str, Any],
+        innovation_proposals: list[dict],
+    ) -> dict[str, Any]:
+        """Build the full proposal context for GStack actions."""
+        props = proposal_node.get("properties", {}) or {}
+        context = {
+            "knowledge": [],
+            "innovation_proposals": innovation_proposals,
+            "session_type": "entrepreneur",
+            "proposal_node_id": proposal_node["id"],
+        }
+        for key, value in props.items():
+            if value not in ("", None, [], {}):
+                context[key] = value
+        for key, value in hypothesis.items():
+            if value not in ("", None, [], {}):
+                context[key] = value
+        return context
+
+    @staticmethod
+    def _append_proposal_context(lines: list[str], hypothesis: dict[str, Any]) -> None:
+        """Append a structured proposal brief to a markdown note."""
+        fields = (
+            ("Hypothesis", hypothesis.get("hypothesis", "")),
+            ("Problem", hypothesis.get("problem", "")),
+            ("Solution", hypothesis.get("solution", "")),
+            ("Target User", hypothesis.get("target_user", "")),
+            ("Economic Buyer", hypothesis.get("economic_buyer", "")),
+            ("Current Workaround", hypothesis.get("current_workaround", "")),
+            ("Adoption Wedge", hypothesis.get("adoption_wedge", "")),
+            ("Workflow Insertion", hypothesis.get("workflow_insertion", "")),
+            ("Integration Boundary", hypothesis.get("integration_boundary", "")),
+            ("Proof Artifact", hypothesis.get("proof_artifact", "")),
+            ("Recommended Next Validation", hypothesis.get("recommended_next_validation", "")),
+        )
+        lines.extend(["## Proposal Brief", ""])
+        for label, value in fields:
+            if value not in ("", None, [], {}):
+                lines.append(f"- **{label}:** {value}")
+        risks = hypothesis.get("risks", [])
+        if risks:
+            lines.append("- **Key Risks:** " + "; ".join(str(risk) for risk in risks[:5]))
+        lines.append("")
+
+    @staticmethod
+    def _evaluation_result_meta(panel_or_session: Any) -> dict[str, Any]:
+        """Extract verdict metadata from a GStack result."""
+        if isinstance(panel_or_session, GStackPanelResult):
+            return {
+                "verdict": panel_or_session.final_verdict,
+                "confidence": panel_or_session.final_confidence,
+                "reasoning": panel_or_session.synthesis_reasoning,
+            }
+        return {
+            "verdict": getattr(panel_or_session, "verdict", "needs_more_validation"),
+            "confidence": getattr(panel_or_session, "confidence", 0.0),
+            "reasoning": "",
+        }
+
+    @staticmethod
+    def _render_guru_appendix(title: str, guru_plan: dict[str, Any], evaluation_meta: dict[str, Any]) -> str:
+        """Render the Guru appendix as markdown."""
+        lines = [
+            f"# Guru Appendix: {title}",
+            "",
+            f"**GStack Verdict:** {evaluation_meta.get('verdict', 'needs_more_validation')}",
+            f"**Confidence:** {evaluation_meta.get('confidence', 0.0):.0%}",
+        ]
+        if evaluation_meta.get("reasoning"):
+            lines.extend(["", "## GStack Framing", "", str(evaluation_meta["reasoning"])])
+
+        executive_take = guru_plan.get("executive_take", "")
+        if executive_take:
+            lines.extend(["", "## Executive Take", "", executive_take])
+
+        decision_posture = guru_plan.get("decision_posture", "")
+        if decision_posture:
+            lines.extend(["", f"**Decision Posture:** {decision_posture}"])
+
+        fact_base = guru_plan.get("fact_base", [])
+        if fact_base:
+            lines.extend(["", "## Fact Base", ""])
+            for item in fact_base:
+                item_type = item.get("type", "fact")
+                statement = item.get("statement", "")
+                implication = item.get("implication", "")
+                lines.append(f"- **{item_type}:** {statement} -> {implication}")
+
+        business_plan = guru_plan.get("business_plan", {})
+        if business_plan:
+            lines.extend(["", "## Hypothesis-Driven Business Plan", ""])
+            for heading, key in (
+                ("Core Thesis", "core_thesis"),
+                ("Market Logic", "market_logic"),
+                ("Customer And Buyer Map", "customer_and_buyer_map"),
+                ("Wedge And Positioning", "wedge_and_positioning"),
+                ("Commercial Motion", "commercial_motion"),
+            ):
+                value = business_plan.get(key, "")
+                if value:
+                    lines.extend([f"### {heading}", "", value, ""])
+            for heading, key in (
+                ("Validation Program", "validation_program"),
+                ("Decision Gates", "decision_gates"),
+                ("Salvage Or Acceleration", "salvage_or_acceleration"),
+            ):
+                entries = business_plan.get(key, [])
+                if entries:
+                    lines.extend([f"### {heading}", ""])
+                    for entry in entries:
+                        lines.append(f"- {entry}")
+                    lines.append("")
+
+        development_plan = guru_plan.get("development_plan", {})
+        if development_plan:
+            lines.extend(["## Simulation-Driven Development Plan", ""])
+            for heading, key in (
+                ("Technical Thesis", "technical_thesis"),
+                ("System Boundary", "system_boundary"),
+                ("Architecture Outline", "architecture_outline"),
+            ):
+                value = development_plan.get(key, "")
+                if value:
+                    lines.extend([f"### {heading}", "", value, ""])
+            for heading, key in (
+                ("Simulation Program", "simulation_program"),
+                ("Constraints", "constraints"),
+                ("Feedback Loops", "feedback_loops"),
+                ("Milestones", "milestones"),
+                ("Team And Dependencies", "team_and_dependencies"),
+                ("Kill Criteria", "kill_criteria"),
+            ):
+                entries = development_plan.get(key, [])
+                if entries:
+                    lines.extend([f"### {heading}", ""])
+                    for entry in entries:
+                        lines.append(f"- {entry}")
+                    lines.append("")
+
+        briefing_notes = guru_plan.get("briefing_notes", {})
+        if briefing_notes:
+            lines.extend(["## Briefing Notes", ""])
+            if briefing_notes.get("ceo"):
+                lines.extend(["### CEO", "", briefing_notes["ceo"], ""])
+            if briefing_notes.get("cto"):
+                lines.extend(["### CTO", "", briefing_notes["cto"], ""])
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    async def _write_guru_appendix(
+        self,
+        proposal_node: dict,
+        panel_or_session: Any,
+        innovation_proposals: list[dict],
+    ) -> None:
+        """Write the Guru planning appendix for future reference."""
+        if not self.obsidian_writer:
+            return
+        try:
+            hypothesis = self._build_hypothesis_from_node(proposal_node)
+            context = self._build_gstack_context(
+                proposal_node=proposal_node,
+                hypothesis=hypothesis,
+                innovation_proposals=innovation_proposals,
+            )
+            guru_plan = await self.gstack_agent.generate_guru_plan(context, panel_or_session)
+            evaluation_meta = self._evaluation_result_meta(panel_or_session)
+            title = hypothesis["title"]
+            verdict = str(evaluation_meta.get("verdict", "needs_more_validation"))
+            safe_title = "".join(c for c in title if c.isalnum() or c in "_- ").rstrip("_- ")[:80]
+            appendix_title = f"appendix-{verdict}-{safe_title}"
+            markdown = self._render_guru_appendix(title, guru_plan, evaluation_meta)
+            await self.obsidian_writer.write_note(
+                title=appendix_title,
+                markdown=markdown,
+                source_url="aily://entrepreneur_appendix",
+            )
+            logger.info("[Entrepreneur] Wrote guru appendix: %s", appendix_title)
+        except Exception as e:
+            logger.warning("[Entrepreneur] Failed to write guru appendix: %s", e)
 
     async def _process_gstack_panel_verdict(
         self, proposal_node: dict, panel: GStackPanelResult
@@ -307,10 +559,16 @@ class EntrepreneurScheduler(BaseMindScheduler):
             await self.graph_db.set_node_property(node_id, "status", "incubating")
             await self.graph_db.set_node_property(node_id, "business_score", confidence)
             await self._create_incubation_task(proposal_node, panel)
+            proposal_brief = self._build_hypothesis_from_node(proposal_node)
+            proposal_metadata = {
+                key: value
+                for key, value in proposal_brief.items()
+                if key != "title" and value not in ("", None, [], {})
+            }
             return Proposal(
                 id=f"biz_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{node_id[-4:]}",
                 mind_name="entrepreneur",
-                title=self._build_hypothesis_from_node(proposal_node)["title"],
+                title=proposal_brief["title"],
                 content=panel.synthesis_reasoning or panel.sessions[0].hypothesis,
                 summary=panel.synthesis_reasoning[:200] if panel.synthesis_reasoning else panel.sessions[0].hypothesis[:200],
                 confidence=confidence,
@@ -322,6 +580,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 source_knowledge_ids=[node_id],
                 framework_used="GStack Panel",
                 metadata={
+                    **proposal_metadata,
                     "problem": panel.sessions[0].problem,
                     "solution": panel.sessions[0].solution,
                     "target_user": panel.sessions[0].target_user,
@@ -373,10 +632,16 @@ class EntrepreneurScheduler(BaseMindScheduler):
             await self.graph_db.set_node_property(node_id, "status", "incubating")
             await self.graph_db.set_node_property(node_id, "business_score", confidence)
             await self._create_incubation_task(proposal_node, session)
+            proposal_brief = self._build_hypothesis_from_node(proposal_node)
+            proposal_metadata = {
+                key: value
+                for key, value in proposal_brief.items()
+                if key != "title" and value not in ("", None, [], {})
+            }
             return Proposal(
                 id=f"biz_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{node_id[-4:]}",
                 mind_name="entrepreneur",
-                title=self._build_hypothesis_from_node(proposal_node)["title"],
+                title=proposal_brief["title"],
                 content=session.hypothesis,
                 summary=session.hypothesis[:200],
                 confidence=confidence,
@@ -388,6 +653,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 source_knowledge_ids=[node_id],
                 framework_used="GStack",
                 metadata={
+                    **proposal_metadata,
                     "problem": session.problem,
                     "solution": session.solution,
                     "target_user": session.target_user,
@@ -437,11 +703,13 @@ class EntrepreneurScheduler(BaseMindScheduler):
         if not self.obsidian_writer:
             return
         try:
-            title = self._build_hypothesis_from_node(proposal_node)["title"]
+            hypothesis = self._build_hypothesis_from_node(proposal_node)
+            title = hypothesis["title"]
             lines = [
                 f"# Incubation Task: {title}",
                 "",
             ]
+            self._append_proposal_context(lines, hypothesis)
 
             # Handle both panel and single session
             if isinstance(panel_or_session, GStackPanelResult):
@@ -490,12 +758,16 @@ class EntrepreneurScheduler(BaseMindScheduler):
         if not self.obsidian_writer:
             return
         try:
-            title = self._build_hypothesis_from_node(proposal_node)["title"]
+            hypothesis = self._build_hypothesis_from_node(proposal_node)
+            title = hypothesis["title"]
             prefix = "approved" if approved else "denied"
             safe_title = "".join(c for c in title if c.isalnum() or c in "_- ").rstrip("_- ")[:80]
             note_title = f"{prefix}-{safe_title}"
+            evaluation_meta = self._evaluation_result_meta(panel_or_session)
+            appendix_title = f"appendix-{evaluation_meta.get('verdict', 'needs_more_validation')}-{safe_title}"
 
-            lines = [f"# {title}", ""]
+            lines = [f"# {title}", "", f"**Guru Appendix:** [[{appendix_title}]]", ""]
+            self._append_proposal_context(lines, hypothesis)
 
             if isinstance(panel_or_session, GStackPanelResult):
                 panel = panel_or_session

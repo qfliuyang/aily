@@ -204,6 +204,15 @@ class TestGStackAnalyzer:
         assert result.framework_type == FrameworkType.GSTACK
         mock_llm.chat_json.assert_called_once()
 
+    def test_gstack_system_prompt_supports_deeptech_workflows(self, mock_llm):
+        analyzer = GStackAnalyzer(mock_llm)
+
+        system_prompt = analyzer.get_system_prompt()
+
+        assert "enterprise and deep-tech markets" in system_prompt
+        assert "integration cost" in system_prompt
+        assert "signoff trust" in system_prompt
+
 
 class TestAnalyzerConfiguration:
     """Tests for analyzer configuration options."""

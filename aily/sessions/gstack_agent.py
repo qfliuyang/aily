@@ -25,14 +25,19 @@ logger = logging.getLogger(__name__)
 GSTACK_PERSONAS: dict[str, dict[str, str]] = {
     "general": {
         "name": "General Partner",
-        "prompt": "You are Garry Tan rendering a final investment decision. Be direct. No hedging.",
+        "prompt": (
+            "You are chairing a high-standard investment and product review. "
+            "Be direct and specific. Prefer concrete judgment over swagger. "
+            "In deep-tech or enterprise markets, narrow wedges can be valid if the pain, buyer, and proof path are clear."
+        ),
     },
     "ceo": {
         "name": "CEO / Founder",
         "prompt": (
             "You are a CEO evaluating a business opportunity. "
             "Challenge scope and ambition. Is this the right thing to build? "
-            "Is the problem real, large, and growing? Demand extraordinary evidence. "
+            "Is the problem real, acute, and budget-worthy? Demand strong evidence. "
+            "For enterprise and deep-tech ideas, care about workflow ownership, champion quality, and adoption path as much as market size. "
             "Be direct. No hedging."
         ),
     },
@@ -40,15 +45,17 @@ GSTACK_PERSONAS: dict[str, dict[str, str]] = {
         "name": "Senior Engineer",
         "prompt": (
             "You are a senior engineer evaluating technical feasibility and execution risk. "
-            "Look for architecture landmines, underestimated complexity, and team gaps. "
+            "Look for architecture landmines, underestimated complexity, integration burden, validation burden, and team gaps. "
+            "For EDA or semiconductor workflows, weigh signoff trust, insertion cost, and benchmarkability heavily. "
             "Be direct. No hedging."
         ),
     },
     "designer": {
         "name": "Product Designer",
         "prompt": (
-            "You are a product designer evaluating user experience and differentiation. "
-            "Ask: does this feel like AI slop? Is the wedge narrow enough to win? "
+            "You are a product designer evaluating workflow fit, usability, and differentiation. "
+            "Ask whether the user experience is credible for the target workflow and whether the product earns adoption through clarity and trust. "
+            "For enterprise and deep-tech ideas, focus on operator workflow, explainability, and friction to first value. "
             "Be direct. No hedging."
         ),
     },
@@ -56,8 +63,18 @@ GSTACK_PERSONAS: dict[str, dict[str, str]] = {
         "name": "Market Analyst",
         "prompt": (
             "You are a competitive intelligence analyst. Who already does this? "
-            "Why would anyone switch? Is the market large enough to matter? "
+            "Why would anyone switch? What incumbent workflow or vendor is the real substitute? "
+            "In deep-tech and EDA, a narrow market can still matter if annual value per customer is high and adoption can start with a credible wedge. "
             "Be direct. No hedging."
+        ),
+    },
+    "guru": {
+        "name": "Guru",
+        "prompt": (
+            "You are a guru-level business strategist and systems architect writing executive briefing appendices for a CEO and CTO. "
+            "Produce hypothesis-driven, fact-based logical insight for the business plan and simulation-driven, constraint-based, feedback-evolving reasoning for the development plan. "
+            "Be concrete, structured, and rigorous. Separate facts, inferences, and unknowns. "
+            "Every idea deserves a serious salvage, validation, or execution path even when the current verdict is negative."
         ),
     },
 }
@@ -169,6 +186,45 @@ class GStackAgent:
             "assess_tech_risk": self._assess_tech_risk,
             "check_deployment_readiness": self._check_deployment_readiness,
         }
+
+    @staticmethod
+    def _is_deeptech_context(context: dict[str, Any] | None = None, text: str = "") -> bool:
+        context = context or {}
+        haystack_parts = [text]
+        for key in ("hypothesis", "problem", "solution", "target_user"):
+            value = context.get(key)
+            if isinstance(value, str):
+                haystack_parts.append(value)
+        focus = context.get("focus_areas", [])
+        if isinstance(focus, list):
+            haystack_parts.extend(str(item) for item in focus)
+        haystack = " ".join(haystack_parts).lower()
+        keywords = (
+            "eda",
+            "semiconductor",
+            "signoff",
+            "timing",
+            "verification",
+            "physical design",
+            "characterization",
+            "rtl",
+            "eco",
+            "silicon",
+            "enterprise workflow",
+            "toolchain",
+        )
+        return any(word in haystack for word in keywords)
+
+    def _persona_system_prompt(self, persona: str, context: dict[str, Any] | None = None) -> str:
+        base_prompt = GSTACK_PERSONAS.get(persona, GSTACK_PERSONAS["general"])["prompt"]
+        if self._is_deeptech_context(context):
+            return (
+                f"{base_prompt} "
+                "This is likely a deep-tech, enterprise, EDA, or semiconductor evaluation. "
+                "Judge it by workflow pain, insertion cost, signoff trust, benchmark delta, buyer clarity, and pilotability. "
+                "Do not reject a narrow wedge merely because it is not a broad consumer market."
+            )
+        return base_prompt
 
     async def evaluate(
         self,
@@ -307,6 +363,7 @@ Rules:
 - If the panel is split, side with the most bearish credible view unless one side has overwhelming evidence.
 - Technical blockers from the engineer should weigh heavily.
 - If confidence is low across the board, default to needs_more_validation.
+- In deep-tech or EDA cases, do not kill the idea purely for being narrow; focus on buyer clarity, workflow pain, insertion cost, and proof path.
 - Be direct. No hedging.
 
 Return JSON:
@@ -321,7 +378,7 @@ Return JSON:
             result = await self.llm_client.chat_json(
                 messages=[{
                     "role": "system",
-                    "content": "You are Garry Tan chairing the final investment committee. Be direct. No hedging.",
+                    "content": self._persona_system_prompt("general", context),
                 }, {
                     "role": "user",
                     "content": prompt,
@@ -349,6 +406,180 @@ Return JSON:
             synthesis_reasoning=reasoning,
             split_verdict=split_verdict,
         )
+
+    @staticmethod
+    def _evaluation_summary(
+        panel_or_session: GStackPanelResult | GStackSession,
+    ) -> dict[str, Any]:
+        """Normalize GStack evaluation results for downstream planning."""
+        if isinstance(panel_or_session, GStackPanelResult):
+            sessions_summary = []
+            for session in panel_or_session.sessions:
+                sessions_summary.append(
+                    {
+                        "persona": session.persona,
+                        "verdict": session.verdict,
+                        "confidence": session.confidence,
+                        "key_findings": session.key_findings[:8],
+                        "blockers": session.blockers[:8],
+                        "opportunities": session.opportunities[:8],
+                        "actions": [
+                            {
+                                "action": action.action,
+                                "status": action.status,
+                                "output": action.output[:240],
+                            }
+                            for action in session.actions[:8]
+                        ],
+                    }
+                )
+            return {
+                "verdict": panel_or_session.final_verdict,
+                "confidence": panel_or_session.final_confidence,
+                "reasoning": panel_or_session.synthesis_reasoning,
+                "split_verdict": panel_or_session.split_verdict,
+                "sessions": sessions_summary,
+            }
+
+        return {
+            "verdict": panel_or_session.verdict,
+            "confidence": panel_or_session.confidence,
+            "reasoning": "",
+            "split_verdict": False,
+            "sessions": [
+                {
+                    "persona": panel_or_session.persona,
+                    "verdict": panel_or_session.verdict,
+                    "confidence": panel_or_session.confidence,
+                    "key_findings": panel_or_session.key_findings[:8],
+                    "blockers": panel_or_session.blockers[:8],
+                    "opportunities": panel_or_session.opportunities[:8],
+                    "actions": [
+                        {
+                            "action": action.action,
+                            "status": action.status,
+                            "output": action.output[:240],
+                        }
+                        for action in panel_or_session.actions[:8]
+                    ],
+                }
+            ],
+        }
+
+    async def generate_guru_plan(
+        self,
+        context: dict[str, Any],
+        panel_or_session: GStackPanelResult | GStackSession,
+    ) -> dict[str, Any]:
+        """Generate a deep business and development appendix for a reviewed idea."""
+
+        evaluation = self._evaluation_summary(panel_or_session)
+        prompt = f"""Produce a CEO/CTO-grade appendix for this reviewed proposal.
+
+Audience:
+- CEO briefing: strategy, commercial logic, validation sequence, kill criteria
+- CTO briefing: architecture thesis, simulation plan, constraints, milestones, technical risk retirement
+
+Proposal Brief:
+Title: {context.get("title", "")}
+Hypothesis: {context.get("hypothesis", "")}
+Problem: {context.get("problem", "")}
+Solution: {context.get("solution", "")}
+Target User: {context.get("target_user", "")}
+Economic Buyer: {context.get("economic_buyer", "")}
+Current Workaround: {context.get("current_workaround", "")}
+Why Existing Tools Fail: {context.get("why_existing_tools_fail", "")}
+Adoption Wedge: {context.get("adoption_wedge", "")}
+Workflow Insertion: {context.get("workflow_insertion", "")}
+Workflow Trigger: {context.get("workflow_trigger", "")}
+Integration Boundary: {context.get("integration_boundary", "")}
+Integration Surface: {context.get("integration_surface", "")}
+Proof Artifact: {context.get("proof_artifact", "")}
+Proof of Value: {context.get("proof_of_value", "")}
+Success Metric: {context.get("success_metric", "")}
+Why Now: {context.get("why_now", "")}
+Recommended Next Validation: {context.get("recommended_next_validation", "")}
+Known Risks: {json.dumps(context.get("risks", []), ensure_ascii=False)}
+Killer Risk: {context.get("killer_risk", "")}
+
+GStack Review:
+Verdict: {evaluation["verdict"]}
+Confidence: {evaluation["confidence"]:.2f}
+Reasoning: {evaluation["reasoning"]}
+Panel Details:
+{json.dumps(evaluation["sessions"], ensure_ascii=False, indent=2)}
+
+Instructions:
+- Produce hypothesis-driven, fact-based logical insight for the business plan.
+- Produce simulation-driven, constraint-based, feedback-evolving planning for the development plan.
+- Separate facts, inferences, and unknowns.
+- If the verdict is negative or uncertain, do not give up. Provide the best salvage, reframing, validation, and conditional build path.
+- If the verdict is positive, provide an execution-grade incubation path with concrete commercial and technical milestones.
+- For deep-tech, enterprise, semiconductor, or EDA opportunities, anchor the plan in workflow trust, insertion cost, benchmark evidence, pilot design, and signoff constraints.
+- Avoid generic startup slogans. Use crisp reasoning and explicit gates.
+
+Return JSON:
+{{
+  "executive_take": "2-4 sentence top-level assessment",
+  "decision_posture": "build_now|validate_then_build|reframe|archive_for_now",
+  "fact_base": [
+    {{
+      "type": "fact|inference|unknown",
+      "statement": "specific point",
+      "implication": "why it matters"
+    }}
+  ],
+  "business_plan": {{
+    "core_thesis": "central business thesis",
+    "market_logic": "why this market/workflow matters",
+    "customer_and_buyer_map": "user, champion, buyer, blocker",
+    "wedge_and_positioning": "narrow initial wedge and why it can win",
+    "commercial_motion": "pilot to expansion motion",
+    "validation_program": ["ordered validation step"],
+    "decision_gates": ["explicit pass/fail gate"],
+    "salvage_or_acceleration": ["how to rescue denied ideas or accelerate accepted ones"]
+  }},
+  "development_plan": {{
+    "technical_thesis": "core technical bet",
+    "system_boundary": "what is in/out of scope",
+    "architecture_outline": "modules and interfaces",
+    "simulation_program": ["simulation/benchmark step"],
+    "constraints": ["constraint or non-negotiable"],
+    "feedback_loops": ["how learning updates the plan"],
+    "milestones": ["milestone with expected artifact"],
+    "team_and_dependencies": ["people, tools, datasets, integrations"],
+    "kill_criteria": ["technical or business stop condition"]
+  }},
+  "briefing_notes": {{
+    "ceo": "what the CEO should focus on next",
+    "cto": "what the CTO should focus on next"
+  }}
+}}"""
+
+        try:
+            return await self.llm_client.chat_json(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": self._persona_system_prompt("guru", context),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0.4,
+            )
+        except Exception as e:
+            logger.error("[GStack Guru] Appendix generation failed: %s", e)
+            return {
+                "executive_take": "Guru appendix generation failed.",
+                "decision_posture": "validate_then_build",
+                "fact_base": [],
+                "business_plan": {},
+                "development_plan": {},
+                "briefing_notes": {},
+            }
 
     async def _run_action(
         self,
@@ -427,7 +658,7 @@ Look for:
 4. Test coverage signs
 5. Documentation quality
 
-Be direct. What's the real technical health?
+Be direct. What's the real technical health? If this is a deep-tech workflow product, evaluate whether the codebase looks credible enough for pilot adoption rather than consumer-scale growth.
 
 Return JSON:
 {{
@@ -485,11 +716,19 @@ Return JSON:
         hypothesis = context.get("hypothesis", "")
         target_user = context.get("target_user", "")
         persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
+        domain_hint = (
+            "This appears to be a deep-tech, enterprise, or EDA-style opportunity. "
+            "Look for incumbent tool vendors, in-house workflows, service firms, and internal scripts as substitutes. "
+            "A narrow market can still matter if value per customer is high."
+            if self._is_deeptech_context(context)
+            else ""
+        )
 
         prompt = f"""Search for market intelligence on this business from the perspective of a {persona_label}.
 
 Hypothesis: {hypothesis}
 Target User: {target_user}
+{domain_hint}
 
 Find:
 1. Existing competitors (direct and indirect)
@@ -497,6 +736,7 @@ Find:
 3. Recent similar startups (funded, failed, exited)
 4. User pain point validation signals
 5. Regulatory or market risks
+6. For enterprise or EDA ideas, identify the real incumbent workflow, buyer, and switching barriers
 
 Return JSON:
 {{
@@ -527,11 +767,18 @@ Return JSON:
         problem = context.get("problem", "")
         target_user = context.get("target_user", "")
         persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
+        domain_hint = (
+            "If this is a deep-tech, enterprise, or EDA problem, validate workflow pain, signoff risk, wasted engineer hours, QoR impact, or runtime cost. "
+            "Do not require consumer-style virality signals."
+            if self._is_deeptech_context(context)
+            else ""
+        )
 
         prompt = f"""Validate this problem statement like a {persona_label}.
 
 Problem: {problem}
 Target User: {target_user}
+{domain_hint}
 
 Ask the hard questions:
 1. How do you KNOW this is a real problem?
@@ -539,6 +786,7 @@ Ask the hard questions:
 3. How much are they paying (in time or money) for current solutions?
 4. Is this a hair-on-fire problem or a nice-to-have?
 5. Have you talked to 10+ potential users?
+6. In enterprise or EDA cases, who inside the workflow feels the pain first and who would sponsor a pilot?
 
 Return JSON:
 {{
@@ -567,10 +815,16 @@ Return JSON:
 
         solution = context.get("solution", "")
         persona_label = GSTACK_PERSONAS.get(persona, {}).get("name", persona)
+        domain_hint = (
+            "For deep-tech, enterprise, or EDA ideas, focus on validation burden, insertion cost into existing flows, trust requirements, benchmarkability, and proof artifacts."
+            if self._is_deeptech_context(context)
+            else ""
+        )
 
         prompt = f"""Assess technical risks for this solution from the perspective of a {persona_label}.
 
 Solution: {solution}
+{domain_hint}
 
 Evaluate:
 1. Technical feasibility (can it be built?)
@@ -579,6 +833,7 @@ Evaluate:
 4. Team capability requirements
 5. Infrastructure costs at scale
 6. Security/compliance considerations
+7. Workflow insertion and validation burden
 
 Return JSON:
 {{
@@ -664,11 +919,15 @@ Blockers:
 Opportunities:
 {opportunities}
 
-Render verdict like a senior partner would - direct, no bullshit:
+Render verdict like a senior partner would - direct and concrete:
 - build_it: Strong signal, clear path, real problem
 - pivot: Something's off but there's potential
 - kill_it: Fatal flaws, don't waste time
 - needs_more_validation: Not enough data to decide
+
+Important:
+- In deep-tech or EDA cases, a narrow wedge is acceptable if buyer, workflow pain, proof path, and insertion strategy are credible.
+- Do not default to kill_it only because the market is specialized or enterprise-led.
 
 Return JSON:
 {{
@@ -679,7 +938,12 @@ Return JSON:
     "next_steps": ["do this", "then this"]
 }}"""
 
-        system_prompt = GSTACK_PERSONAS.get(persona, GSTACK_PERSONAS["general"])["prompt"]
+        system_prompt = self._persona_system_prompt(persona, {
+            "hypothesis": session.hypothesis,
+            "problem": session.problem,
+            "solution": session.solution,
+            "target_user": session.target_user,
+        })
 
         try:
             result = await self.llm_client.chat_json(

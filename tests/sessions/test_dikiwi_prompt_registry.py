@@ -22,6 +22,40 @@ def test_prompt_registry_builds_shared_mission_messages():
     assert "## Shared Memory" in messages[1]["content"]
 
 
+def test_prompt_registry_strengthens_knowledge_and_proposal_guidance():
+    relation_messages = DikiwiPromptRegistry.relation_batch(
+        nodes=[],
+        memory_context="",
+    )
+    relation_system = relation_messages[0]["content"]
+    relation_user = relation_messages[1]["content"]
+
+    assert "Do not create edges between near-duplicate nodes" in relation_system
+    assert "depends_on|enables|tradeoff_with" in relation_user
+
+    impact_messages = DikiwiPromptRegistry.impact(
+        zettels_desc="- A workflow note",
+        memory_context="",
+    )
+    impact_system = impact_messages[0]["content"]
+    impact_user = impact_messages[1]["content"]
+
+    assert "Prefer proposal seeds that name a user, buyer" in impact_system
+    assert '"target_user": "Who specifically feels this pain first"' in impact_user
+
+    residual_messages = DikiwiPromptRegistry.residual_synthesis(
+        vault_excerpts="vault",
+        graph_nodes="graph",
+        reactor_proposals="reactor",
+        memory_context="",
+    )
+    residual_system = residual_messages[0]["content"]
+    residual_user = residual_messages[1]["content"]
+
+    assert "Draft venture hypotheses, not only strategic themes." in residual_system
+    assert '"adoption_wedge": "Narrow initial wedge that could win first"' in residual_user
+
+
 @pytest.mark.asyncio
 async def test_dikiwi_classification_uses_shared_memory():
     llm_client = MagicMock()

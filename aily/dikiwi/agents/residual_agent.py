@@ -364,7 +364,11 @@ class ResidualAgent(DikiwiAgent):
 
             node_id = f"residual_{uuid.uuid4().hex[:8]}"
             title = proposal.get("title", "Untitled Proposal")
-            description = proposal.get("description", "")
+            description = (
+                proposal.get("description")
+                or proposal.get("problem")
+                or proposal.get("summary", "")
+            )
             label = f"{title}: {description[:200]}"
 
             try:
@@ -380,10 +384,14 @@ class ResidualAgent(DikiwiAgent):
                 if report_note_id:
                     await ctx.graph_db.set_node_property(
                         node_id, "residual_report_path", report_note_id
-                    )
+                )
                 await ctx.graph_db.set_node_property(
                     node_id, "validation_attempts", 0
                 )
+                for key, value in proposal.items():
+                    if value in ("", None, [], {}):
+                        continue
+                    await ctx.graph_db.set_node_property(node_id, key, value)
             except Exception as exc:
                 logger.warning("[RESIDUAL] Failed to insert proposal node: %s", exc)
 

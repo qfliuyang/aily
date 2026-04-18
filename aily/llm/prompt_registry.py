@@ -47,9 +47,13 @@ class DikiwiPromptRegistry:
   "title": "Document or content title if identifiable, otherwise empty string",
   "data_points": [
     {
+      "canonical_title": "Durable human-readable title for this idea (5-12 words)",
       "concept": "Short name for this concept (3-8 words)",
       "content": "2-5 sentence explanation with specific details: what it is, why it matters, and how it works. Must stand alone without reading the source. Avoid vague abstractions.",
       "context": "Section or topic area this comes from",
+      "source_evidence": [
+        "Short paraphrased evidence anchor from the source"
+      ],
       "confidence": 0.0-1.0,
       "type": "mechanism|finding|method|principle|definition|tradeoff|constraint|example|fact|claim"
     }
@@ -68,18 +72,23 @@ Prefer depth over breadth."""
 
     CLASSIFICATION_CONTRACT = """Respond with JSON:
 {
+  "canonical_title": "Human-usable note title for this information unit",
   "tags": ["tag1", "tag2", "tag3"],
-  "info_type": "fact|claim|evidence|opinion|definition|hypothesis|question",
+  "keywords": ["keyword1", "keyword2"],
+  "info_type": "fact|claim|evidence|definition|method|tradeoff|constraint|workflow|metric|question",
   "domain": "technology|business|science|philosophy|arts|general|engineering|ai|semiconductor|eda",
+  "source_evidence": [
+    "Short paraphrased evidence anchor from the source"
+  ],
   "confidence": 0.0-1.0,
   "reasoning": "Why these classifications were chosen"
 }"""
 
     RELATION_CONTRACT = """Respond with JSON:
 {
-  "relation_type": "supports|contradicts|relates_to|part_of|leads_to|example_of|none",
+  "relation_type": "supports|contradicts|depends_on|enables|tradeoff_with|part_of|example_of|applies_to|none",
   "strength": 0.0-1.0,
-  "reasoning": "Explanation of the relationship",
+  "reasoning": "Concrete bridge explanation showing why A materially helps explain B",
   "bidirectional": true|false
 }"""
 
@@ -87,11 +96,14 @@ Prefer depth over breadth."""
 {
   "insights": [
     {
-      "type": "theme|contradiction|opportunity|gap|pattern|tension|path",
-      "description": "Clear description of the short path formed by linked information. Show how 2-4 connected nodes reveal something neither node shows alone.",
+      "insight_title": "Short human-readable title for the insight",
+      "type": "theme|contradiction|opportunity|gap|pattern|tension|path|decision_rule|mechanism",
+      "description": "Clear description of the non-obvious claim revealed by the short path. Show how 2-4 connected nodes reveal something neither node shows alone.",
+      "why_nonobvious": "Why this conclusion is more than a restatement of the nodes",
       "confidence": 0.0-1.0,
       "related_node_indices": [0, 1, 2],
-      "significance": "Why traversing this small path matters"
+      "significance": "Why traversing this small path matters",
+      "design_implication": "What decision, design move, or research move this insight suggests"
     }
   ],
   "synthesis": "Overall summary of what this knowledge network represents as a set of short traversable paths",
@@ -103,14 +115,17 @@ Prefer depth over breadth."""
 {
   "zettels": [
     {
+      "canonical_title": "Durable human-readable permanent note title",
       "title": "Full sentence describing the core idea or long-path principle",
+      "thesis": "One-sentence durable claim this note defends",
       "content": "Complete markdown content (150-400 words) in full paragraphs. Synthesize several paths and long paths into a more complex graph structure. Show how multiple insights interlock into durable principles.",
       "tags": ["domain", "concept", "application"],
       "links_to": ["Related concept 1", "Related concept 2", "Contrasting idea", "Long-path principle"],
       "confidence": 0.0-1.0,
       "source_evidence": [
         "Specific information fragment from the source that supports this note"
-      ]
+      ],
+      "open_questions": ["Optional unresolved question or next check"]
     }
   ],
   "note_strategy": "Explain how you split the source into separate permanent notes and how they form interlocking paths"
@@ -123,6 +138,14 @@ Prefer depth over breadth."""
     {
       "type": "innovation|opportunity|action|research|exploration|breakthrough",
       "description": "High-leverage actionable proposal — the center that could explode as the next big thing",
+      "target_user": "Who specifically feels this pain first",
+      "economic_buyer": "Who would budget for this if it works",
+      "workflow_trigger": "What event or workflow moment makes this urgent",
+      "current_workaround": "How teams handle it today",
+      "integration_surface": "Where this inserts into the workflow or toolchain",
+      "proof_of_value": "First benchmark, artifact, or result that would prove value",
+      "why_now": "What changed to make this timely",
+      "killer_risk": "Most likely reason this fails in practice",
       "priority": "high|medium|low",
       "rationale": "Why this follows from the wisdom and why it has explosive potential",
       "effort_estimate": "small|medium|large",
@@ -144,12 +167,24 @@ Prefer depth over breadth."""
   "proposals": [
     {
       "title": "Proposal title",
+      "problem": "Clear statement of the workflow problem being solved",
       "description": "Detailed proposal description (2-4 sentences)",
       "domain": "technology|business|science|general",
+      "target_user": "Primary user or team that feels the problem",
+      "economic_buyer": "Who would pay for this",
+      "current_workaround": "How teams solve it today",
+      "why_existing_tools_fail": "Why the current workaround is insufficient",
+      "adoption_wedge": "Narrow initial wedge that could win first",
+      "integration_boundary": "Where it plugs into the current workflow",
+      "proof_artifact": "Benchmark, prototype, pilot result, or report that would prove value",
+      "success_metric": "Metric that would validate the idea",
       "priority": "high|medium|low",
       "rationale": "Why this proposal is supported by the vault contents and/or Reactor frameworks",
       "source_evidence": ["Specific note, insight, or framework that supports this"],
-      "framework_contribution": "Which Reactor framework(s) contributed, if any"
+      "framework_contribution": "Which Reactor framework(s) contributed, if any",
+      "risks": ["Key technical, workflow, adoption, or market risks"],
+      "recommended_next_validation": "Best next experiment or validation step",
+      "status": "ready_for_screening|needs_specification"
     }
   ],
   "recommended_next_steps": [
@@ -212,9 +247,12 @@ Prefer depth over breadth."""
   "classifications": [
     {
       "index": 0,
+      "canonical_title": "Human-usable note title for this information unit",
       "tags": ["tag1", "tag2", "tag3"],
-      "info_type": "fact|claim|evidence|opinion|definition|hypothesis|question",
+      "keywords": ["keyword1", "keyword2"],
+      "info_type": "fact|claim|evidence|definition|method|tradeoff|constraint|workflow|metric|question",
       "domain": "technology|business|science|philosophy|arts|general|engineering|ai|semiconductor|eda",
+      "source_evidence": ["Short paraphrased evidence anchor from the source"],
       "confidence": 0.0-1.0
     }
   ]
@@ -243,6 +281,7 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
             output_contract=cls.DATA_EXTRACTION_CONTRACT,
             guidelines=(
                 "Extract one concept per data point — not a sentence fragment.",
+                "Give each concept a durable canonical title that could become a note title later.",
                 "Write content that stands alone without reading the source document.",
                 "Include what, why, and how for each concept.",
                 "Identify the document title if present.",
@@ -251,6 +290,7 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
                 "Return at most 8 data points. If there are more ideas, keep only the most significant.",
                 "NEVER use generic abstraction filler: 'strategic pathways', 'involves', 'advantages for specialized hardware', 'plays a crucial role', 'is important because', 'has significant implications'.",
                 "Every data point must contain a SPECIFIC claim: a named technology, a numbered threshold, a causal mechanism, or a concrete tradeoff. If the source lacks specifics, return an empty data_points array with quality_assessment 'low'.",
+                "Each data point should include 1-2 short source_evidence anchors such as a named method, named tool, numbered result, or explicit tradeoff.",
                 "If the source is clearly a landing page, share-page wrapper, or table of contents with no substantive body text, return data_points: [] and quality_assessment: 'low'. Do NOT hallucinate concepts from titles alone.",
                 "State ideas in your own words, but anchor every claim to a specific detail from the source.",
             ),
@@ -283,9 +323,12 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
             objective="Classify all data points in one pass into conceptual entries for the knowledge graph and Zettelkasten.",
             output_contract=cls.CLASSIFICATION_BATCH_CONTRACT,
             guidelines=(
+                "Give each item a canonical_title that a human would want to keep as a note title.",
                 "Use conceptual tags that a human would search or link by.",
                 "Prefer expert terminology over generic buckets.",
+                "At least one tag should be a domain-native technical term when the source supports it.",
                 "For domain, use a single value — no pipe-separated multi-values.",
+                "Do not classify with structural labels or vague categories when a technical label is available.",
                 "Choose tags that increase future cross-linking value.",
             ),
             context_sections=(
@@ -329,8 +372,11 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
             objective="Classify a data point into reusable conceptual entry points for the knowledge graph and Zettelkasten.",
             output_contract=cls.CLASSIFICATION_CONTRACT,
             guidelines=(
+                "Give the item a canonical_title that is readable without the source sentence around it.",
                 "Use conceptual tags that a human would search or link by.",
                 "Prefer expert terminology over generic buckets.",
+                "At least one tag should be a domain-native technical term when the source supports it.",
+                "Do not classify with structural labels or vague categories when a technical label is available.",
                 "Choose tags that increase future cross-linking value.",
             ),
             context_sections=(
@@ -361,6 +407,8 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
             output_contract=cls.RELATION_CONTRACT,
             guidelines=(
                 "Only create links that would matter later in a knowledge graph.",
+                "If A and B mostly restate the same idea, return 'none' instead of linking them.",
+                "Only link when you can explain the bridge with a concrete mechanism, dependency, tradeoff, or application relationship.",
                 "Use 'none' when the connection is weak or superficial.",
             ),
             context_sections=(
@@ -377,9 +425,9 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
     {
       "node_a_index": 0,
       "node_b_index": 2,
-      "relation_type": "supports|contradicts|relates_to|part_of|leads_to|example_of",
+      "relation_type": "supports|contradicts|depends_on|enables|tradeoff_with|part_of|example_of|applies_to",
       "strength": 0.5-1.0,
-      "reasoning": "One-line explanation"
+      "reasoning": "One-line bridge explanation grounded in the two nodes"
     }
   ]
 }
@@ -407,8 +455,10 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             output_contract=cls.RELATION_BATCH_CONTRACT,
             guidelines=(
                 "Only create links that would matter later in a knowledge graph.",
-                "Prefer specific relation types (leads_to, contradicts) over generic (relates_to).",
+                "Prefer specific relation types such as depends_on, enables, contradicts, or tradeoff_with over generic topic overlap.",
+                "Do not create edges between near-duplicate nodes or restatements of the same mechanism.",
                 "Skip trivial or superficial connections.",
+                "If the only connection is shared topic, return no edge.",
                 "Return at most 15 high-quality links.",
             ),
             context_sections=(
@@ -432,9 +482,11 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             objective="Discover short paths formed by linked information. Traverse 2-4 connected nodes to find what none of them reveal alone.",
             output_contract=cls.INSIGHT_CONTRACT,
             guidelines=(
-                "An insight is a traversable short path across linked information, not a restatement of a single node.",
+                "An insight is a traversable short path across linked information, not a restatement of a single node or edge.",
                 "Show how connected nodes produce emergent understanding.",
+                "Name the insight clearly and explain why it is non-obvious.",
                 "Prefer insights that would justify a permanent note.",
+                "If the output is only a renamed path label, do not return it as an insight.",
                 "Use contradictions and tensions to deepen the slip-box.",
             ),
             context_sections=(
@@ -460,17 +512,20 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             output_contract=cls.WISDOM_CONTRACT,
             guidelines=(
                 "Do not produce a source summary masquerading as a note.",
-                "Each note should synthesize multiple short paths into a longer, more complex principle.",
+                "Each note should defend one durable thesis, not blend multiple unrelated ideas.",
+                "Prefer atomic notes about one mechanism, one tradeoff, one workflow, or one decision rule.",
                 "Split long sources into multiple notes when they contain multiple mechanisms, claims, examples, workflows, constraints, tradeoffs, or definitions.",
                 "Write in your own words, not copied fragments.",
                 "Make each note timeless, standalone, and link-worthy.",
                 "Anchor each note in the source material and preserve its useful informational content.",
                 "Prefer several atomic notes over one blended synthesis note.",
+                "Preserve 1-3 short source_evidence anchors for each note.",
+                "If a draft reads like an executive summary, split or rewrite it.",
                 "Include examples, scope, and connections to broader principles when they strengthen the note.",
                 "Wisdom is where short paths interlock into a dense, reusable graph structure.",
             ),
             context_sections=(
-                ("Insights", insights_desc or "No insights available. Return an empty zettels array."),
+                ("Insights", insights_desc or "No insights available. Use the knowledge base directly and only return zettels if durable notes are still well supported."),
                 ("Knowledge Base", info_samples or "No information samples available."),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),
@@ -497,6 +552,10 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             guidelines=(
                 "Base actions on the permanent notes, not on raw input.",
                 "Look for the single highest-leverage point where action could create explosive, compounding effects.",
+                "Prefer proposal seeds that name a user, buyer, workflow trigger, current workaround, and proof_of_value.",
+                "For semiconductor or EDA ideas, specify where the idea inserts into the flow.",
+                "Prefer narrow, testable wedges over broad platform language.",
+                "Only call something breakthrough when the source suggests a real workflow discontinuity or order-of-magnitude improvement.",
                 "Prefer proposals that feel like the center of a growing force, not incremental improvements.",
                 "An impact is not just an action — it is the ignition point for what comes next.",
             ),
@@ -527,6 +586,11 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             guidelines=(
                 "Synthesize patterns across vault notes, graph nodes, and Reactor proposals — not just restate them.",
                 "Proposals must be grounded in specific evidence from the vault, graph, or Reactor frameworks.",
+                "Draft venture hypotheses, not only strategic themes.",
+                "Every proposal should name a target_user, economic_buyer, current_workaround, integration_boundary, proof_artifact, and recommended_next_validation.",
+                "If buyer, user, or workflow insertion point cannot be inferred responsibly, set status to needs_specification instead of bluffing.",
+                "For semiconductor or EDA proposals, specify the workflow insertion point such as RTL, synthesis, floorplan, timing signoff, ECO, verification, characterization, silicon debug, or operations.",
+                "Prefer narrow high-value wedges over broad ecosystem or platform language.",
                 "When Reactor frameworks and vault insights conflict, resolve the tension explicitly.",
                 "Write as a formal analyst drafting paperwork for the Innovation and Entrepreneur minds.",
                 "Prioritize proposals with clear domains, priorities, and rationale.",

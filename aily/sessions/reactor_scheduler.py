@@ -314,6 +314,7 @@ class ReactorScheduler(BaseMindScheduler):
         for node in pending:
             score = await self._score_proposal(node, budget=None)
             node_id = node["id"]
+            await self.graph_db.set_node_property(node_id, "innovation_score_details", score)
             if score.get("pass", False):
                 await self.graph_db.set_node_property(node_id, "status", "pending_business")
                 await self.graph_db.set_node_property(
@@ -336,14 +337,39 @@ class ReactorScheduler(BaseMindScheduler):
     ) -> dict:
         """Use LLM to score a Residual proposal for novelty and feasibility."""
         label = node.get("label", "")
-        prompt = f"""Evaluate this proposal for innovation potential.
+        props = node.get("properties", {}) or {}
+        prompt = f"""Evaluate this proposal for innovation potential using the structured business and technical brief, not only the title.
 
-Proposal: {label}
+Proposal Label: {label}
+Title: {props.get("title", "")}
+Description: {props.get("description", "")}
+Hypothesis: {props.get("hypothesis", "")}
+Problem: {props.get("problem", "")}
+Solution: {props.get("solution", "")}
+Target User: {props.get("target_user", "")}
+Economic Buyer: {props.get("economic_buyer", "")}
+Current Workaround: {props.get("current_workaround", "")}
+Adoption Wedge: {props.get("adoption_wedge", "")}
+Workflow Insertion: {props.get("workflow_insertion", "")}
+Integration Boundary: {props.get("integration_boundary", "")}
+Proof Artifact: {props.get("proof_artifact", "")}
+Success Metric: {props.get("success_metric", "")}
+Recommended Next Validation: {props.get("recommended_next_validation", "")}
+Risks: {props.get("risks", [])}
 
-Score on:
-1. novelty (0.0-1.0) — how unique/original is the idea?
-2. feasibility (0.0-1.0) — can this realistically be built/executed?
-3. confidence (0.0-1.0) — overall confidence in the idea
+Scoring dimensions:
+1. novelty (0.0-1.0) — is the idea materially differentiated?
+2. feasibility (0.0-1.0) — can it be built and piloted with realistic effort?
+3. confidence (0.0-1.0) — overall confidence after considering the whole brief
+4. source_grounding (0.0-1.0) — does the proposal feel anchored in real workflow evidence?
+5. buyer_clarity (0.0-1.0) — are the user, champion, and economic buyer sufficiently concrete?
+6. workflow_insertion_clarity (0.0-1.0) — is it clear where this fits into the workflow?
+7. validation_readiness (0.0-1.0) — is there a credible next proof artifact or validation step?
+
+Evaluation rules:
+- Reward concrete buyer/workflow/proof structure.
+- Penalize vague platform language, missing proof paths, or missing workflow insertion points.
+- For EDA and deep-tech ideas, narrow wedges are acceptable if workflow value and proof artifacts are credible.
 
 A proposal PASSES if:
 - novelty >= {self.nozzle_config.min_novelty_score}
@@ -355,8 +381,14 @@ Return JSON:
     "novelty": 0.0-1.0,
     "feasibility": 0.0-1.0,
     "confidence": 0.0-1.0,
+    "source_grounding": 0.0-1.0,
+    "buyer_clarity": 0.0-1.0,
+    "workflow_insertion_clarity": 0.0-1.0,
+    "validation_readiness": 0.0-1.0,
     "pass": true|false,
-    "reason": "Why it passed or failed"
+    "reason": "Why it passed or failed",
+    "strengths": ["specific strength"],
+    "gaps": ["specific gap"]
 }}"""
         try:
             result = await chat_json(
@@ -380,9 +412,22 @@ Return JSON:
 
     def _node_to_proposal(self, node: dict, score: dict) -> Proposal:
         """Convert a Residual proposal node to a Proposal object."""
+        props = node.get("properties", {}) or {}
         label = node.get("label", "")
-        title = label.split(":")[0] if ":" in label else label
-        description = label[len(title) + 1 :].strip() if ":" in label else label
+        parsed_title = label.split(":")[0] if ":" in label else label
+        parsed_description = label[len(parsed_title) + 1 :].strip() if ":" in label else label
+        title = props.get("title") or parsed_title
+        description = (
+            props.get("description")
+            or props.get("problem")
+            or props.get("summary")
+            or parsed_description
+        )
+        metadata = {
+            key: value
+            for key, value in props.items()
+            if value not in ("", None, [], {})
+        }
         return Proposal(
             id=f"reactor_{node['id']}",
             mind_name="reactor",
@@ -396,6 +441,7 @@ Return JSON:
             source_knowledge_ids=[node["id"]],
             proposal_type=self._proposal_type_for_method(InnovationMethod.FIRST_PRINCIPLES),
             framework_used="Reactor-Residual",
+            metadata=metadata,
         )
 
     def _proposal_type_for_method(self, method: InnovationMethod) -> Any:

@@ -75,9 +75,14 @@ class FirstPrinciplesAnalyzer:
         self, focus: list[str], insights: list
     ) -> list[str]:
         """Identify current assumptions in the domain."""
+        insights_summary = "\n".join(
+            f"- {i.get('label', '')}" for i in insights[:8] if isinstance(i, dict)
+        ) or "No recent insights provided."
         prompt = f"""Identify assumptions in the current approach to these domains.
 
 Domains: {', '.join(focus)}
+Recent evidence:
+{insights_summary}
 
 What are the industry standard assumptions?
 What does everyone take for granted?
@@ -168,17 +173,31 @@ Starting from this fundamental truth, rebuild:
 1. If we ignore traditional approaches, what becomes possible?
 2. What is the most direct way to solve this?
 3. What constraints are actually imaginary?
+4. Who feels this pain first in the workflow?
+5. What first proof artifact would convince a skeptical adopter?
 
 Generate:
 1. Innovation title
 2. Description explaining the first principles approach
-3. Why this breaks from tradition
-4. Impact, feasibility, novelty scores
+3. Target user
+4. Economic buyer
+5. Current workaround
+6. Workflow insertion point
+7. Adoption wedge
+8. Proof artifact
+9. Why this breaks from tradition
+10. Impact, feasibility, novelty scores
 
 Format as JSON:
 {{
     "title": "...",
     "description": "...",
+    "target_user": "...",
+    "economic_buyer": "...",
+    "current_workaround": "...",
+    "workflow_insertion": "...",
+    "adoption_wedge": "...",
+    "proof_artifact": "...",
     "breaks_from_tradition": "...",
     "impact": "high/medium/low",
     "feasibility": "high/medium/low",
@@ -187,13 +206,30 @@ Format as JSON:
 
         try:
             response = await self.llm_client.chat_json([
-                {"role": "system", "content": "Build innovation from fundamental truths, ignoring traditional approaches."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Build innovation from fundamental truths, ignoring traditional approaches. "
+                        "Prefer concrete deep-tech or enterprise hypotheses over broad platform language."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ])
 
+            content = "\n".join([
+                response.get("description", ""),
+                "",
+                f"Target user: {response.get('target_user', 'unknown')}",
+                f"Economic buyer: {response.get('economic_buyer', 'unknown')}",
+                f"Current workaround: {response.get('current_workaround', 'unknown')}",
+                f"Workflow insertion: {response.get('workflow_insertion', 'unknown')}",
+                f"Adoption wedge: {response.get('adoption_wedge', 'unknown')}",
+                f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
+            ]).strip()
+
             return Proposal(
                 title=f"[1st Principles] {response.get('title', 'Fundamental Innovation')}",
-                content=response.get("description", ""),
+                content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
@@ -201,6 +237,12 @@ Format as JSON:
                     "fundamental_truth": fundamental['fundamental_truth'],
                     "challenged_assumption": fundamental['assumption'],
                     "framework": "First Principles",
+                    "target_user": response.get("target_user", ""),
+                    "economic_buyer": response.get("economic_buyer", ""),
+                    "current_workaround": response.get("current_workaround", ""),
+                    "workflow_insertion": response.get("workflow_insertion", ""),
+                    "adoption_wedge": response.get("adoption_wedge", ""),
+                    "proof_artifact": response.get("proof_artifact", ""),
                     "breaks_from_tradition": response.get("breaks_from_tradition", ""),
                     "impact": response.get("impact", "medium"),
                     "feasibility": response.get("feasibility", "medium"),

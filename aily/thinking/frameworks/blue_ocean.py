@@ -127,14 +127,24 @@ Analyze:
 Generate:
 1. Innovation title focusing on this action
 2. Detailed description
-3. Impact on differentiation
-4. Impact on cost
-5. Risk assessment
+3. Target user
+4. Economic buyer
+5. Current workaround
+6. Adoption wedge
+7. Proof artifact
+8. Impact on differentiation
+9. Impact on cost
+10. Risk assessment
 
 Format as JSON:
 {{
     "title": "...",
     "description": "...",
+    "target_user": "...",
+    "economic_buyer": "...",
+    "current_workaround": "...",
+    "adoption_wedge": "...",
+    "proof_artifact": "...",
     "differentiation_impact": "high/medium/low",
     "cost_impact": "increase/reduce/neutral",
     "risk": "high/medium/low",
@@ -143,19 +153,40 @@ Format as JSON:
 
         try:
             response = await self.llm_client.chat_json([
-                {"role": "system", "content": "You are a Blue Ocean Strategy expert. Focus on value innovation."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Blue Ocean Strategy expert. Focus on value innovation. "
+                        "Prefer specific wedges, workflow shifts, and buyer clarity over broad category claims."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ])
 
+            content = "\n".join([
+                response.get("description", ""),
+                "",
+                f"Target user: {response.get('target_user', 'unknown')}",
+                f"Economic buyer: {response.get('economic_buyer', 'unknown')}",
+                f"Current workaround: {response.get('current_workaround', 'unknown')}",
+                f"Adoption wedge: {response.get('adoption_wedge', 'unknown')}",
+                f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
+            ]).strip()
+
             return Proposal(
                 title=f"[Blue Ocean - {action_key.title()}] {response.get('title', 'Untitled')}",
-                content=response.get("description", ""),
+                content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.75,
                 metadata={
                     "blue_ocean_action": action_key,
                     "framework": "Blue Ocean Strategy",
+                    "target_user": response.get("target_user", ""),
+                    "economic_buyer": response.get("economic_buyer", ""),
+                    "current_workaround": response.get("current_workaround", ""),
+                    "adoption_wedge": response.get("adoption_wedge", ""),
+                    "proof_artifact": response.get("proof_artifact", ""),
                     "differentiation_impact": response.get("differentiation_impact", "medium"),
                     "cost_impact": response.get("cost_impact", "neutral"),
                     "risk": response.get("risk", "medium"),
@@ -182,24 +213,41 @@ Analyze:
 1. What insights does this path reveal?
 2. What blue ocean opportunity emerges?
 3. What unmet needs become visible?
+4. Who would adopt this first?
+5. What proof artifact would make the opportunity credible?
 
 Format as JSON:
 {{
     "title": "...",
     "description": "...",
     "path_insights": "...",
+    "target_user": "...",
+    "proof_artifact": "...",
     "novelty": 0.7
 }}"""
 
         try:
             response = await self.llm_client.chat_json([
-                {"role": "system", "content": "You are exploring new market spaces using the Six Paths framework."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are exploring new market spaces using the Six Paths framework. "
+                        "Prefer credible deep-tech or enterprise wedges over generic market expansion claims."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ])
 
+            content = "\n".join([
+                response.get("description", ""),
+                "",
+                f"Target user: {response.get('target_user', 'unknown')}",
+                f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
+            ]).strip()
+
             return Proposal(
                 title=f"[Six Paths - {path_info['path']}] {response.get('title', 'Untitled')}",
-                content=response.get("description", ""),
+                content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
                 confidence=0.7,
@@ -207,6 +255,8 @@ Format as JSON:
                     "six_paths": path_info['path'],
                     "framework": "Blue Ocean Strategy",
                     "path_insights": response.get("path_insights", ""),
+                    "target_user": response.get("target_user", ""),
+                    "proof_artifact": response.get("proof_artifact", ""),
                     "novelty": response.get("novelty", 0.6),
                 },
             )
