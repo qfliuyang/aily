@@ -1185,9 +1185,6 @@ LIMIT 10
             dikiwi_id = f"data-{safe_id}"
             note_path = day_dir / f"{dikiwi_id}.md"
 
-            # Register title for link resolution
-            self._id_to_title[dikiwi_id] = slug
-
             frontmatter = {
                 "dikiwi_stage": "data",
                 "pipeline_id": message_id,
