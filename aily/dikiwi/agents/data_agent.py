@@ -105,20 +105,21 @@ class DataAgent(DikiwiAgent):
                     f"Examples: {', '.join(dp.concept or dp.content[:50] for dp in data_points[:3])}..."
                 )
 
-            # Write individual data point notes to 01-Data
+            # Build raw content chunks for 01-Data (unclassified datapoints)
+            raw_chunks = self._chunk_content(content, chunk_size=800)
+
+            # Write raw unclassified chunks to 01-Data
             data_note_paths: list[str] = []
             if ctx.dikiwi_obsidian_writer:
                 try:
-                    from aily.sessions.dikiwi_mind import DataPoint as DP
-                    if data_points and isinstance(data_points[0], DP):
-                        paths = await ctx.dikiwi_obsidian_writer.write_data_points(
-                            message_id=ctx.pipeline_id,
-                            data_points=data_points,
-                            source=drop.source,
-                        )
-                        data_note_paths = [str(p) for p in paths]
+                    paths = await ctx.dikiwi_obsidian_writer.write_raw_data_chunks(
+                        message_id=ctx.pipeline_id,
+                        chunks=raw_chunks,
+                        source=drop.source,
+                    )
+                    data_note_paths = [str(p) for p in paths]
                 except Exception as e:
-                    logger.warning("[DIKIWI] Failed to write data points: %s", e)
+                    logger.warning("[DIKIWI] Failed to write raw data chunks: %s", e)
 
             return StageResult(
                 stage=DikiwiStage.DATA,

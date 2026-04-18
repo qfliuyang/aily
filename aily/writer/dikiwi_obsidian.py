@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -108,7 +109,7 @@ class DikiwiObsidianWriter:
         """Register a note title so _make_link can build full-filename wikilinks."""
         self._id_to_title[dikiwi_id] = _slugify_title(title, max_length=200)
 
-        if not zettelkasten_only:
+        if not self.zettelkasten_only:
             self._ensure_structure()
             logger.info("DikiwiObsidianWriter initialized at %s", self.dikiwi_root)
         else:
@@ -1138,6 +1139,73 @@ LIMIT 10
             paths.append(note_path)
 
         logger.info("Wrote %d data points for %s", len(paths), message_id[:8])
+        return paths
+
+    async def write_raw_data_chunks(
+        self,
+        message_id: str,
+        chunks: list[str],
+        source: str,
+    ) -> list[Path]:
+        """Write raw unclassified content chunks to 01-Data.
+
+        These are atomic segments of the original source material, not
+        LLM-extracted concepts. Classification happens in 02-Information.
+        """
+        day_dir = self._get_day_dir("01-Data")
+        paths = []
+
+        for i, chunk in enumerate(chunks):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+
+            # Slug from first few meaningful words of the chunk (skip HTML comments / noise)
+            cleaned = re.sub(r"<!--.*?-->", "", chunk).strip()
+            words = cleaned.split()[:6]
+            slug_parts = []
+            for w in words:
+                part = "".join(c if c.isalnum() else "_" for c in w).lower()
+                part = part.strip("_")
+                if part:
+                    slug_parts.append(part)
+            slug = "_".join(slug_parts)[:40]
+            if not slug:
+                slug = f"chunk-{i}"
+            # Prefix with message_id to avoid collisions across pipelines
+            safe_id = f"{message_id[:8]}_{slug}-{i}"
+            note_path = day_dir / f"data-{safe_id}.md"
+
+            frontmatter = {
+                "dikiwi_stage": "data",
+                "pipeline_id": message_id,
+                "chunk_index": i,
+                "source": source,
+                "date_created": datetime.now().astimezone().isoformat(),
+                "word_count": len(chunk.split()),
+                "status": "unclassified",
+                "tags": ["dikiwi", "data", "unclassified"],
+            }
+
+            content_lines = [
+                self._format_frontmatter(frontmatter),
+                "",
+                f"# Data Chunk {i}",
+                "",
+                chunk,
+                "",
+                "---",
+                "",
+                "## Metadata",
+                f"- **Source**: {source}",
+                f"- **Chunk**: {i + 1} of {len(chunks)}",
+                f"- **Words**: {len(chunk.split())}",
+            ]
+
+            note_path.write_text("\n".join(content_lines), encoding="utf-8")
+            paths.append(note_path)
+
+        logger.info("Wrote %d raw data chunks for %s", len(paths), message_id[:8])
         return paths
 
     async def write_information_nodes(
