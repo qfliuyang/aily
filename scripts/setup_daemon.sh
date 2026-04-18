@@ -46,15 +46,18 @@ else
 fi
 
 # Check for required API key
-if [ -z "$LLM_API_KEY" ] && [ -z "$ZHIPU_API_KEY" ]; then
-    echo "❌ Error: LLM_API_KEY or ZHIPU_API_KEY must be set in .env file"
+if [ -z "$LLM_API_KEY" ] && [ -z "$KIMI_API_KEY" ] && [ -z "$MOONSHOT_API_KEY" ]; then
+    echo "❌ Error: LLM_API_KEY, KIMI_API_KEY, or MOONSHOT_API_KEY must be set in .env file"
     echo "   Please add your API key to $ENV_FILE"
     exit 1
 fi
 
-# Set ZHIPU_API_KEY from LLM_API_KEY if not already set
-if [ -z "$ZHIPU_API_KEY" ] && [ -n "$LLM_API_KEY" ]; then
-    export ZHIPU_API_KEY="$LLM_API_KEY"
+# Normalize to KIMI_API_KEY for the daemon environment.
+if [ -z "$KIMI_API_KEY" ] && [ -n "$MOONSHOT_API_KEY" ]; then
+    export KIMI_API_KEY="$MOONSHOT_API_KEY"
+fi
+if [ -z "$KIMI_API_KEY" ] && [ -n "$LLM_API_KEY" ]; then
+    export KIMI_API_KEY="$LLM_API_KEY"
 fi
 
 echo "🔑 API Key configured"
@@ -77,11 +80,11 @@ sed -e "s|/usr/local/bin/python3|$PYTHON_PATH|g" \
     "$PLIST_SRC" > "$PLIST_DST"
 
 # Add API key to plist if available
-if [ -n "$ZHIPU_API_KEY" ]; then
+if [ -n "$KIMI_API_KEY" ]; then
     # Insert API key after PYTHONPATH line
     sed -i '' "/PYTHONPATH/a\\
-        <key>ZHIPU_API_KEY</key>\\
-        <string>$ZHIPU_API_KEY</string>" "$PLIST_DST"
+        <key>KIMI_API_KEY</key>\\
+        <string>$KIMI_API_KEY</string>" "$PLIST_DST"
 fi
 
 echo "✅ Installed launchd plist: $PLIST_DST"

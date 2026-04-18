@@ -280,7 +280,7 @@ class DikiwiMind:
         enabled: bool = True,
         obsidian_writer: Any | None = None,
         browser_manager: "BrowserUseManager | None" = None,
-        model: str = "moonshot-v1-32k",
+        model: str = "kimi-k2.5",
         dikiwi_obsidian_writer: DikiwiObsidianWriter | None = None,
         llm_client: Any | None = None,
         reactor_scheduler: Any | None = None,
@@ -295,7 +295,7 @@ class DikiwiMind:
             enabled: Whether DIKIWI processing is enabled
             obsidian_writer: Optional writer for Obsidian notes (REST API)
             browser_manager: Optional browser manager for URL fetching
-            model: Kimi model to use (8k, 32k, or 128k) - Standard API only
+            model: Kimi model to use (recommended: kimi-k2.5) - Standard API only
             dikiwi_obsidian_writer: Optional enhanced Obsidian writer (file-based with Dataview)
             llm_client: Pre-configured LLM client (e.g., Coding Plan with kimi-k2.5)
             reactor_scheduler: Optional ReactorScheduler to run framework evaluation on DIKIWI outputs

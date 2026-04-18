@@ -14,6 +14,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -215,7 +216,7 @@ async def run_e2e_audit():
     """Run complete E2E test with audit trail."""
     print("=" * 80)
     print("E2E LLM DIKIWI AUDIT")
-    print("Using Coding Plan API (Zhipu GLM-4.7) + Complete Traceability")
+    print("Using Kimi Open Platform + Complete Traceability")
     print("=" * 80)
 
     # Setup output directory
@@ -232,9 +233,9 @@ async def run_e2e_audit():
 
     print("\n🔧 Initializing components...")
 
-    # Use Coding Plan API (Zhipu/GLM) to avoid Kimi Standard API rate limits
-    # Coding Plan uses fixed monthly pricing instead of per-token billing
-    coding_plan_api_key = "6838091633ae40c68945585efdbc1e97.99L3Aix4F7HRhmRG"
+    kimi_api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("LLM_API_KEY")
+    if not kimi_api_key:
+        raise RuntimeError("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running this script.")
 
     graph_db = GraphDB(db_path=audit_dir / "dikiwi.db")
     await graph_db.initialize()
@@ -258,12 +259,11 @@ async def run_e2e_audit():
     # Delay between messages to avoid overwhelming the API
     RATE_LIMIT_DELAY_SECONDS = 2
 
-    # Use Coding Plan API (Zhipu/GLM) - avoids 429 rate limits from Kimi Standard API
-    llm_client = LLMRouter.coding_plan_zhipu(
-        api_key=coding_plan_api_key,
-        model="glm-5.1",  # Best BigModel/Zhipu model as of 2025
+    llm_client = LLMRouter.standard_kimi(
+        api_key=kimi_api_key,
+        model="kimi-k2.5",
     )
-    print(f"✓ LLM Client: Coding Plan (Zhipu GLM-5.1)")
+    print("✓ LLM Client: Kimi Open Platform (kimi-k2.5)")
 
     mind = DikiwiMind(
         graph_db=graph_db,
@@ -278,7 +278,7 @@ async def run_e2e_audit():
     audit_logger = LLMAuditLogger(audit_dir)
 
     print(f"✓ Components initialized")
-    print(f"✓ Model: moonshot-v1-128k (128k context for long conversations)")
+    print("✓ Model: kimi-k2.5 (256k multimodal context)")
     print(f"✓ Audit logging: enabled")
     print(f"✓ Rate limit delay: {RATE_LIMIT_DELAY_SECONDS}s between messages")
     print(f"✓ Output directory: {audit_dir}")

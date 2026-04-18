@@ -1,4 +1,4 @@
-"""Image processor using GLM-4V for visual understanding."""
+"""Image processor using Kimi K2.5 for visual understanding."""
 
 from __future__ import annotations
 
@@ -13,14 +13,16 @@ from PIL import Image
 
 from aily.chaos.processors.base import ContentProcessor
 from aily.chaos.types import ExtractedContentMultimodal, VisualElement
+from aily.llm.kimi_client import KimiClient
 
 logger = logging.getLogger(__name__)
 
 
 class ImageProcessor(ContentProcessor):
-    """Process images using GLM-4V for visual analysis."""
+    """Process images using Kimi for visual analysis."""
 
-    VISION_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    VISION_API_URL = KimiClient.CHAT_COMPLETIONS_URL
+    VISION_MODEL = "kimi-k2.5"
 
     async def process(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Process image file."""
@@ -30,7 +32,7 @@ class ImageProcessor(ContentProcessor):
             # Load and resize image
             base64_image = await self._load_image(file_path)
 
-            # Get visual analysis from GLM-4V
+            # Get visual analysis from Kimi
             analysis = await self._analyze_with_vision(base64_image)
 
             # Try OCR if enabled
@@ -63,7 +65,7 @@ class ImageProcessor(ContentProcessor):
                 source_type="image",
                 source_path=file_path,
                 visual_elements=[visual_element],
-                processing_method="glm-4v",
+                processing_method="kimi-k2.5-vision",
                 metadata={
                     "format": file_path.suffix.lower(),
                     "has_ocr": ocr_text is not None,
@@ -98,8 +100,10 @@ class ImageProcessor(ContentProcessor):
         return base64_str
 
     async def _analyze_with_vision(self, base64_image: str) -> dict | None:
-        """Analyze image using GLM-4V."""
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+        """Analyze image using Kimi multimodal chat completions."""
+        api_key = KimiClient.resolve_api_key(
+            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
+        )
         if not api_key or not self.config.image.visual_analysis:
             return None
 
@@ -110,7 +114,7 @@ class ImageProcessor(ContentProcessor):
             }
 
             payload = {
-                "model": "glm-4v-flash",  # Use free tier for vision
+                "model": self.VISION_MODEL,
                 "messages": [
                     {
                         "role": "user",
@@ -156,8 +160,10 @@ class ImageProcessor(ContentProcessor):
             return None
 
     async def _extract_text_with_ocr(self, base64_image: str) -> str | None:
-        """Extract text from image using GLM-OCR or vision model."""
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+        """Extract text from image using Kimi multimodal understanding."""
+        api_key = KimiClient.resolve_api_key(
+            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
+        )
         if not api_key:
             return None
 
@@ -169,7 +175,7 @@ class ImageProcessor(ContentProcessor):
 
             # Use vision model to extract text
             payload = {
-                "model": "glm-4v-flash",
+                "model": self.VISION_MODEL,
                 "messages": [
                     {
                         "role": "user",

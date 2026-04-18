@@ -4,7 +4,7 @@ Extract Monica conversation, summarize with LLM, save to Obsidian.
 
 Tests all configured services:
 - Browser Use (local or API) for extraction
-- Zhipu AI for summarization
+- Kimi for summarization
 - Obsidian for permanent storage
 """
 
@@ -155,7 +155,7 @@ Be thorough and capture as much of the conversation as possible."""
 
     async def summarize_conversation(self, raw_content: str) -> dict:
         """Use LLM to summarize the conversation into structured knowledge."""
-        print("\n🧠 Summarizing with Zhipu AI...")
+        print("\n🧠 Summarizing with Kimi...")
 
         messages = [
             {

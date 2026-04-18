@@ -40,6 +40,35 @@ class LLMClient:
         self._last_request_started = 0.0
         self.usage_stats = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
 
+    def _is_kimi_k25_model(self) -> bool:
+        return self.model.startswith("kimi-k2.5")
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float,
+        response_format: Optional[dict[str, str]],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        # Kimi documents recommend leaving temperature implicit for kimi-k2.5.
+        if not self._is_kimi_k25_model():
+            payload["temperature"] = temperature
+
+        if response_format:
+            payload["response_format"] = response_format
+
+        if self._is_kimi_k25_model():
+            if not self.thinking:
+                payload["thinking"] = {"type": "disabled"}
+        elif self.thinking and "kimi-k2" in self.model:
+            payload["thinking"] = {"type": "enabled"}
+
+        return payload
+
     async def _wait_for_rate_window(self) -> None:
         """Ensure request starts are spaced out to avoid bursty imports."""
         if self.min_interval_seconds <= 0:
@@ -98,16 +127,7 @@ class LLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if response_format:
-            payload["response_format"] = response_format
-        # Enable thinking mode for kimi-k2.5
-        if self.thinking and "kimi-k2" in self.model:
-            payload["thinking"] = {"type": "enabled"}
+        payload = self._build_payload(messages, temperature, response_format)
 
         async with self._semaphore:
             await self._wait_for_rate_window()

@@ -46,10 +46,10 @@ class ChaosProcessor:
         self.vault_path = Path(vault_path) if vault_path else None
         self.watcher = FileWatcher(self.config)
         self.tagger = IntelligentTagger(self.config)
-        # Use free tier model for chaos processing
+        # Use Kimi as the default remote model for chaos processing.
         self.llm_client = LLMRouter.standard_kimi(
             api_key=self._get_api_key(),
-            model="glm-4-flash",  # Free tier
+            model="kimi-k2.5",
         )
         self._running = False
         self._worker_task: asyncio.Task | None = None
@@ -60,12 +60,15 @@ class ChaosProcessor:
         """Get API key from environment."""
         import os
 
-        api_key = os.getenv("CODING_PLAN_API_KEY")
-        if not api_key:
-            api_key = os.getenv("ZHIPU_API_KEY")
+        api_key = (
+            os.getenv("KIMI_API_KEY")
+            or os.getenv("MOONSHOT_API_KEY")
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("CODING_PLAN_API_KEY")
+        )
         if not api_key:
             raise ValueError(
-                "No API key found. Set CODING_PLAN_API_KEY or ZHIPU_API_KEY."
+                "No API key found. Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY."
             )
         return api_key
 

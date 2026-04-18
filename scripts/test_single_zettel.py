@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Test Zettelkasten generation with a single URL using Coding Plan API."""
+"""Test Zettelkasten generation with a single URL using Kimi."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -17,9 +18,9 @@ from aily.llm.llm_router import LLMRouter
 TEST_URL = "https://monica.im/share/chat?shareId=1jB54WO31xDzAIjL"
 
 async def test():
-    """Run single message test with Coding Plan API."""
+    """Run single message test with Kimi."""
     print("=" * 60)
-    print("Single Message Zettelkasten Test (Coding Plan API)")
+    print("Single Message Zettelkasten Test (Kimi)")
     print("=" * 60)
 
     # Initialize components
@@ -27,24 +28,20 @@ async def test():
     graph_db = GraphDB(db_path=db_path)
     await graph_db.initialize()
 
-    # Coding Plan API (Zhipu/GLM) - different from standard Kimi API
-    # This uses fixed monthly pricing, not per-token billing
-    coding_plan_api_key = "6838091633ae40c68945585efdbc1e97.99L3Aix4F7HRhmRG"
+    kimi_api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("LLM_API_KEY")
+    if not kimi_api_key:
+        raise RuntimeError("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running this script.")
 
-    print("\nUsing Coding Plan API (Zhipu/GLM) instead of Standard API...")
-    print("This should avoid the 429 rate limits from Kimi Standard API\n")
+    print("\nUsing Kimi Open Platform...\n")
 
-    # Create Coding Plan client
-    llm_client = LLMRouter.coding_plan_zhipu(
-        api_key=coding_plan_api_key,
-        model="glm-5.1",  # Best BigModel/Zhipu model as of 2025
+    llm_client = LLMRouter.standard_kimi(
+        api_key=kimi_api_key,
+        model="kimi-k2.5",
     )
 
-    # Show provider info
-    info = llm_client.get_provider_info()
-    print(f"Provider: {info['name']}")
-    print(f"Model: {info['model']}")
-    print(f"Base URL: {info['base_url']}\n")
+    print("Provider: Kimi Open Platform")
+    print(f"Model: {llm_client.model}")
+    print(f"Base URL: {llm_client.base_url}\n")
 
     # Create DikiwiMind with Obsidian writer
     from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter

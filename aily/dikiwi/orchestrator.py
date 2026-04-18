@@ -26,7 +26,6 @@ from aily.dikiwi.events import (
     ImpactGeneratedEvent,
     GateDecisionEvent,
 )
-from aily.dikiwi.events.models import MemorialCreatedEvent
 from aily.dikiwi.gates import CVOGate, MenxiaGate
 from aily.dikiwi.stages import (
     DikiwiStage,
@@ -55,13 +54,6 @@ class PipelineConfig:
 
     # Retry limits
     max_rejections: int = 3  # Max times content can be rejected
-
-    # Skills
-    enable_skills: bool = True
-    skill_timeout_seconds: int = 30
-
-    # Memorials
-    enable_memorials: bool = True
 
     # Gate decisions
     require_cvo_for_impact: bool = True  # Require human approval for WISDOM->IMPACT
@@ -137,7 +129,6 @@ class DikiwiOrchestrator:
             "pipelines_completed": 0,
             "pipelines_failed": 0,
             "stage_rejections": 0,
-            "memorials_created": 0,
         }
 
         # Setup event handlers
@@ -150,9 +141,6 @@ class DikiwiOrchestrator:
 
         # Stage rejection triggers fallback
         self.event_bus.subscribe(StageRejectedEvent, self._on_stage_rejected)
-
-        # Content promotion triggers memorial creation
-        self.event_bus.subscribe(ContentPromotedEvent, self._on_content_promoted)
 
         # Gate decisions trigger promotion or rejection
         self.event_bus.subscribe(GateDecisionEvent, self._on_gate_decision)
@@ -339,20 +327,6 @@ class DikiwiOrchestrator:
         # Send back to specified stage
         if event.send_back_to:
             await self._promote_to_stage(pipeline, event.send_back_to, is_rejection=True)
-
-    async def _on_content_promoted(self, event: ContentPromotedEvent) -> None:
-        """Handle content promotion - create memorial."""
-        if not self.config.enable_memorials:
-            return
-
-        # Create memorial for audit trail
-        memorial_event = MemorialCreatedEvent(
-            correlation_id=event.correlation_id,
-            pipeline_id=self._get_pipeline_id(event.correlation_id),
-            stage=event.from_stage,
-        )
-        await self.event_bus.publish(memorial_event)
-        self._metrics["memorials_created"] += 1
 
     async def _on_gate_decision(self, event: GateDecisionEvent) -> None:
         """Handle gate decision - approve or reject."""

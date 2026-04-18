@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -18,11 +19,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiStage
 from aily.gating.drainage import RainDrop, RainType
 from aily.graph.db import GraphDB
+from aily.llm.kimi_client import KimiClient
 
 # Create temp directory for test DB
 import tempfile
 TEST_DB_DIR = Path(tempfile.gettempdir()) / "aily_test"
 TEST_DB_DIR.mkdir(exist_ok=True)
+
+
+def _require_kimi_api_key() -> str:
+    api_key = KimiClient.resolve_api_key()
+    if not api_key:
+        raise RuntimeError("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running this script.")
+    return api_key
 
 
 # The 10 test messages from docs/URL_TEST_MESSAGES.md
@@ -52,8 +61,7 @@ async def test_kimi_dikiwi():
     await graph_db.initialize()
 
     # Initialize Kimi-powered DIKIWI mind
-    # API key from user: sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o
-    kimi_api_key = "sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o"
+    kimi_api_key = _require_kimi_api_key()
 
     print("\nInitializing DikiwiMind with Kimi API...")
     mind = DikiwiMind(
@@ -62,7 +70,7 @@ async def test_kimi_dikiwi():
         enabled=True,
         obsidian_writer=None,  # Skip Obsidian for this test
         browser_manager=None,  # Will be needed for URL fetching
-        model="moonshot-v1-32k",
+        model="kimi-k2.5",
     )
     print("✓ DikiwiMind initialized")
 
@@ -187,12 +195,10 @@ async def test_kimi_client_directly():
     print("TEST: Kimi Client Direct API Test")
     print("=" * 80)
 
-    from aily.llm.kimi_client import KimiClient
-
-    kimi_api_key = "sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o"
+    kimi_api_key = _require_kimi_api_key()
 
     print("\nInitializing KimiClient...")
-    client = KimiClient(api_key=kimi_api_key, model="moonshot-v1-8k")
+    client = KimiClient(api_key=kimi_api_key, model="kimi-k2.5")
     print("✓ Client initialized")
 
     # Test simple chat

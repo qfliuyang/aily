@@ -6,6 +6,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from aily.llm.kimi_client import KimiClient
+
 if TYPE_CHECKING:
     from aily.chaos.config import ChaosConfig
     from aily.chaos.types import ExtractedContentMultimodal
@@ -70,26 +72,29 @@ Respond with a JSON array of tags only:
         return prompt
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call LLM for tag generation using BigModel API."""
+        """Call LLM for tag generation using the Kimi Open Platform."""
         import os
         import aiohttp
 
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY", "")
+        api_key = (
+            os.getenv("KIMI_API_KEY")
+            or os.getenv("MOONSHOT_API_KEY")
+            or os.getenv("LLM_API_KEY", "")
+        )
         if not api_key:
             raise ValueError("No API key found")
 
-        url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        url = KimiClient.CHAT_COMPLETIONS_URL
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": "glm-4-flash",
+            "model": "kimi-k2.5",
             "messages": [
                 {"role": "system", "content": "You are a content tagging assistant. Generate relevant, concise tags for knowledge management."},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.3,
         }
 
         async with aiohttp.ClientSession() as session:

@@ -1,439 +1,155 @@
 # Aily: Architecture and Vision
 
-> **Aily turns information into structured knowledge cards in Obsidian, then excites your memory via Feishu conversations — like chatting with a real master or guru.**
-
----
+Aily is a three-mind system for turning messy inputs into structured knowledge, then into proposals, then into business-grade review material.
 
 ## Vision
 
-Aily is not just a link-saving bot. It is a **Three-Mind Knowledge System** that transforms scattered information into structured knowledge through three specialized minds:
+The system is built around three consecutive forms of work:
 
-1. **DIKIWI Mind** (Continuous) — Processes every input through a 6-stage pipeline into atomic Zettelkasten notes
-2. **Innolaval** (Daily @ 8am) — 8 innovation methodologies running in parallel to generate insight proposals
-3. **Entrepreneur Mind** (Daily @ 9am) — GStack business analysis to evaluate opportunities
+1. Knowledge formation
+2. Proposal generation
+3. Business and execution planning
 
-Then actively engages you in conversation to strengthen memory formation.
+The current implementation is not a generic note bot. It is a pipeline that moves from DIKIWI notes to proposal nodes to business review appendices.
 
-### The Knowledge Cycle (Three-Mind System)
+## Current Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         INFORMATION INGEST                           │
-│   (Chaos Folder, URLs, Voice Memos, Thoughts, AI Chats, Videos)     │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      DIKIWI MIND (Continuous)                        │
-│   • 6-Stage Pipeline (Data→Information→Knowledge→Insight→Wisdom→Impact)│
-│   • Atomic notes (one idea per card)                                 │
-│   • Bidirectional links between related concepts                     │
-│   • Knowledge graph with collision detection                         │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              MAC LOOP: Innolaval ⟷ Hanlin (×2 rounds)                │
-│   Multiply:  Innolaval runs 8 innovation frameworks on DIKIWI output │
-│   Accumulate: Hanlin synthesizes vault + graph + framework proposals │
-│   Round 1: dry-run synthesis feeds back into Innolaval context       │
-│   Round 2: final synthesis persists to Obsidian + GraphDB            │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              ▼                    ▼                    ▼
-┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
-│   INNOLAVAL       │  │   ENTREPRENEUR    │  │  MEMORY EXCITATION │
-│   (Daily @ 8am)   │  │   (Daily @ 9am)   │  │  (Continuous)      │
-│                   │  │                   │  │                    │
-│ • TRIZ Analysis   │  │ • GStack Eval     │  │ • SRS scheduling   │
-│ • SIT/SCAMPER/etc │  │ • PMF Analysis    │  │ • Active recall    │
-│ • Innovation      │  │ • Growth loops    │  │ • Feishu nudges    │
-│   Proposals       │  │ • Business        │  │ • Pattern alerts   │
-│                   │  │   Proposals       │  │                    │
-└─────────┬─────────┘  └─────────┬─────────┘  └─────────┬─────────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      OBSIDIAN VAULT OUTPUT                           │
-│   10-Knowledge/  20-Innovation/  30-Business/  90-Published/        │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+Input
+  -> DIKIWI
+  -> Reactor
+  -> Residual
+  -> Entrepreneur / GStack
+  -> Guru appendix
+  -> Obsidian + GraphDB
 ```
 
-### Core Philosophy
+### Input Layer
 
-1. **Raw → Compiled**: Like the brain's sensory memory → consolidated long-term memory, Aily separates messy captures from structured knowledge
-2. **Elaborative Encoding**: New ideas must connect to existing knowledge to become permanent
-3. **Active Recall**: Testing memory strengthens it more than re-reading
-4. **Conversational**: Knowledge should feel like dialogue with a wise mentor, not filing cabinets
+The system currently accepts input through:
 
----
+- Feishu WebSocket messages
+- chaos-file ingestion
+- queue-driven legacy jobs for URLs, files, voice, digest, and session capture
 
-## Architecture
+The active Feishu path routes directly into `DikiwiMind`.
 
-### System Overview (Three-Mind Architecture)
+## Three Minds
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           INPUT LAYER                                │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│  │    Chaos    │  │   Feishu    │  │   Voice     │  │   Claude    │ │
-│  │   Folder    │  │  WebSocket  │  │   Memos     │  │   Sessions  │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘ │
-└─────────┼────────────────┼────────────────┼────────────────┼────────┘
-          │                │                │                │
-          └────────────────┴────────────────┴────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    THREE-MIND PROCESSING SYSTEM                      │
-│                                                                      │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
-│  │   DIKIWI MIND    │  │   INNOLAVAL      │  │   ENTREPRENEUR   │   │
-│  │  (Continuous)    │  │  (Daily @ 8am)   │  │  (Daily @ 9am)   │   │
-│  │                  │  │                  │  │                  │   │
-│  │ • 6-Stage Pipe   │  │ • 8 Methods      │  │ • GStack Eval    │   │
-│  │ • Atomic Notes   │  │ • TRIZ/SIT/etc   │  │ • PMF Analysis   │   │
-│  │ • GraphDB Links  │  │ • Synthesis      │  │ • Growth Loops   │   │
-│  │ • MAC Loop w/    │  │                  │  │                  │   │
-│  │   Innolaval+     │  │                  │  │                  │   │
-│  │   Hanlin         │  │                  │  │                  │   │
-│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘   │
-│           │                     │                     │             │
-│           └─────────────────────┼─────────────────────┘             │
-│                                 ▼                                   │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │              OBSIDIAN VAULT OUTPUT                            │  │
-│  │  10-Knowledge/  20-Innovation/  30-Business/  90-Published/  │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-```
+### 1. DIKIWI Mind
 
-### Key Components
+Files:
 
-### Runtime Status
+- `aily/sessions/dikiwi_mind.py`
+- `aily/dikiwi/orchestrator.py`
+- `aily/dikiwi/agents/`
 
-- `aily/main.py` is the active app bootstrap.
-- `aily/sessions/dikiwi_mind.py` is the active continuous DIKIWI runtime.
-- `aily/sessions/innolaval_scheduler.py` is the active innovation runtime (per-pipeline MAC loop + daily 8am).
-- `aily/sessions/entrepreneur_scheduler.py` is the active daily entrepreneur runtime.
-- `aily/dikiwi/agents/hanlin_agent.py` is the active post-pipeline vault analyst (翰林).
-- `aily/dikiwi/` (orchestrator, gates, skills, memorials) is the primary DIKIWI runtime. `aily/gating/` is kept as a secondary experimental architecture.
+Responsibilities:
 
-#### 1. Input Layer (Feishu WebSocket)
-- **File**: `aily/bot/ws_client.py`
-- **Purpose**: Bidirectional chat with users via Feishu (Lark)
-- **Mechanism**: WebSocket long connection — no public URL required
-- **Features**:
-  - Receive text messages with URLs
-  - Receive voice messages (auto-transcribed)
-  - Send knowledge nudges and recall prompts
+- run the six-stage DIKIWI pipeline
+- keep per-pipeline memory and LLM budget
+- write structured vault outputs
+- populate GraphDB with nodes and relationships
 
-#### 2. Processing Pipeline
+Stage flow:
 
-**Parser Registry** (`aily/parser/registry.py`)
-- URL pattern matching → specialized parser
-- Support: Kimi, Monica, arXiv, GitHub, YouTube, Generic web
+`DATA -> INFORMATION -> KNOWLEDGE -> INSIGHT -> WISDOM -> IMPACT`
 
-**Queue System** (`aily/queue/`)
-- SQLite-backed job queue with deduplication
-- Job types: `url_fetch`, `daily_digest`, `voice_message`, `claude_session`, `agent_request`
+### 2. Reactor
 
-**Browser Fetcher** (`aily/browser/`)
-- **Subprocess Worker**: Isolated Playwright/Browser Use for content extraction
-- **Features**: Chrome profile support (authenticated pages), Chinese text handling
+File:
 
-#### 3. Knowledge Layer
+- `aily/sessions/reactor_scheduler.py`
 
-**GraphDB** (`aily/graph/db.py`)
-- SQLite-based entity graph (nodes, edges, occurrences)
-- Tracks: people, concepts, technologies, papers
-- Collision detection across sources
+Responsibilities:
 
-**Atomicizer** (`aily/processing/atomicizer.py`)
-- Breaks captures into single-idea atomic notes
-- Mimics brain's encoding → elaboration process
+- run multiple innovation frameworks in parallel
+- generate proposal candidates from recent context
+- score residual proposals before business review
 
-**Spaced Repetition** (`aily/learning/srs.py`)
-- Ebbinghaus intervals: 1d → 3d → 7d → 21d → 60d
-- Schedules review for consolidation
+Reactor is the innovation nozzle. It is now the active innovation scheduler. The old `Innolaval` naming is no longer the right model for the runtime.
 
-**Active Recall** (`aily/learning/recall.py`)
-- Generates questions from notes (factual, conceptual, application)
-- Tests memory via Feishu messages
+### 3. Entrepreneur
 
-#### 4. Output Layer
+Files:
 
-**Obsidian Writer** (`aily/writer/obsidian.py`)
-- REST API integration with Obsidian Local REST API plugin
-- Draft folder staging → user moves to approve
-- Frontmatter: `aily_generated`, `aily_source`, `aily_type`
+- `aily/sessions/entrepreneur_scheduler.py`
+- `aily/sessions/gstack_agent.py`
 
-**Digest Pipeline** (`aily/digest/pipeline.py`)
-- Daily knowledge summaries
-- Verification layer (claims checked against sources)
-- Collision reports (insights from connected sources)
+Responsibilities:
 
-### Data Flow
+- evaluate pending business proposals with GStack
+- persist review outcomes to GraphDB
+- write entrepreneurship review notes
+- trigger Guru planning appendices
 
-```
-User sends URL in Feishu
-        │
-        ▼
-┌───────────────┐
-│ WebSocket     │
-│ receives msg  │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ URL extracted │
-│ Job enqueued  │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ Worker picks  │
-│ up job        │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐     ┌───────────────┐
-│ Browser fetches│────→│ Content parsed │
-│ page content  │     │ (service-aware)│
-└───────┬───────┘     └───────────────┘
-        │
-        ▼
-┌───────────────┐
-│ Atomic notes  │
-│ generated     │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ Connections   │
-│ suggested     │
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ Written to    │
-│ Obsidian Draft│
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│ Feishu:       │
-│ "Saved! Move  │
-│  to vault to  │
-│  activate."   │
-└───────────────┘
-```
+## Post-Pipeline Proposal Flow
 
----
+After DIKIWI reaches IMPACT:
 
-## Brain-Aligned Design
+1. Reactor generates framework proposals
+2. Residual synthesizes vault, graph, and reactor context
+3. Residual persists `residual_proposal` nodes
+4. Reactor innovation-screens those residual proposals
+5. Entrepreneur reviews `pending_business` proposals with GStack
+6. Guru writes a detailed appendix for each reviewed proposal
 
-Aily's architecture mirrors how the human brain forms permanent memories:
+This is the active proposal stack:
 
-| Brain Phase | Neuroscience | Aily Implementation |
-|-------------|--------------|---------------------|
-| **Encoding** | Hippocampus converts experience to neural patterns | Atomic notes (one idea = one note) |
-| **Elaboration** | Connect new info to existing schemas | Connection suggester links related notes |
-| **Consolidation** | Spaced reactivation during sleep | SRS with Ebbinghaus intervals |
-| **Retrieval** | Testing strengthens memory traces | Active recall questions via Feishu |
-| **Error Correction** | Checking sources builds accuracy | Claim verification against original URLs |
+`DIKIWI -> Reactor -> Residual -> Reactor screening -> Entrepreneur -> Guru`
 
----
+## Guru Role
 
-## File Organization
+Guru is a post-GStack planning role, not a voting persona.
 
-```
-aily/
-├── main.py                      # FastAPI app, lifespan management
-├── config.py                    # Settings (pydantic-settings)
-│
-├── sessions/                    # THREE-MIND SYSTEM
-│   ├── dikiwi_mind.py           # Continuous knowledge pipeline (DIKIWI)
-│   ├── innolaval_scheduler.py   # Innovation mind - 8 methods (Daily @ 8am)
-│   ├── entrepreneur_scheduler.py        # Business mind (Daily @ 9am)
-│   ├── base.py                  # BaseMind scheduler infrastructure
-│   ├── models.py                # Session models
-│   └── gstack_agent.py          # GStack business analysis
-│
-├── chaos/                       # MULTIMODAL INGESTION
-│   ├── queue_processor.py       # SQLite persistent queue
-│   ├── dikiwi_bridge.py         # Chaos → DIKIWI integration
-│   ├── config.py                # Chaos processing configuration
-│   ├── types.py                 # ExtractedContentMultimodal
-│   ├── processor.py             # Main processor coordinator
-│   ├── processors/              # File type processors
-│   │   ├── pdf.py               # PDF text + visual extraction
-│   │   ├── video.py             # Frame + transcript extraction
-│   │   ├── image.py             # OCR + visual analysis
-│   │   ├── document.py          # Generic document processor
-│   │   ├── pptx.py              # PowerPoint extraction
-│   │   └── base.py              # Processor base class
-│   └── tagger/                  # Intelligent tagging
-│       ├── engine.py
-│       ├── content_based.py
-│       └── llm_based.py
-│
-├── dikiwi/                      # Experimental DIKIWI architecture
-│   ├── orchestrator.py          # Event-driven coordination
-│   ├── stages.py                # Stage definitions
-│   ├── gates/                   # Institutional review
-│   │   ├── menxia.py            # 门下省 quality gate
-│   │   └── cvo.py               # Chief Vision Officer gate
-│   ├── skills/                  # Capability system
-│   │   ├── registry.py          # Skill loading
-│   │   ├── base.py              # Skill interface
-│   │   └── builtin/             # Built-in skills
-│   │       ├── tag_extraction.py
-│   │       ├── pattern_detection.py
-│   │       └── synthesis.py
-│   ├── events/                  # Event-driven communication
-│   │   ├── bus.py
-│   │   └── models.py
-│   └── memorials/               # Audit trail
-│       ├── models.py
-│       └── storage.py
-│
-├── writer/                      # OUTPUT
-│   ├── dikiwi_obsidian.py       # Zettelkasten writer (Three-Mind)
-│   └── obsidian.py              # Legacy Obsidian REST client
-│
-├── bot/                         # INPUT
-│   ├── ws_client.py             # Feishu WebSocket
-│   └── webhook.py               # HTTP fallback
-│
-├── queue/                       # LEGACY QUEUE
-│   ├── db.py                    # SQLite job queue
-│   └── worker.py                # Job processor
-│
-├── graph/                       # KNOWLEDGE GRAPH
-│   └── db.py                    # Entity graph (SQLite)
-│
-├── learning/                    # MEMORY SYSTEM
-│   ├── loop.py                  # Vault watcher
-│   ├── srs.py                   # Spaced repetition
-│   └── recall.py                # Active recall
-│
-├── browser/                     # WEB FETCHING
-│   ├── fetcher.py               # Browser interface
-│   ├── manager.py               # BrowserUse subprocess manager
-│   └── agent_worker.py          # Subprocess worker
-│
-├── parser/                      # CONTENT PARSERS
-│   ├── registry.py              # URL pattern → parser
-│   └── parsers.py               # Kimi, Monica, arXiv, etc.
-│
-├── llm/                         # LLM CLIENTS
-│   ├── client.py                # Main LLM client
-│   ├── llm_router.py            # Multi-provider routing
-│   ├── coding_plan_client.py    # Coding-specific LLM
-│   └── kimi_client.py           # Kimi API client
-│
-├── scheduler/                   # CRON JOBS
-│   └── jobs.py                  # Daily schedulers
-│
-└── scripts/
-    └── run_chaos_daemon.py      # Production file watcher daemon
-```
+It produces:
 
----
+- a hypothesis-driven, fact-based business plan
+- a simulation-driven, constraint-based, feedback-evolving development plan
+- a CEO/CTO appendix even for denied ideas
 
-## Key Design Decisions
+The purpose is to preserve deep reasoning for future human use, not only to decide pass/fail.
 
-### 1. WebSocket over Webhook
-- **Why**: WebSocket connects outbound to Feishu servers — no public URL or ngrok required
-- **Benefit**: Works from local machine, personal use only
+## Storage Model
 
-### 2. Draft Folder + Manual Approval
-- **Why**: User moving a note from `Aily Drafts/` to vault signals "this is worth keeping"
-- **Benefit**: Eliminates false positives in learning loop
+### Obsidian
 
-### 3. Subprocess Browser
-- **Why**: Playwright memory leaks + concurrent instances = OOM on personal Mac
-- **Benefit**: Single subprocess queue, lifecycle managed, crash isolation
+Current vault layout:
 
-### 4. SQLite for Everything
-- **Why**: Personal scale (10K nodes), zero external dependencies
-- **Benefit**: Single file backup, no PostgreSQL to maintain
+- `00-Chaos`
+- `01-Data`
+- `02-Information`
+- `03-Knowledge`
+- `04-Insight`
+- `05-Wisdom`
+- `06-Impact`
+- `07-Proposal`
+- `08-Entrepreneurship`
 
-### 5. Raw vs Compiled Distinction
-- **Why**: Brain separates sensory memory from consolidated long-term memory
-- **Benefit**: Clean separation between messy captures and structured knowledge
+### GraphDB
 
----
+GraphDB is used for:
 
-## Configuration
+- DIKIWI nodes and edges
+- residual proposal persistence
+- innovation and business scoring
+- review outcomes and related metadata
 
-Environment variables (`.env`):
+## Experimental Or Quarantined Subsystems
 
-```bash
-# Feishu Bot
-FEISHU_APP_ID=cli_xxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxx
-FEISHU_VOICE_ENABLED=true
+These packages still exist in-tree, but they are not part of the active production path:
 
-# Obsidian
-OBSIDIAN_VAULT_PATH=/Users/you/Documents/Vault
-OBSIDIAN_REST_API_KEY=your-key
-OBSIDIAN_REST_API_PORT=27123
+- `aily/dikiwi/skills/`
+- `aily/dikiwi/memorials/`
 
-# LLM
-LLM_API_KEY=sk-...
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o-mini
+They should be treated as experimental or archival implementation material until explicitly rewired into runtime.
 
-# Optional
-TAVILY_API_KEY=tvly-...
-WHISPER_API_KEY=sk-...
-AILY_DIGEST_HOUR=9
-AILY_DIGEST_MINUTE=0
-```
+## Design Direction
 
----
+The current system is moving toward:
 
-## Evolution
-
-Aily has evolved through several phases:
-
-| Version | Focus | Key Features |
-|---------|-------|--------------|
-| v0.1.0 | Foundation | Feishu webhook, URL → Obsidian pipeline, basic parsers |
-| v0.2.0 | Brain-Aligned | Atomic notes, SRS, active recall, entity graph, verification |
-| v0.3.0 | Bidirectional | WebSocket client, conversational memory, proactive nudges |
-| v0.4.0 | Three-Mind System | Chaos ingestion, DIKIWI pipeline, Innolaval (8 methods), Entrepreneur mind |
-| **v0.5.0** | **MAC Architecture** | **Innolaval-Hanlin multiply-accumulate loop, agentic business gates** |
-
----
-
-## Research Foundation
-
-Aily's design is grounded in cognitive science research:
-
-- **Memory Formation**: [Nature Communications - Consolidation](https://www.nature.com/subjects/consolidation/ncomms)
-- **Spaced Repetition**: [Ebbinghaus Forgetting Curve](https://memoryos.com/article/the-ebbinghaus-forgetting-curve-and-how-to-hack-it)
-- **Active Recall**: [Roediger & Karpicke (2006)](http://psychnet.wustl.edu/memory/wp-content/uploads/2018/04/Roediger-Karpicke-2006_PPS.pdf)
-- **Zettelkasten Method**: [Obsibrain - Connected Second Brain](https://www.obsibrain.com/blog/zettelkasten-how-to-build-a-connected-second-brain-that-actually-grows-with-you)
-- **Karpathy's LLM Knowledge Base**: [Twitter Thread](https://x.com/karpathy/status/2039805659525644595)
-
-See full research: [`docs/brain-knowledge-research.md`](./brain-knowledge-research.md)
-
----
-
-## The Ultimate Vision
-
-> Aily becomes a **conversational knowledge companion** — not a tool you use, but a presence that understands what you know, what you're learning, and what you've forgotten.
-
-When you send a link, Aily doesn't just save it. It:
-1. Extracts atomic ideas
-2. Connects them to your existing knowledge
-3. Surfaces unexpected collisions
-4. Tests your memory at optimal intervals
-5. Engages you in dialogue like a thoughtful mentor
-
-**Knowledge should compound. Memory should strengthen. Learning should feel like conversation.**
+- stronger proposal schemas
+- stricter prompt contracts
+- better proposal scoring based on buyer, workflow, and proof artifacts
+- business review that fits deep-tech and EDA rather than consumer-startup defaults
+- durable review artifacts in `08-Entrepreneurship`

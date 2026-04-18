@@ -153,10 +153,10 @@ class ChaosDaemon:
         from aily.sessions.dikiwi_mind import DikiwiMind
         from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
-        api_key = os.environ.get("ZHIPU_API_KEY", SETTINGS.zhipu_api_key)
-        llm_client = PrimaryLLMRoute.route_zhipu(
+        api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY") or SETTINGS.kimi_api_key or SETTINGS.llm_api_key
+        llm_client = PrimaryLLMRoute.route_kimi(
             api_key=api_key,
-            model=SETTINGS.zhipu_model,
+            model=SETTINGS.kimi_model,
             max_concurrency=SETTINGS.llm_max_concurrency,
             min_interval_seconds=SETTINGS.llm_min_interval_seconds,
         )

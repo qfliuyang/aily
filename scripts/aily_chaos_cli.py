@@ -28,9 +28,9 @@ from aily.config import SETTINGS
 
 def setup_api_key():
     """Setup API key from environment or argument."""
-    api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+    api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("LLM_API_KEY")
     if not api_key:
-        logger.error("No API key found. Set ZHIPU_API_KEY environment variable.")
+        logger.error("No API key found. Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY.")
         sys.exit(1)
     return api_key
 
@@ -116,7 +116,7 @@ async def main():
     """Main CLI."""
     parser = argparse.ArgumentParser(description="Aily Chaos - Multimodal Content Processor")
     parser.add_argument("--folder", "-f", type=str, help="Chaos folder path (default: ~/aily_chaos)")
-    parser.add_argument("--api-key", "-k", type=str, help="BigModel API key")
+    parser.add_argument("--api-key", "-k", type=str, help="Kimi API key")
 
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
@@ -134,7 +134,7 @@ async def main():
 
     # Setup API key
     if args.api_key:
-        os.environ["ZHIPU_API_KEY"] = args.api_key
+        os.environ["KIMI_API_KEY"] = args.api_key
     setup_api_key()
 
     # Setup config

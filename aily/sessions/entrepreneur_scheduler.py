@@ -192,58 +192,6 @@ class EntrepreneurScheduler(BaseMindScheduler):
             "evaluated": len(pending_proposals),
         }
 
-    def _build_hypothesis(self, knowledge: list[dict], innovation_proposals: list[dict]) -> dict:
-        """Build business hypothesis from knowledge and innovation proposals."""
-        # If we have innovation proposals, use the best one as foundation
-        if innovation_proposals:
-            best = max(innovation_proposals, key=lambda x: x.get("confidence", 0))
-            return {
-                "title": best.get("title", "Business Opportunity"),
-                "hypothesis": f"Building {best.get('title', 'this product')} will solve a real problem",
-                "problem": best.get("description", "Problem not clearly defined"),
-                "solution": best.get("description", "Solution not clearly defined"),
-                "target_user": "Users who face this problem",
-            }
-
-        # Otherwise synthesize from knowledge
-        if knowledge:
-            topics = [k.get("content", "") for k in knowledge[:3]]
-            combined = " ".join(topics)
-            return {
-                "title": "Knowledge-Based Opportunity",
-                "hypothesis": f"Exploring opportunity related to: {combined[:100]}...",
-                "problem": "Problem to be identified through validation",
-                "solution": "Solution to be determined based on problem validation",
-                "target_user": "Target users to be identified",
-            }
-
-        # Fallback
-        return {
-            "title": "Aily Self-Evaluation",
-            "hypothesis": "Aily (AI knowledge management) should expand its business evaluation capabilities",
-            "problem": "Current evaluation is conversation-based, not execution-based",
-            "solution": "Build GStack agent that actually runs tests, checks code, validates assumptions",
-            "target_user": "AI product teams, startup builders",
-        }
-
-    async def _query_recent_knowledge(self) -> list[dict]:
-        """Query knowledge from last 24h."""
-        try:
-            from datetime import timedelta
-            since = datetime.now(timezone.utc) - timedelta(hours=24)
-
-            nodes = []
-            async with self.graph_db._db.execute(
-                "SELECT id, label, source, created_at FROM nodes WHERE type IN (?, ?) AND created_at > ? ORDER BY created_at DESC",
-                ("atomic_note", "residual_proposal", since.isoformat()),
-            ) as cursor:
-                async for row in cursor:
-                    nodes.append({"id": row[0], "content": row[1], "source": row[2], "created_at": row[3]})
-            return nodes[:50]
-        except Exception as e:
-            logger.exception("[Entrepreneur] Failed to query knowledge: %s", e)
-            return []
-
     def _get_innovation_proposals(self) -> list[dict]:
         """Get proposals from Innovation Mind."""
         if not self.innovation_scheduler:

@@ -1,4 +1,4 @@
-"""PDF processor using Docling with GLM-OCR and pdfplumber fallbacks."""
+"""PDF processor using Docling with local extraction fallbacks."""
 
 from __future__ import annotations
 
@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class PDFProcessor(ContentProcessor):
-    """Process PDF files using Docling primary, with GLM-OCR and pdfplumber fallbacks."""
-
-    OCR_API_URL = "https://api.z.ai/api/paas/v4/layout_parsing"
+    """Process PDF files using Docling primary, with local extraction fallbacks."""
 
     async def process(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Process PDF file."""
@@ -41,14 +39,14 @@ class PDFProcessor(ContentProcessor):
                     self._avg_words_per_line(docling_result.text),
                 )
 
-            # Method 2: Try GLM-OCR API
+            # Method 2: Try the placeholder OCR hook, which currently falls back locally.
             ocr_result = await self._call_glm_ocr(file_path)
 
             if ocr_result and ocr_result.get("text"):
                 text = ocr_result["text"]
                 metadata = {
                     "pages": ocr_result.get("pages", 1),
-                    "method": "glm-ocr",
+                    "method": "ocr-fallback",
                 }
             else:
                 # Fallback: basic extraction
@@ -66,7 +64,7 @@ class PDFProcessor(ContentProcessor):
                 source_type="pdf",
                 source_path=file_path,
                 visual_elements=visual_elements,
-                processing_method="glm-ocr" if ocr_result else "pdfminer",
+                processing_method="ocr-fallback" if ocr_result else "pdfminer",
                 metadata=metadata,
             )
 
@@ -106,10 +104,10 @@ class PDFProcessor(ContentProcessor):
             return None
 
     async def _call_glm_ocr(self, file_path: Path) -> dict | None:
-        """Call GLM-OCR API for layout-aware extraction."""
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+        """Placeholder OCR hook; currently falls back to local extraction."""
+        api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("LLM_API_KEY")
         if not api_key:
-            logger.warning("No API key for GLM-OCR, using fallback")
+            logger.warning("No Kimi API key for PDF OCR fallback, using local extraction")
             return None
 
         try:
@@ -120,8 +118,8 @@ class PDFProcessor(ContentProcessor):
             # Determine MIME type
             mime_type = "application/pdf"
 
-            # GLM-OCR requires the specific OCR model, fallback to text extraction
-            # Free tier doesn't support layout_parsing endpoint
+            # There is no dedicated Kimi OCR endpoint wired here yet, so keep the
+            # local extraction fallback instead of calling an obsolete BigModel API.
             return None
 
             headers = {
@@ -137,7 +135,7 @@ class PDFProcessor(ContentProcessor):
                     timeout=aiohttp.ClientTimeout(total=120),
                 ) as response:
                     if response.status != 200:
-                        logger.warning("GLM-OCR API error: %s", response.status)
+                        logger.warning("OCR API error: %s", response.status)
                         return None
 
                     result = await response.json()
@@ -152,7 +150,7 @@ class PDFProcessor(ContentProcessor):
                     return None
 
         except Exception as e:
-            logger.warning("GLM-OCR failed: %s", e)
+            logger.warning("PDF OCR fallback failed: %s", e)
             return None
 
     async def _fallback_extract(self, file_path: Path) -> str:

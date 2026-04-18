@@ -1,11 +1,16 @@
-"""DIKIWI - Multi-agent knowledge system with institutional review.
+"""DIKIWI - Event-driven knowledge pipeline with institutional review.
 
-Re-architected with:
-- Event-driven coordination (EventBus)
-- Skill-based capabilities (SkillRegistry)
+Active runtime:
+- Event-driven stage coordination
 - Institutional review gates (门下省 Menxia, CVO)
-- Audit trail (Memorials)
-- Three-layer architecture (Model/Tool/Platform)
+- Stage agents used by `DikiwiMind`
+
+Experimental packages still shipped in-tree:
+- `aily.dikiwi.skills`
+- `aily.dikiwi.memorials`
+
+Those experimental packages are available for tests and future work, but they
+are not part of the active production path described in the current docs.
 
 Usage:
     from aily.dikiwi import DikiwiOrchestrator, PipelineConfig

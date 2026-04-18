@@ -254,10 +254,10 @@ async def run_chaos_to_zettelkasten(
     from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
     # Setup
-    os.environ.setdefault("ZHIPU_API_KEY", SETTINGS.zhipu_api_key or "")
-    llm_client = PrimaryLLMRoute.route_zhipu(
-        api_key=os.environ["ZHIPU_API_KEY"],
-        model=SETTINGS.zhipu_model,
+    os.environ.setdefault("KIMI_API_KEY", SETTINGS.kimi_api_key or SETTINGS.llm_api_key or "")
+    llm_client = PrimaryLLMRoute.route_kimi(
+        api_key=os.environ["KIMI_API_KEY"],
+        model=SETTINGS.kimi_model,
         max_concurrency=SETTINGS.llm_max_concurrency,
         min_interval_seconds=SETTINGS.llm_min_interval_seconds,
     )

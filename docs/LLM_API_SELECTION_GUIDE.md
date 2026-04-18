@@ -59,8 +59,8 @@ This is the route Aily now uses for its primary LLM path.
 from aily.llm.llm_router import LLMRouter, LLMConfig
 
 config = LLMConfig(
-    standard_api_key="sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o",
-    standard_model="moonshot-v1-32k",
+    standard_api_key=os.environ["KIMI_API_KEY"],
+    standard_model="kimi-k2.5",
 )
 
 # DATA stage: Extract facts from large content
@@ -213,8 +213,8 @@ You process 1000+ messages daily through DIKIWI.
 # config.py
 LLM_CONFIG = LLMConfig(
     # Standard API for all DIKIWI processing
-    standard_api_key="sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o",
-    standard_model="moonshot-v1-128k",  # Long context for large conversations
+    standard_api_key=os.environ["KIMI_API_KEY"],
+    standard_model="kimi-k2.5",  # 256k context for large conversations
 
     # No Coding Plan needed
     coding_plan_api_key="",
@@ -231,8 +231,8 @@ You do both DIKIWI processing and interactive coding.
 # config.py
 LLM_CONFIG = LLMConfig(
     # Standard API for DIKIWI
-    standard_api_key="sk-fuvT5VCTQVyEC7eN4lPcgIgp2EQ1pBGI9P4fuurkb5kiAC5o",
-    standard_model="moonshot-v1-32k",
+    standard_api_key=os.environ["KIMI_API_KEY"],
+    standard_model="kimi-k2.5",
 
     # Coding Plan for Claude Code integration
     coding_plan_api_key="sk-sp-xxxxx",

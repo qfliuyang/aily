@@ -199,8 +199,12 @@ async def main():
 
     args = parser.parse_args()
 
-    # Setup
-    os.environ["ZHIPU_API_KEY"] = "6838091633ae40c68945585efdbc1e97.99L3Aix4F7HRhmRG"
+    if not (
+        os.getenv("KIMI_API_KEY")
+        or os.getenv("MOONSHOT_API_KEY")
+        or os.getenv("LLM_API_KEY")
+    ):
+        raise SystemExit("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running the batch processor.")
 
     config = ChaosConfig()
     config.watch_folder = Path(args.folder).expanduser()

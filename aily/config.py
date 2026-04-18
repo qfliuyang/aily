@@ -108,14 +108,16 @@ class Settings(BaseSettings):
     obsidian_vault_path: str = ""
     dikiwi_vault_path: str = "/Users/luzi/Documents/aily/aily"
     obsidian_rest_api_port: int = 27123
-    llm_provider: str = "zhipu"
+    llm_provider: str = "kimi"
     llm_api_key: str = ""
-    llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
-    llm_model: str = "glm-4-flash"
+    llm_base_url: str = "https://api.moonshot.cn/v1"
+    llm_model: str = "kimi-k2.5"
     llm_max_concurrency: int = 1
     llm_min_interval_seconds: float = 3.0
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
+    kimi_api_key: str = ""
+    kimi_model: str = "kimi-k2.5"
     zhipu_api_key: str = ""
     zhipu_model: str = "glm-4-plus"
 
@@ -160,14 +162,28 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context: Any) -> None:
         """Initialize minds config from environment after main init."""
-        if not self.zhipu_api_key and self.llm_provider.lower() == "zhipu":
-            self.zhipu_api_key = self.llm_api_key
-        if self.llm_provider.lower() == "zhipu":
+        import os
+
+        provider = self.llm_provider.lower()
+        moonshot_api_key = os.getenv("MOONSHOT_API_KEY", "")
+
+        if provider == "kimi":
+            if not self.kimi_api_key:
+                self.kimi_api_key = self.llm_api_key or moonshot_api_key
+            if not self.llm_api_key:
+                self.llm_api_key = self.kimi_api_key or moonshot_api_key
+            self.llm_base_url = "https://api.moonshot.cn/v1"
+            self.llm_model = self.kimi_model or self.llm_model
+
+        if provider == "zhipu":
+            if not self.zhipu_api_key:
+                self.zhipu_api_key = self.llm_api_key
+            if not self.llm_api_key:
+                self.llm_api_key = self.zhipu_api_key
             self.llm_base_url = "https://open.bigmodel.cn/api/paas/v4"
             self.llm_model = self.zhipu_model or self.llm_model
 
         # Parse minds config from env vars
-        import os
         env_vars = {
             k.lower().replace("aily_", ""): v
             for k, v in os.environ.items()

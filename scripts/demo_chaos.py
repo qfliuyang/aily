@@ -2,12 +2,8 @@
 """Demo script for Aily Chaos - Process a file from aily_chaos folder."""
 
 import asyncio
-import os
 import sys
 from pathlib import Path
-
-# Set API key
-os.environ["ZHIPU_API_KEY"] = "6838091633ae40c68945585efdbc1e97.99L3Aix4F7HRhmRG"
 
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -60,6 +56,15 @@ async def process_pdf():
 
 async def main():
     """Run demo."""
+    import os
+
+    if not (
+        os.getenv("KIMI_API_KEY")
+        or os.getenv("MOONSHOT_API_KEY")
+        or os.getenv("LLM_API_KEY")
+    ):
+        raise SystemExit("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running the demo.")
+
     print("=" * 60)
     print("Aily Chaos Demo - PDF Processing")
     print("=" * 60)

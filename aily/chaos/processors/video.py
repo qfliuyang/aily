@@ -1,4 +1,4 @@
-"""Video processor using ffmpeg and GLM-ASR/Whisper for transcription."""
+"""Video processor using ffmpeg, Kimi multimodal understanding, and Whisper fallback."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from PIL import Image
 
 from aily.chaos.processors.base import ContentProcessor
 from aily.chaos.types import ExtractedContentMultimodal, TimestampedSegment, VisualElement
+from aily.llm.kimi_client import KimiClient
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,8 @@ logger = logging.getLogger(__name__)
 class VideoProcessor(ContentProcessor):
     """Process video files: extract frames, transcribe audio, analyze visuals."""
 
-    ASR_API_URL = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
-    VISION_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    VISION_API_URL = KimiClient.CHAT_COMPLETIONS_URL
+    VISION_MODEL = "kimi-k2.5"
 
     async def process(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Process video file."""
@@ -44,8 +45,8 @@ class VideoProcessor(ContentProcessor):
             transcript = None
             segments = []
 
-            # Try GLM-ASR first, fallback to Whisper
-            transcript_result = await self._transcribe_with_glm_asr(file_path)
+            # Try Kimi multimodal transcription first, fallback to Whisper.
+            transcript_result = await self._transcribe_with_kimi_video(file_path)
             if not transcript_result:
                 transcript_result = await self._transcribe_with_whisper(file_path)
 
@@ -203,8 +204,10 @@ class VideoProcessor(ContentProcessor):
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     async def _analyze_frame(self, base64_image: str) -> str | None:
-        """Analyze a video frame using GLM-4V."""
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+        """Analyze a video frame using Kimi multimodal chat completions."""
+        api_key = KimiClient.resolve_api_key(
+            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
+        )
         if not api_key:
             return None
 
@@ -215,7 +218,7 @@ class VideoProcessor(ContentProcessor):
             }
 
             payload = {
-                "model": "glm-4v-flash",
+                "model": self.VISION_MODEL,
                 "messages": [
                     {
                         "role": "user",
@@ -253,74 +256,90 @@ class VideoProcessor(ContentProcessor):
             logger.warning("Frame analysis failed: %s", e)
             return None
 
-    async def _transcribe_with_glm_asr(self, file_path: Path) -> dict | None:
-        """Transcribe audio using GLM-ASR API."""
-        api_key = os.getenv("ZHIPU_API_KEY") or os.getenv("BIGMODEL_API_KEY")
+    async def _transcribe_with_kimi_video(self, file_path: Path) -> dict | None:
+        """Transcribe spoken content using Kimi's native video input support."""
+        api_key = KimiClient.resolve_api_key(
+            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
+        )
         if not api_key:
             return None
 
         try:
-            # Extract audio first
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_audio:
-                audio_path = tmp_audio.name
-
-            cmd = [
-                "ffmpeg",
-                "-i", str(file_path),
-                "-vn",  # No video
-                "-acodec", "libmp3lame",
-                "-q:a", "4",
-                audio_path,
-            ]
-
-            result = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await result.wait()
-
-            if not os.path.exists(audio_path):
+            video_size = file_path.stat().st_size
+            if video_size > 25 * 1024 * 1024:
+                logger.info("Skipping Kimi video transcription for %s because file is too large", file_path.name)
                 return None
 
-            # Upload and transcribe
+            video_bytes = await asyncio.to_thread(file_path.read_bytes)
+            video_mime = file_path.suffix.lower().lstrip(".") or "mp4"
+            video_url = f"data:video/{video_mime};base64,{base64.b64encode(video_bytes).decode('utf-8')}"
+
             async with aiohttp.ClientSession() as session:
-                with open(audio_path, "rb") as f:
-                    data = aiohttp.FormData()
-                    data.add_field("file", f, filename="audio.mp3")
-                    data.add_field("model", "glm-asr-2512")
-                    data.add_field("language", "auto")
-                    data.add_field("response_format", "json")
+                payload = {
+                    "model": self.VISION_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "You transcribe spoken content from videos and return structured JSON."},
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "video_url",
+                                    "video_url": {"url": video_url},
+                                },
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Transcribe the spoken audio in this video. "
+                                        "Return valid JSON with keys: text (string) and segments (array). "
+                                        "If timestamps are unavailable, return an empty segments array."
+                                    ),
+                                },
+                            ],
+                        },
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 2048,
+                }
 
-                    async with session.post(
-                        self.ASR_API_URL,
-                        data=data,
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=aiohttp.ClientTimeout(total=300),
-                    ) as response:
-                        os.unlink(audio_path)
+                async with session.post(
+                    self.VISION_API_URL,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=300),
+                ) as response:
+                    if response.status != 200:
+                        logger.warning("Kimi video transcription failed with status %s", response.status)
+                        return None
 
-                        if response.status != 200:
-                            return None
+                    result = await response.json()
+                    content = result["choices"][0]["message"]["content"]
 
-                        result = await response.json()
-                        text = result.get("text", "")
+            import json
 
-                        # Parse segments if available
-                        segments = []
-                        if "segments" in result:
-                            for seg in result["segments"]:
-                                segments.append(TimestampedSegment(
-                                    start_time=seg.get("start", 0),
-                                    end_time=seg.get("end", 0),
-                                    text=seg.get("text", ""),
-                                    confidence=seg.get("confidence", 1.0),
-                                ))
+            parsed = json.loads(content)
+            text = str(parsed.get("text", "")).strip()
 
-                        return {"text": text, "segments": segments}
+            segments = []
+            for seg in parsed.get("segments", []):
+                if not isinstance(seg, dict):
+                    continue
+                segments.append(TimestampedSegment(
+                    start_time=seg.get("start", 0),
+                    end_time=seg.get("end", 0),
+                    text=seg.get("text", ""),
+                    confidence=seg.get("confidence", 1.0),
+                ))
+
+            if not text:
+                return None
+
+            return {"text": text, "segments": segments}
 
         except Exception as e:
-            logger.warning("GLM-ASR transcription failed: %s", e)
+            logger.warning("Kimi video transcription failed: %s", e)
             return None
 
     async def _transcribe_with_whisper(self, file_path: Path) -> dict | None:

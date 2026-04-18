@@ -63,10 +63,10 @@ async def process_single_file(json_file: Path, vault_path: Path) -> dict:
     )
 
     # Setup LLM
-    api_key = os.environ.get("ZHIPU_API_KEY", SETTINGS.zhipu_api_key)
-    llm_client = PrimaryLLMRoute.route_zhipu(
+    api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY") or SETTINGS.kimi_api_key or SETTINGS.llm_api_key
+    llm_client = PrimaryLLMRoute.route_kimi(
         api_key=api_key,
-        model=SETTINGS.zhipu_model,
+        model=SETTINGS.kimi_model,
     )
 
     # Setup GraphDB (use temp to avoid lock issues)

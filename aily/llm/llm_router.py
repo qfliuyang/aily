@@ -44,7 +44,7 @@ class LLMConfig:
     # Standard API settings
     standard_api_key: str = ""
     standard_base_url: str = "https://api.moonshot.cn/v1"
-    standard_model: str = "moonshot-v1-32k"
+    standard_model: str = "kimi-k2.5"
 
     # Coding Plan settings
     coding_plan_api_key: str = ""
@@ -102,8 +102,10 @@ class LLMRouter:
     @staticmethod
     def standard_kimi(
         api_key: str,
-        model: str = "moonshot-v1-32k",
+        model: str = "kimi-k2.5",
         thinking: bool = True,
+        max_concurrency: int = 1,
+        min_interval_seconds: float = 0.0,
     ) -> KimiClient:
         """Create standard Kimi API client.
 
@@ -121,6 +123,8 @@ class LLMRouter:
             timeout=120.0,
             max_retries=2,
             thinking=thinking,
+            max_concurrency=max_concurrency,
+            min_interval_seconds=min_interval_seconds,
         )
 
     @staticmethod
@@ -348,7 +352,7 @@ def get_llm_for_coding(config: LLMConfig) -> LLMInterface:
         )
     return LLMRouter.standard_kimi(
         api_key=config.standard_api_key,
-        model="moonshot-v1-32k",
+        model="kimi-k2.5",
     )
 
 

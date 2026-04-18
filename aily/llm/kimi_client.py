@@ -1,12 +1,13 @@
 """Kimi LLM Client - Moonshot API integration for DIKIWI.
 
-Uses OpenAI-compatible API at https://api.moonshot.cn/v1
-Models: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
+Uses the OpenAI-compatible Kimi Open Platform at https://api.moonshot.cn/v1.
+Recommended model: kimi-k2.5
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from aily.llm.client import LLMClient
@@ -27,8 +28,19 @@ class KimiClient(LLMClient):
         result = await client.chat_json(messages=[...])
     """
 
-    DEFAULT_MODEL = "moonshot-v1-32k"
+    DEFAULT_MODEL = "kimi-k2.5"
     BASE_URL = "https://api.moonshot.cn/v1"
+    CHAT_COMPLETIONS_URL = f"{BASE_URL}/chat/completions"
+
+    @staticmethod
+    def resolve_api_key(explicit_api_key: str = "") -> str:
+        """Resolve Kimi credentials from explicit input or common env names."""
+        return (
+            explicit_api_key
+            or os.getenv("KIMI_API_KEY", "")
+            or os.getenv("MOONSHOT_API_KEY", "")
+            or os.getenv("LLM_API_KEY", "")
+        )
 
     def __init__(
         self,
@@ -37,23 +49,27 @@ class KimiClient(LLMClient):
         timeout: float = 120.0,
         max_retries: int = 2,
         thinking: bool = True,
+        max_concurrency: int = 1,
+        min_interval_seconds: float = 0.0,
     ) -> None:
         """Initialize Kimi client.
 
         Args:
             api_key: Kimi API key (from https://platform.kimi.com)
-            model: Model name (moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k, kimi-k2.5)
+            model: Model name (recommended: kimi-k2.5)
             timeout: Request timeout in seconds (higher for long contexts)
             max_retries: Number of retries on failure
             thinking: Enable thinking mode for kimi-k2.5 (default True for complex reasoning)
         """
         super().__init__(
             base_url=self.BASE_URL,
-            api_key=api_key,
+            api_key=self.resolve_api_key(api_key),
             model=model,
             timeout=timeout,
             max_retries=max_retries,
             thinking=thinking,
+            max_concurrency=max_concurrency,
+            min_interval_seconds=min_interval_seconds,
         )
         logger.info("Kimi client initialized with model: %s (thinking: %s)", model, thinking)
 
