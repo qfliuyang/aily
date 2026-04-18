@@ -109,3 +109,26 @@ async def test_text_processor_splits_multi_url_import_into_atomic_items(
     assert split_items[0].metadata["source_url"] == "https://example.com/a"
     assert split_items[0].title == "A Title"
     assert split_items[1].metadata["source_url"] == "https://example.com/b"
+
+
+@pytest.mark.asyncio
+async def test_text_processor_imports_mineru_full_markdown(tmp_path: Path):
+    export_dir = tmp_path / "paper_export"
+    export_dir.mkdir()
+    file_path = export_dir / "full.md"
+    file_path.write_text("# MinerU Paper Title\n\nStructured markdown body.", encoding="utf-8")
+    (export_dir / "content_list.json").write_text(
+        '[{"page_idx": 0, "text": "a"}, {"page_idx": 1, "text": "b"}]',
+        encoding="utf-8",
+    )
+
+    processor = TextProcessor(ChaosConfig())
+    result = await processor.process(file_path)
+
+    assert result is not None
+    assert result.source_type == "mineru_markdown"
+    assert result.processing_method == "mineru_import"
+    assert result.metadata["chaos_base_name"] == "paper_export"
+    assert result.metadata["pages"] == 2
+    assert "content_list.json" in result.metadata["mineru_sidecar_files"]
+    assert result.title == "MinerU Paper Title"

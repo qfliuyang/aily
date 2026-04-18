@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from pathlib import Path
 
 from aily.browser.manager import BrowserUseManager
 from aily.chaos.processors.base import ContentProcessor
-from aily.chaos.types import ExtractedContentMultimodal
+from aily.chaos.types import ExtractedContentMultimodal, VisualElement
 from aily.processing.markdownize import MarkdownizeProcessor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ class TextProcessor(ContentProcessor):
         """Process text/markdown file."""
         try:
             text = await asyncio.to_thread(self._read_file, file_path)
+            if self._looks_like_mineru_markdown(file_path):
+                return self._process_mineru_markdown(file_path, text)
+
             if file_path.suffix.lower() in {".md", ".markdown"}:
                 try:
                     url_result = await self._maybe_fetch_urls_to_markdown(file_path, text)
@@ -64,6 +68,173 @@ class TextProcessor(ContentProcessor):
         except Exception as e:
             logger.exception("Failed to process text file: %s", e)
             return None
+
+    def _looks_like_mineru_markdown(self, file_path: Path) -> bool:
+        """Detect MinerU markdown exports by filename or sibling artifacts."""
+        if file_path.suffix.lower() not in {".md", ".markdown"}:
+            return False
+        if file_path.name.lower() == "full.md":
+            return True
+
+        sibling_names = {path.name.lower() for path in file_path.parent.iterdir() if path.is_file()}
+        mineru_sidecars = {"layout.json", "middle.json", "content_list.json", "model.json", "main.html"}
+        return bool(sibling_names.intersection(mineru_sidecars)) or any(
+            name.endswith("_content_list.json") or name.endswith("_model.json")
+            for name in sibling_names
+        )
+
+    def _process_mineru_markdown(
+        self,
+        file_path: Path,
+        text: str,
+    ) -> ExtractedContentMultimodal:
+        """Normalize MinerU export markdown into a Chaos content item."""
+        title = self._extract_title(text, file_path)
+        sidecar = self._load_mineru_sidecar_metadata(file_path)
+        source_root = self._derive_mineru_source_root(file_path)
+
+        if title == source_root.replace("_", " ").replace("-", " ").title():
+            title = self._derive_mineru_title(text, source_root)
+        else:
+            title = self._derive_mineru_title(text, title)
+
+        metadata = {
+            "mineru_output_dir": str(file_path.parent),
+            "mineru_source_root": source_root,
+            "mineru_sidecar_files": sorted(sidecar["artifact_files"]),
+            "chaos_base_name": source_root,
+        }
+        if sidecar["page_count"] is not None:
+            metadata["pages"] = sidecar["page_count"]
+        if sidecar["content_items"] is not None:
+            metadata["mineru_content_items"] = sidecar["content_items"]
+
+        return ExtractedContentMultimodal(
+            text=text,
+            title=title,
+            source_type="mineru_markdown",
+            source_path=file_path,
+            processing_method="mineru_import",
+            metadata=metadata,
+            visual_elements=sidecar["visual_elements"],
+            tags=["mineru", "markdown-import"],
+        )
+
+    def _load_mineru_sidecar_metadata(self, file_path: Path) -> dict[str, object]:
+        """Collect page and artifact hints from common MinerU sidecars."""
+        artifact_files: set[str] = set()
+        page_count: int | None = None
+        content_items: int | None = None
+        visual_elements: list[VisualElement] = []
+
+        for sibling in file_path.parent.iterdir():
+            if not sibling.is_file() or sibling == file_path:
+                continue
+
+            name = sibling.name.lower()
+            if name in {"layout.json", "middle.json", "content_list.json", "model.json", "main.html"} or (
+                name.endswith("_content_list.json") or name.endswith("_model.json")
+            ):
+                artifact_files.add(sibling.name)
+
+            if sibling.suffix.lower() != ".json":
+                continue
+
+            try:
+                data = json.loads(sibling.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            if page_count is None:
+                page_count = self._extract_page_count(data)
+            if content_items is None and isinstance(data, list):
+                content_items = len(data)
+            if not visual_elements and "content_list" in name and isinstance(data, list):
+                visual_elements = self._extract_mineru_visual_elements(data)
+
+        return {
+            "artifact_files": artifact_files,
+            "page_count": page_count,
+            "content_items": content_items,
+            "visual_elements": visual_elements,
+        }
+
+    def _extract_page_count(self, data) -> int | None:
+        """Search nested MinerU JSON for a page count."""
+        if isinstance(data, dict):
+            for key in ("page_count", "page_cnt", "pages", "num_pages"):
+                value = data.get(key)
+                if isinstance(value, int):
+                    return value
+            for value in data.values():
+                page_count = self._extract_page_count(value)
+                if page_count is not None:
+                    return page_count
+        elif isinstance(data, list):
+            page_indexes = [
+                item.get("page_idx")
+                for item in data
+                if isinstance(item, dict) and isinstance(item.get("page_idx"), int)
+            ]
+            if page_indexes:
+                return max(page_indexes) + 1
+            for value in data:
+                page_count = self._extract_page_count(value)
+                if page_count is not None:
+                    return page_count
+        return None
+
+    def _derive_mineru_source_root(self, file_path: Path) -> str:
+        """Use the export directory name as the stable base for Chaos note naming."""
+        if file_path.name.lower() == "full.md":
+            return file_path.parent.name
+        return file_path.stem
+
+    def _derive_mineru_title(self, text: str, fallback: str) -> str:
+        """Prefer the first H1, otherwise derive a human title from the export folder."""
+        heading = self._extract_title(text, Path(fallback))
+        if heading and heading != Path(fallback).stem.replace("_", " ").replace("-", " ").title():
+            return heading
+        return fallback.replace("_", " ").replace("-", " ").strip().title()
+
+    def _extract_mineru_visual_elements(self, items: list[dict]) -> list[VisualElement]:
+        """Convert key MinerU content blocks into Chaos visual elements."""
+        visual_elements: list[VisualElement] = []
+
+        for idx, item in enumerate(items[:30]):
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type", "")).lower()
+            if item_type not in {"image", "table", "chart"}:
+                continue
+
+            description_parts: list[str] = []
+            for key in (
+                "image_caption",
+                "table_caption",
+                "chart_caption",
+                "image_footnote",
+                "table_footnote",
+                "chart_footnote",
+                "content",
+            ):
+                value = item.get(key)
+                if isinstance(value, list):
+                    description_parts.extend(str(part) for part in value if str(part).strip())
+                elif isinstance(value, str) and value.strip():
+                    description_parts.append(value.strip())
+
+            description = " ".join(description_parts).strip() or item_type.title()
+            visual_elements.append(
+                VisualElement(
+                    element_id=f"mineru_{item_type}_{idx}",
+                    element_type=item_type,
+                    description=description[:500],
+                    source_page=item.get("page_idx") + 1 if isinstance(item.get("page_idx"), int) else None,
+                )
+            )
+
+        return visual_elements
 
     async def _maybe_fetch_urls_to_markdown(
         self,

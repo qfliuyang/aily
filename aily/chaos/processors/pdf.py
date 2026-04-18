@@ -26,6 +26,10 @@ class PDFProcessor(ContentProcessor):
         logger.info("Processing PDF: %s", file_path.name)
 
         try:
+            mineru_result = await self._call_mineru(file_path)
+            if mineru_result:
+                return mineru_result
+
             # Method 1: Docling (best quality, handles layout/tables/images)
             docling_result = await self._call_docling(file_path)
             if docling_result and not self._is_docling_poor_quality(docling_result):
@@ -101,6 +105,20 @@ class PDFProcessor(ContentProcessor):
             return result
         except Exception as e:
             logger.warning("Docling extraction failed for %s: %s", file_path.name, e)
+            return None
+
+    async def _call_mineru(self, file_path: Path) -> ExtractedContentMultimodal | None:
+        """Primary extraction using local MinerU when available."""
+        try:
+            from aily.chaos.processors.mineru_processor import MinerUProcessor
+
+            processor = MinerUProcessor(self.config, self.llm_client)
+            result = await processor.process(file_path)
+            if result:
+                logger.info("MinerU succeeded for %s", file_path.name)
+            return result
+        except Exception as e:
+            logger.warning("MinerU extraction failed for %s: %s", file_path.name, e)
             return None
 
     async def _call_glm_ocr(self, file_path: Path) -> dict | None:

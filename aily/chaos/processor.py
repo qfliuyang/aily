@@ -217,8 +217,12 @@ class ChaosProcessor:
                 ".mov": "video/quicktime",
                 ".avi": "video/x-msvideo",
                 ".mkv": "video/x-matroska",
+                ".doc": "application/msword",
                 ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                ".ppt": "application/vnd.ms-powerpoint",
                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xls": "application/vnd.ms-excel",
+                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 ".md": "text/markdown",
                 ".txt": "text/plain",
                 ".png": "image/png",
@@ -256,9 +260,20 @@ class ChaosProcessor:
             return await processor.process(file_path)
 
         elif mime_type in {
+            "application/msword",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.ms-powerpoint",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }:
+            from aily.chaos.processors.mineru_processor import MinerUProcessor
+
+            mineru_processor = MinerUProcessor(self.config, self.llm_client)
+            mineru_result = await mineru_processor.process(file_path)
+            if mineru_result:
+                return mineru_result
+
             # Try Docling first for rich document understanding
             from aily.chaos.processors.docling_processor import DoclingProcessor
 
@@ -274,7 +289,10 @@ class ChaosProcessor:
                 processor = PPTXProcessor(self.config.pptx, self.llm_client)
                 return await processor.process(file_path)
 
-            return None
+            from aily.chaos.processors.document import GenericDocumentProcessor
+
+            processor = GenericDocumentProcessor(self.config)
+            return await processor.process(file_path)
 
         elif mime_type in {"text/markdown", "text/plain"}:
             from aily.chaos.processors.document import TextProcessor
@@ -297,7 +315,7 @@ class ChaosProcessor:
         output_dir = self.config.processed_folder / date_folder
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        base_name = job.file_path.stem
+        base_name = self._chaos_base_name(extracted, job.file_path)
 
         # Save JSON
         json_path = output_dir / f"{base_name}.json"
@@ -344,6 +362,16 @@ class ChaosProcessor:
                 "Saved complete transcript to vault 00-Chaos: %s",
                 transcript_path.name,
             )
+
+    @staticmethod
+    def _chaos_base_name(extracted: ExtractedContentMultimodal, source_path: Path) -> str:
+        """Choose a stable filename for persisted Chaos artifacts."""
+        base_name = extracted.metadata.get("chaos_base_name")
+        if isinstance(base_name, str) and base_name.strip():
+            return base_name.strip()
+        if extracted.source_type == "mineru_markdown" and source_path.name.lower() == "full.md":
+            return source_path.parent.name
+        return source_path.stem
 
     @staticmethod
     def _format_timestamp(seconds: float) -> str:

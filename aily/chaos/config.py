@@ -59,6 +59,25 @@ class PPTXConfig:
 
 
 @dataclass
+class MinerUConfig:
+    """MinerU local parser configuration."""
+
+    enabled: bool = True
+    command: str = "mineru"
+    api_command: str = "mineru-api"
+    backend: str = "pipeline"
+    method: str = "auto"
+    language: str = "ch"
+    model_source: str = "modelscope"
+    api_url: str = ""
+    api_startup_timeout_seconds: int = 180
+    api_enable_vlm_preload: bool = False
+    enable_formula: bool = True
+    enable_table: bool = True
+    persist_outputs: bool = True
+
+
+@dataclass
 class TaggingConfig:
     """Tagging engine configuration."""
 
@@ -98,6 +117,7 @@ class ChaosConfig:
     image: ImageConfig = field(default_factory=ImageConfig)
     pdf: PDFConfig = field(default_factory=PDFConfig)
     pptx: PPTXConfig = field(default_factory=PPTXConfig)
+    mineru: MinerUConfig = field(default_factory=MinerUConfig)
     tagging: TaggingConfig = field(default_factory=TaggingConfig)
     dikiwi: DikiwiConfig = field(default_factory=DikiwiConfig)
 
@@ -133,6 +153,7 @@ class ChaosConfig:
         image_config = ImageConfig(**data.get("image", {}))
         pdf_config = PDFConfig(**data.get("pdf", {}))
         pptx_config = PPTXConfig(**data.get("pptx", {}))
+        mineru_config = MinerUConfig(**data.get("mineru", {}))
         tagging_config = TaggingConfig(**data.get("tagging", {}))
         dikiwi_config = DikiwiConfig(**data.get("dikiwi", {}))
 
@@ -151,6 +172,7 @@ class ChaosConfig:
             image=image_config,
             pdf=pdf_config,
             pptx=pptx_config,
+            mineru=mineru_config,
             tagging=tagging_config,
             dikiwi=dikiwi_config,
             llm_model=data.get("llm_model", "glm-5.1"),
@@ -170,6 +192,7 @@ class ChaosConfig:
             "image": self.image.__dict__,
             "pdf": self.pdf.__dict__,
             "pptx": self.pptx.__dict__,
+            "mineru": self.mineru.__dict__,
             "tagging": self.tagging.__dict__,
             "dikiwi": self.dikiwi.__dict__,
             "llm_model": self.llm_model,

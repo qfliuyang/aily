@@ -273,3 +273,33 @@ async def test_daemon_splits_multi_url_markdown_into_multiple_dikiwi_jobs(monkey
     await daemon._process_records([FakeRecord(1, "urls.md", "/tmp/urls.md", "markdown")])
 
     assert fake_bridge.processed == ["A", "B"]
+
+
+def test_daemon_scan_existing_skips_mineru_sidecars(monkeypatch, tmp_path):
+    import scripts.run_chaos_daemon as daemon_module
+
+    chaos_root = tmp_path / "chaos"
+    export_dir = chaos_root / "mineru_batch" / "report"
+    export_dir.mkdir(parents=True)
+    (export_dir / "full.md").write_text("# Parsed\n\nBody", encoding="utf-8")
+    (export_dir / "content_list.json").write_text("[]", encoding="utf-8")
+    (export_dir / "layout.json").write_text("{}", encoding="utf-8")
+
+    added: list[tuple[str, str]] = []
+
+    class RecordingQueue:
+        def __init__(self, _db_path):
+            pass
+
+        def add_file(self, path, file_type):
+            added.append((Path(path).name, file_type))
+            return True
+
+    monkeypatch.setattr(daemon_module, "CHAOS_FOLDER", chaos_root)
+    monkeypatch.setattr(daemon_module, "ChaosQueue", RecordingQueue)
+
+    daemon = daemon_module.ChaosDaemon()
+    scanned = daemon.scan_existing()
+
+    assert scanned == 1
+    assert added == [("full.md", "markdown")]

@@ -229,8 +229,12 @@ class ChaosDaemon:
         count = 0
         extensions = {
             ".pdf": "pdf",
-            ".docx": "docx",
-            ".pptx": "pptx",
+            ".doc": "office",
+            ".docx": "office",
+            ".ppt": "office",
+            ".pptx": "office",
+            ".xls": "office",
+            ".xlsx": "office",
             ".mp4": "video", ".mov": "video", ".avi": "video", ".mkv": "video",
             ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image", ".webp": "image",
             ".txt": "text", ".md": "markdown", ".json": "json",
@@ -239,8 +243,7 @@ class ChaosDaemon:
         # Max file sizes (MB)
         max_sizes = {
             "pdf": 50,
-            "docx": 50,
-            "pptx": 100,
+            "office": 100,
             "video": 500,
             "image": 20,
             "text": 10,
@@ -276,6 +279,8 @@ class ChaosDaemon:
 
                 ext = path.suffix.lower()
                 if ext in extensions:
+                    if self._should_skip_auxiliary_artifact(path):
+                        continue
                     file_type = extensions[ext]
 
                     # Check file size
@@ -292,6 +297,20 @@ class ChaosDaemon:
                         count += 1
 
         return count
+
+    def _should_skip_auxiliary_artifact(self, path: Path) -> bool:
+        """Skip MinerU sidecars so only the primary markdown enters Chaos."""
+        if path.suffix.lower() not in {".json", ".html", ".tex"}:
+            return False
+
+        sibling_full_md = path.parent / "full.md"
+        if not sibling_full_md.exists():
+            return False
+
+        name = path.name.lower()
+        if name in {"layout.json", "middle.json", "content_list.json", "model.json", "main.html"}:
+            return True
+        return name.endswith("_content_list.json") or name.endswith("_model.json")
 
     async def _processing_loop(self) -> None:
         """Main processing loop."""
@@ -322,7 +341,7 @@ class ChaosDaemon:
         try:
             transcript_dir = VAULT_PATH / "00-Chaos"
             transcript_dir.mkdir(parents=True, exist_ok=True)
-            base_name = source_path.stem
+            base_name = self._chaos_base_name(content, source_path)
             transcript_path = transcript_dir / f"{base_name}.md"
 
             counter = 1
@@ -351,6 +370,15 @@ class ChaosDaemon:
             logger.info("Saved transcript to vault 00-Chaos: %s", transcript_path.name)
         except Exception as exc:
             logger.warning("Failed to save transcript to vault: %s", exc)
+
+    def _chaos_base_name(self, content: ExtractedContentMultimodal, source_path: Path) -> str:
+        """Choose a stable filename for the 00-Chaos transcript."""
+        base_name = content.metadata.get("chaos_base_name")
+        if isinstance(base_name, str) and base_name.strip():
+            return base_name.strip()
+        if content.source_type == "mineru_markdown" and source_path.name.lower() == "full.md":
+            return source_path.parent.name
+        return source_path.stem
 
     async def _process_records(self, file_records) -> None:
         """Process one file or a grouped image session through DIKIWI."""
@@ -413,6 +441,7 @@ class ChaosDaemon:
         """Extract content from file based on type."""
         from aily.chaos.processors.pdf import PDFProcessor
         from aily.chaos.processors.image import ImageProcessor
+        from aily.chaos.processors.mineru_processor import MinerUProcessor
         from aily.chaos.processors.video import VideoProcessor
         from aily.chaos.processors.document import TextProcessor
         from aily.chaos.config import ChaosConfig
@@ -444,6 +473,11 @@ class ChaosDaemon:
             elif file_record.file_type == "video":
                 config = ChaosConfig()
                 processor = VideoProcessor(config=config)
+                return await asyncio.wait_for(processor.process(source_path), timeout=timeout)
+
+            elif file_record.file_type == "office":
+                config = ChaosConfig()
+                processor = MinerUProcessor(config=config)
                 return await asyncio.wait_for(processor.process(source_path), timeout=timeout)
 
             elif file_record.file_type in ("text", "markdown"):
