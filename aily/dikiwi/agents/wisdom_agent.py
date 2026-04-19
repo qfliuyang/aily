@@ -25,12 +25,17 @@ class WisdomAgent(DikiwiAgent):
         try:
             insight_result = self._find_stage_result(ctx, DikiwiStage.INSIGHT)
             info_result = self._find_stage_result(ctx, DikiwiStage.INFORMATION)
+            knowledge_result = self._find_stage_result(ctx, DikiwiStage.KNOWLEDGE)
             if not insight_result or not info_result:
                 raise RuntimeError("Prior stage results not found in context")
 
             insights: list[Insight] = insight_result.data.get("insights", [])
             insight_note_ids: list[str] = insight_result.data.get("insight_note_ids", [])
-            info_nodes: list[InformationNode] = info_result.data.get("information_nodes", [])
+            info_nodes: list[InformationNode] = []
+            if knowledge_result:
+                info_nodes = knowledge_result.data.get("network_nodes", [])
+            if not info_nodes:
+                info_nodes = info_result.data.get("information_nodes", [])
 
             zettels: list[ZettelkastenNote] = []
             if info_nodes:

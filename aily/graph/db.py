@@ -275,6 +275,131 @@ class GraphDB:
             for row in rows
         ]
 
+    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[dict]:
+        """Return nodes whose ids are in node_ids, preserving DB metadata."""
+        if not node_ids:
+            return []
+        placeholders = ",".join("?" for _ in node_ids)
+        rows = await self._fetchall(
+            f"""
+            SELECT id, type, label, source, created_at
+            FROM nodes
+            WHERE id IN ({placeholders})
+            """,
+            tuple(node_ids),
+        )
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+            }
+            for row in rows
+        ]
+
+    async def get_neighbors(
+        self,
+        node_id: str,
+        relation_type: str | None = None,
+        direction: str = "both",
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return neighboring nodes with the connecting edge.
+
+        direction:
+            out: node_id -> neighbor
+            in: neighbor -> node_id
+            both: either direction
+        """
+        relation_clause = "AND e.relation_type = ?" if relation_type else ""
+        params: list[object] = []
+
+        if direction == "out":
+            direction_clause = "e.source_node_id = ?"
+            neighbor_expr = "e.target_node_id"
+            params.append(node_id)
+        elif direction == "in":
+            direction_clause = "e.target_node_id = ?"
+            neighbor_expr = "e.source_node_id"
+            params.append(node_id)
+        else:
+            direction_clause = "(e.source_node_id = ? OR e.target_node_id = ?)"
+            neighbor_expr = (
+                "CASE WHEN e.source_node_id = ? THEN e.target_node_id "
+                "ELSE e.source_node_id END"
+            )
+            params.extend([node_id, node_id, node_id])
+
+        if relation_type:
+            params.append(relation_type)
+        params.append(limit)
+
+        rows = await self._fetchall(
+            f"""
+            SELECT n.id, n.type, n.label, n.source, n.created_at,
+                   e.id, e.source_node_id, e.target_node_id, e.relation_type,
+                   e.weight, e.source, e.created_at
+            FROM edges e
+            JOIN nodes n ON n.id = {neighbor_expr}
+            WHERE {direction_clause}
+              {relation_clause}
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+                "edge": {
+                    "id": row[5],
+                    "source_node_id": row[6],
+                    "target_node_id": row[7],
+                    "relation_type": row[8],
+                    "weight": row[9],
+                    "source": row[10],
+                    "created_at": row[11],
+                },
+            }
+            for row in rows
+        ]
+
+    async def get_edges_for_nodes(self, node_ids: list[str], limit: int = 200) -> list[dict]:
+        """Return edges where both endpoints are inside node_ids."""
+        if not node_ids:
+            return []
+        placeholders = ",".join("?" for _ in node_ids)
+        params = tuple([*node_ids, *node_ids, limit])
+        rows = await self._fetchall(
+            f"""
+            SELECT id, source_node_id, target_node_id, relation_type, weight, source, created_at
+            FROM edges
+            WHERE source_node_id IN ({placeholders})
+              AND target_node_id IN ({placeholders})
+            ORDER BY weight DESC, created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [
+            {
+                "id": row[0],
+                "source_node_id": row[1],
+                "target_node_id": row[2],
+                "relation_type": row[3],
+                "weight": row[4],
+                "source": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
     async def get_top_nodes_by_edge_count(
         self, hours: int | None = None, limit: int = 10
     ) -> list[dict]:

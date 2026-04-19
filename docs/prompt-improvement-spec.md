@@ -27,6 +27,8 @@ The spec does not attempt a full architecture rewrite. It focuses on prompt and 
 
 `DATA` and `INFORMATION` are mostly usable. The main prompt failures start in `KNOWLEDGE`, where broad relation types and weak anti-duplication guidance allow trivial edges. Those weak edges then degrade `INSIGHT` and `WISDOM`.
 
+Implementation note: `KNOWLEDGE` is now graph-triggered. It should receive selected subgraph context from `aily/dikiwi/network_synthesis.py`, not only the current file's information nodes. If no meaningful changed subgraph is found, the pipeline should stop at `KNOWLEDGE`.
+
 ### Proposal generation is too theme-shaped
 
 `IMPACT` and `RESIDUAL` often produce strong strategic directions, but not strong venture hypotheses. Common missing fields are:
@@ -84,6 +86,8 @@ Tighten classification toward:
 
 Tighten relation creation:
 
+- operate on selected graph subgraphs, not single-file local lists
+- prefer links that explain why a changed node is attaching to an existing neighborhood
 - forbid topic-only links
 - forbid duplicate/restatement links
 - prefer specific causal or dependency relations over vague ones

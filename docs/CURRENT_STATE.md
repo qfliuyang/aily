@@ -7,6 +7,7 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - App bootstrap: `aily/main.py`
 - Continuous pipeline entrypoint: `aily/sessions/dikiwi_mind.py`
 - DIKIWI runtime coordination: `aily/dikiwi/orchestrator.py`
+- DIKIWI graph-trigger selector: `aily/dikiwi/network_synthesis.py`
 - Post-pipeline proposal synthesis: `aily/dikiwi/agents/residual_agent.py`
 - Innovation scheduler: `aily/sessions/reactor_scheduler.py`
 - Business evaluation scheduler: `aily/sessions/entrepreneur_scheduler.py`
@@ -17,13 +18,14 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 ## Active Flow
 
 1. Input enters through Feishu WebSocket, the chaos bridge, or queue-driven jobs.
-2. `DikiwiMind` runs the six DIKIWI stages: `DATA -> INFORMATION -> KNOWLEDGE -> INSIGHT -> WISDOM -> IMPACT`.
-3. After IMPACT, `ReactorScheduler` generates proposal candidates from multiple frameworks.
-4. `ResidualAgent` synthesizes vault, graph, and reactor context into structured `residual_proposal` nodes.
-5. Reactor screens those residual proposals for innovation quality and promotes passing proposals to `pending_business`.
-6. `EntrepreneurScheduler` runs GStack business review on pending proposals.
-7. `Guru` writes an appendix for every reviewed proposal, including denied ones.
-8. Notes are written into the numbered Obsidian vault layout.
+2. `DikiwiMind` always runs `DATA -> INFORMATION`, then `KNOWLEDGE` scans the GraphDB network for synthesis-grade changed subgraphs.
+3. If the graph-change threshold is reached and changed nodes attach to existing information neighbors, the run continues through `INSIGHT -> WISDOM -> IMPACT`; otherwise it stops at `KNOWLEDGE`.
+4. After IMPACT, `ReactorScheduler` generates proposal candidates from multiple frameworks.
+5. `ResidualAgent` synthesizes vault, graph, and reactor context into structured `residual_proposal` nodes.
+6. Reactor screens those residual proposals for innovation quality and promotes passing proposals to `pending_business`.
+7. `EntrepreneurScheduler` runs GStack business review on pending proposals.
+8. `Guru` writes an appendix for every reviewed proposal, including denied ones.
+9. Notes are written into the numbered Obsidian vault layout.
 
 ## Active Vault Layout
 

@@ -28,13 +28,16 @@ class InsightAgent(DikiwiAgent):
             if not info_result or not knowledge_result:
                 raise RuntimeError("Prior stage results not found in context")
 
-            info_nodes: list[InformationNode] = info_result.data.get("information_nodes", [])
+            info_nodes: list[InformationNode] = knowledge_result.data.get("network_nodes", [])
+            if not info_nodes:
+                info_nodes = info_result.data.get("information_nodes", [])
             links: list[KnowledgeLink] = knowledge_result.data.get("links", [])
             knowledge_note_ids: list[str] = knowledge_result.data.get("knowledge_note_ids", [])
+            network_context: str = knowledge_result.data.get("network_context", "")
 
             insights: list[Insight] = []
             if len(info_nodes) >= 2:
-                insights = await self._llm_detect_patterns(info_nodes, links, ctx)
+                insights = await self._llm_detect_patterns(info_nodes, links, ctx, network_context)
 
             # Write insight notes
             insight_note_ids: list[str] = []
@@ -83,11 +86,13 @@ class InsightAgent(DikiwiAgent):
         info_nodes: list[InformationNode],
         links: list[KnowledgeLink],
         ctx: AgentContext,
+        network_context: str = "",
     ) -> list[Insight]:
         nodes_desc = "\n".join(
-            f"{i+1}. [{n.domain}] {n.content[:150]}"
+            f"E{i+1}. [{n.domain}] {n.content[:180]}"
             for i, n in enumerate(info_nodes[:15])
         )
+        node_label_map = {f"E{i+1}": n.id for i, n in enumerate(info_nodes[:15])}
         links_desc = "\n".join(
             f"- {l.source_id[:8]}... {l.relation_type} {l.target_id[:8]}... (strength: {l.strength:.2f})"
             for l in links[:10]
@@ -98,11 +103,12 @@ class InsightAgent(DikiwiAgent):
             memory_context = f"\n\nProcessing context:\n{ctx.memory.to_prompt_context()[-1500:]}\n\n"
 
         messages = DikiwiPromptRegistry.insight(
-            nodes_desc=nodes_desc,
+            nodes_desc=(network_context + "\n\n" + nodes_desc).strip(),
             links_desc=links_desc,
             memory_context=memory_context.strip(),
         )
-        stage_key = f"insight:{hashlib.sha1((nodes_desc + links_desc).encode('utf-8')).hexdigest()[:8]}"
+        stage_seed = nodes_desc + links_desc + network_context[:500]
+        stage_key = f"insight:{hashlib.sha1(stage_seed.encode('utf-8')).hexdigest()[:8]}"
 
         try:
             result = await multi_agent_json(
@@ -138,14 +144,13 @@ class InsightAgent(DikiwiAgent):
             insights: list[Insight] = []
             for p in insights_data:
                 if isinstance(p, dict) and p.get("description"):
+                    related_nodes = self._resolve_related_nodes(p, node_label_map)
                     insights.append(
                         Insight(
                             id=f"insight_{uuid.uuid4().hex[:8]}",
                             insight_type=p.get("type", "pattern"),
                             description=p.get("description", ""),
-                            related_nodes=[
-                                f"node_{i}" for i in p.get("related_node_indices", [])
-                            ],
+                            related_nodes=related_nodes,
                             confidence=p.get("confidence", 0.5),
                         )
                     )
@@ -153,6 +158,28 @@ class InsightAgent(DikiwiAgent):
         except Exception as exc:
             logger.debug("[DIKIWI] Pattern detection failed: %s", exc)
             return []
+
+    @staticmethod
+    def _resolve_related_nodes(raw: dict, node_label_map: dict[str, str]) -> list[str]:
+        labels = raw.get("related_evidence", [])
+        resolved: list[str] = []
+        if isinstance(labels, list):
+            for label in labels:
+                node_id = node_label_map.get(str(label).strip())
+                if node_id:
+                    resolved.append(node_id)
+        if resolved:
+            return resolved
+
+        # Backward compatibility for older test doubles or cached prompts.
+        indices = raw.get("related_node_indices", [])
+        if isinstance(indices, list):
+            for idx in indices:
+                if isinstance(idx, int):
+                    node_id = node_label_map.get(f"E{idx + 1}")
+                    if node_id:
+                        resolved.append(node_id)
+        return resolved
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

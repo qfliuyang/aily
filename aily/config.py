@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     llm_min_interval_seconds: float = 3.0
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
+    dikiwi_network_min_nodes: int = 3
+    dikiwi_network_trigger_score: float = 4.0
+    dikiwi_network_max_candidate_nodes: int = 18
     kimi_api_key: str = ""
     kimi_model: str = "kimi-k2.5"
     zhipu_api_key: str = ""

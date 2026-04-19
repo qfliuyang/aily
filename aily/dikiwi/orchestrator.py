@@ -285,7 +285,26 @@ class DikiwiOrchestrator:
             await self._schedule_menxia_review(pipeline, event)
 
         elif event.stage == DikiwiStage.KNOWLEDGE:
-            # Knowledge complete → auto-promote to INSIGHT (no gate)
+            ctx = self._agent_contexts.get(pipeline.pipeline_id)
+            knowledge_result = None
+            if ctx:
+                knowledge_result = next(
+                    (
+                        result
+                        for result in reversed(ctx.stage_results)
+                        if getattr(result.stage, "name", None) == DikiwiStage.KNOWLEDGE.name
+                    ),
+                    None,
+                )
+            if knowledge_result and not knowledge_result.data.get("network_synthesis_triggered", True):
+                logger.info(
+                    "[DIKIWI] Pipeline %s stopped at KNOWLEDGE: %s",
+                    pipeline.pipeline_id,
+                    knowledge_result.data.get("graph_change_assessment", "network threshold not reached"),
+                )
+                await self._complete_pipeline(pipeline)
+                return
+            # Knowledge complete with a synthesis-grade subgraph -> INSIGHT
             await self._promote_to_stage(pipeline, DikiwiStage.INSIGHT)
 
         elif event.stage == DikiwiStage.INSIGHT:

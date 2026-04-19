@@ -184,6 +184,18 @@ class InformationAgent(DikiwiAgent):
     async def _store_node_metadata(self, node: InformationNode, ctx: AgentContext) -> None:
         if not ctx.graph_db:
             return
+        source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
+        try:
+            await ctx.graph_db.set_node_property(node.id, "data_point_id", node.data_point_id)
+            await ctx.graph_db.set_node_property(node.id, "concept", node.concept)
+            await ctx.graph_db.set_node_property(node.id, "tags", node.tags)
+            await ctx.graph_db.set_node_property(node.id, "info_type", node.info_type)
+            await ctx.graph_db.set_node_property(node.id, "domain", node.domain)
+            await ctx.graph_db.set_node_property(node.id, "source_paths", source_paths)
+            await ctx.graph_db.set_node_property(node.id, "pipeline_id", ctx.pipeline_id)
+        except AttributeError:
+            # Older tests use AsyncMock GraphDBs without property APIs.
+            pass
         for tag in node.tags:
             await ctx.graph_db.insert_node(
                 node_id=f"tag_{tag}", node_type="tag", label=tag, source="dikiwi"
@@ -196,6 +208,15 @@ class InformationAgent(DikiwiAgent):
                 source="dikiwi",
                 weight=1.0,
             )
+        try:
+            raw_log_id = str(source_paths[0]) if source_paths else ctx.pipeline_id
+            await ctx.graph_db.insert_occurrence(
+                occurrence_id=f"occ_{uuid.uuid4().hex[:8]}",
+                node_id=node.id,
+                raw_log_id=raw_log_id,
+            )
+        except AttributeError:
+            pass
 
     @staticmethod
     def _clean_domain(domain: str) -> str:

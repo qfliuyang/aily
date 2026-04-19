@@ -51,6 +51,22 @@ async def test_get_edges_within_hours(graph_db):
 
 
 @pytest.mark.asyncio
+async def test_get_neighbors_and_edges_for_nodes(graph_db):
+    await graph_db.insert_node("info_1", "information", "Timing constraints are brittle", "doc-a")
+    await graph_db.insert_node("info_2", "information", "CDC checks need constraints", "doc-b")
+    await graph_db.insert_node("tag_timing", "tag", "timing", "dikiwi")
+    await graph_db.insert_edge("e1", "info_1", "tag_timing", "has_tag", 1.0, "dikiwi")
+    await graph_db.insert_edge("e2", "info_2", "tag_timing", "has_tag", 1.0, "dikiwi")
+    await graph_db.insert_edge("e3", "info_1", "info_2", "enables", 0.8, "dikiwi_network")
+
+    incoming = await graph_db.get_neighbors("tag_timing", relation_type="has_tag", direction="in")
+    assert {node["id"] for node in incoming} == {"info_1", "info_2"}
+
+    edges = await graph_db.get_edges_for_nodes(["info_1", "info_2", "tag_timing"])
+    assert {edge["id"] for edge in edges} == {"e1", "e2", "e3"}
+
+
+@pytest.mark.asyncio
 async def test_get_top_nodes_by_edge_count(graph_db):
     await graph_db.insert_node("n1", "topic", "AI", "test")
     await graph_db.insert_node("n2", "topic", "Chips", "test")

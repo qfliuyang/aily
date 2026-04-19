@@ -10,6 +10,7 @@ import uuid
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.llm_tools import chat_json
+from aily.dikiwi.network_synthesis import NetworkSynthesisSelector, candidate_nodes_to_information
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.sessions.dikiwi_mind import DikiwiStage, InformationNode, KnowledgeLink, StageResult
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class KnowledgeAgent(DikiwiAgent):
-    """Stage 3: Map relationships between information nodes in one batched LLM call."""
+    """Stage 3: Map relationships from graph-selected information subgraphs."""
 
     async def execute(self, ctx: AgentContext) -> StageResult:
         start = time.time()
@@ -31,24 +32,38 @@ class KnowledgeAgent(DikiwiAgent):
             info_note_ids: dict[str, str] = info_result.data.get("info_note_ids", {})
             source = ctx.drop.source
 
-            links: list[KnowledgeLink] = []
+            local_links: list[KnowledgeLink] = []
             if len(info_nodes) >= 2:
-                links = await self._llm_map_relations_batch(info_nodes, source, ctx)
+                local_links = await self._llm_map_relations_batch(info_nodes, source, ctx)
 
                 if ctx.graph_db:
-                    for link in links:
-                        await ctx.graph_db.insert_edge(
-                            edge_id=f"link_{uuid.uuid4().hex[:8]}",
-                            source_node_id=link.source_id,
-                            target_node_id=link.target_id,
-                            relation_type=link.relation_type,
-                            weight=link.strength,
-                            source="dikiwi",
-                        )
+                    await self._persist_links(local_links, ctx, source="dikiwi_local")
+
+            assessment = await NetworkSynthesisSelector().assess(ctx, info_nodes, local_links)
+            network_nodes = candidate_nodes_to_information(assessment.candidates)
+            links: list[KnowledgeLink] = local_links
+
+            if assessment.triggered and len(network_nodes) >= 2:
+                network_context = assessment.to_prompt_context()
+                if ctx.memory:
+                    ctx.memory.add_system(
+                        "Network synthesis trigger:\n"
+                        f"{assessment.reason}\n\n{network_context[:3000]}"
+                    )
+                network_links = await self._llm_map_relations_batch(
+                    network_nodes,
+                    "dikiwi_network",
+                    ctx,
+                    subgraph_context=network_context,
+                )
+                links = network_links
+                if network_links:
+                    if ctx.graph_db:
+                        await self._persist_links(network_links, ctx, source="dikiwi_network")
 
             # Write knowledge notes
             knowledge_note_ids: list[str] = []
-            node_map = {n.id: n for n in info_nodes}
+            node_map = {n.id: n for n in [*info_nodes, *network_nodes]}
             if ctx.dikiwi_obsidian_writer and links:
                 for link in links:
                     src_node = node_map.get(link.source_id)
@@ -83,7 +98,14 @@ class KnowledgeAgent(DikiwiAgent):
                 processing_time_ms=processing_time,
                 data={
                     "links": links,
+                    "local_links": local_links,
                     "knowledge_note_ids": knowledge_note_ids,
+                    "network_synthesis_triggered": assessment.triggered,
+                    "graph_change_assessment": assessment,
+                    "graph_change_score": assessment.score,
+                    "subgraph_candidates": assessment.candidates,
+                    "network_nodes": network_nodes,
+                    "network_context": assessment.to_prompt_context(),
                 },
             )
 
@@ -100,13 +122,16 @@ class KnowledgeAgent(DikiwiAgent):
         info_nodes: list[InformationNode],
         source: str,
         ctx: AgentContext,
+        subgraph_context: str = "",
     ) -> list[KnowledgeLink]:
         memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=1200)
         messages = DikiwiPromptRegistry.relation_batch(
             nodes=info_nodes,
             memory_context=memory_context,
+            subgraph_context=subgraph_context,
         )
-        stage_key = f"knowledge:batch:{hashlib.sha1(source.encode('utf-8')).hexdigest()[:8]}"
+        stage_hash = hashlib.sha1((source + subgraph_context[:200]).encode("utf-8")).hexdigest()[:8]
+        stage_key = f"knowledge:batch:{stage_hash}"
         id_map = {i: n.id for i, n in enumerate(info_nodes)}
 
         try:
@@ -152,6 +177,24 @@ class KnowledgeAgent(DikiwiAgent):
         except Exception as exc:
             logger.warning("[DIKIWI] Batch relation mapping failed: %s", exc)
             return []
+
+    async def _persist_links(
+        self,
+        links: list[KnowledgeLink],
+        ctx: AgentContext,
+        source: str,
+    ) -> None:
+        if not ctx.graph_db:
+            return
+        for link in links:
+            await ctx.graph_db.insert_edge(
+                edge_id=f"link_{uuid.uuid4().hex[:8]}",
+                source_node_id=link.source_id,
+                target_node_id=link.target_id,
+                relation_type=link.relation_type,
+                weight=link.strength,
+                source=source,
+            )
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

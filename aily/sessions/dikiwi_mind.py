@@ -490,8 +490,13 @@ class DikiwiMind:
 
             # MAC loop: Reactor (multiply) <-> Residual (accumulate)
             residual_result: StageResult | None = None
+            has_impact = any(
+                sr.stage == DikiwiStage.IMPACT and sr.success
+                for sr in ctx.stage_results
+            )
             if (
                 pipeline.status == "completed"
+                and has_impact
                 and self.reactor_scheduler
                 and SETTINGS.minds.mac_enabled
             ):
@@ -551,7 +556,7 @@ class DikiwiMind:
                         logger.warning("[DIKIWI] Reactor residual screening failed: %s", exc)
 
             # Fallback: run Residual alone if no Reactor scheduler or MAC disabled
-            if pipeline.status == "completed" and not residual_result:
+            if pipeline.status == "completed" and has_impact and not residual_result:
                 try:
                     residual_result = await ResidualAgent().execute(ctx)
                     ctx.stage_results.append(residual_result)

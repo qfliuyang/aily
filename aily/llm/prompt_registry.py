@@ -101,7 +101,7 @@ Prefer depth over breadth."""
       "description": "Clear description of the non-obvious claim revealed by the short path. Show how 2-4 connected nodes reveal something neither node shows alone.",
       "why_nonobvious": "Why this conclusion is more than a restatement of the nodes",
       "confidence": 0.0-1.0,
-      "related_node_indices": [0, 1, 2],
+      "related_evidence": ["E1", "E4", "E7"],
       "significance": "Why traversing this small path matters",
       "design_implication": "What decision, design move, or research move this insight suggests"
     }
@@ -439,6 +439,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
         *,
         nodes: list,
         memory_context: str = "",
+        subgraph_context: str = "",
     ) -> list[dict[str, str]]:
         nodes_desc = "\n".join(
             f"{i}. [{getattr(n, 'domain', 'general')}] {getattr(n, 'content', '')[:200]}"
@@ -459,9 +460,11 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
                 "Do not create edges between near-duplicate nodes or restatements of the same mechanism.",
                 "Skip trivial or superficial connections.",
                 "If the only connection is shared topic, return no edge.",
+                "Prefer cross-source links that explain why the selected subgraph is changing.",
                 "Return at most 15 high-quality links.",
             ),
             context_sections=(
+                ("Selected Graph Subgraph", subgraph_context or "No graph-change subgraph supplied."),
                 ("Numbered Information Nodes", nodes_desc),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),
@@ -483,6 +486,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             output_contract=cls.INSIGHT_CONTRACT,
             guidelines=(
                 "An insight is a traversable short path across linked information, not a restatement of a single node or edge.",
+                "Use the selected graph subgraph as the object of thought; do not summarize one source file.",
                 "Show how connected nodes produce emergent understanding.",
                 "Name the insight clearly and explain why it is non-obvious.",
                 "Prefer insights that would justify a permanent note.",

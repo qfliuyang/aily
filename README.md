@@ -4,11 +4,13 @@ Aily is a three-mind knowledge system built around a continuous DIKIWI pipeline,
 
 The current production path is:
 
-1. `DikiwiMind` processes input through `DATA -> INFORMATION -> KNOWLEDGE -> INSIGHT -> WISDOM -> IMPACT`
-2. `ReactorScheduler` generates proposal candidates from multiple innovation frameworks
-3. `ResidualAgent` synthesizes those candidates into structured `residual_proposal` nodes
-4. `EntrepreneurScheduler` runs GStack review on business-ready proposals
-5. `Guru` writes a deep appendix for every reviewed proposal, including denied ones
+1. `DikiwiMind` ingests input through `DATA -> INFORMATION`
+2. `KNOWLEDGE` scans the GraphDB network for synthesis-grade changed subgraphs
+3. If the graph-change threshold is reached, the run continues through `INSIGHT -> WISDOM -> IMPACT`
+4. `ReactorScheduler` generates proposal candidates from multiple innovation frameworks after IMPACT
+5. `ResidualAgent` synthesizes those candidates into structured `residual_proposal` nodes
+6. `EntrepreneurScheduler` runs GStack review on business-ready proposals
+7. `Guru` writes a deep appendix for every reviewed proposal, including denied ones
 
 ## Main Components
 
@@ -16,8 +18,9 @@ The current production path is:
 
 - Entry point: `aily/sessions/dikiwi_mind.py`
 - Runtime coordination: `aily/dikiwi/orchestrator.py`
+- Graph-trigger selector: `aily/dikiwi/network_synthesis.py`
 - Stage agents: `aily/dikiwi/agents/`
-- Purpose: turn raw input into structured notes and graph-linked knowledge
+- Purpose: turn raw input into tagged information nodes, then generate higher-order knowledge only from meaningful graph neighborhoods
 
 ### Reactor
 
