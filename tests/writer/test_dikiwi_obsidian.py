@@ -37,6 +37,9 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
     assert '/Users/luzi/aily_chaos/slide1.png' in content
     assert '"knowledge"' in content
     assert "[[Focus Switching Multiplies Coordination Cost]]" in content
+    assert "## Concept Neighborhood" in content
+    assert "[[99-MOC/attention|#attention]]" in content
+    assert "[[99-MOC/productivity|#productivity]]" in content
 
     index = index_path.read_text(encoding="utf-8")
     assert 'WHERE note_type = "permanent"' in index
@@ -46,4 +49,5 @@ async def test_write_zettel_creates_obsidian_management_notes(tmp_path):
     moc = moc_path.read_text(encoding="utf-8")
     assert "# attention" in moc
     assert 'contains(tags, "attention")' in moc
+    assert 'contains(semantic_topics, "attention")' in moc
     assert 'FROM "/"' in moc

@@ -41,6 +41,32 @@ def test_chaos_base_name_prefers_metadata():
     assert chaos_base_name(extracted, Path("/tmp/source.pdf")) == "stable_name"
 
 
+def test_chaos_base_name_ignores_filename_default():
+    extracted = ExtractedContentMultimodal(
+        text="# Semantic Constraint Verification\n\nBody",
+        title="Semantic Constraint Verification",
+        source_type="pdf",
+        source_path=Path("/tmp/source.pdf"),
+        metadata={"chaos_base_name": "source"},
+        processing_timestamp=datetime(2026, 4, 18, 12, 0, 0),
+    )
+
+    assert chaos_base_name(extracted, Path("/tmp/source.pdf")) == "Semantic_Constraint_Verification"
+
+
+def test_chaos_base_name_skips_generic_title():
+    extracted = ExtractedContentMultimodal(
+        text="# Agenda\n\n# IR Driven Placement Optimization\n\nBody",
+        title="Agenda",
+        source_type="pdf",
+        source_path=Path("/tmp/b1-04-redhawk-pres-user.pdf"),
+        metadata={},
+        processing_timestamp=datetime(2026, 4, 18, 12, 0, 0),
+    )
+
+    assert chaos_base_name(extracted, Path("/tmp/b1-04-redhawk-pres-user.pdf")) == "IR_Driven_Placement_Optimization"
+
+
 def test_batch_runner_writes_transcript_with_stable_name(tmp_path: Path):
     source = tmp_path / "source"
     source.mkdir()

@@ -210,7 +210,6 @@ class MinerUProcessor(ContentProcessor):
         result.metadata = {
             **result.metadata,
             "source_paths": [str(file_path)],
-            "chaos_base_name": file_path.stem,
             "mineru_backend": self.config.mineru.backend,
             "mineru_method": self.config.mineru.method,
             "mineru_model_source": self.config.mineru.model_source,

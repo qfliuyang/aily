@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,20 @@ from aily.sessions.dikiwi_mind import DikiwiMind
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
 logger = logging.getLogger(__name__)
+
+
+GENERIC_CHAOS_TITLES = {
+    "agenda",
+    "contents",
+    "content",
+    "introduction",
+    "overview",
+    "summary",
+    "synopsys",
+    "synopsys new thinking",
+    "synopsys xin si",
+    "untitled",
+}
 
 
 @dataclass
@@ -176,23 +192,24 @@ class MinerUChaosBatchRunner:
     async def process_file(self, source_path: Path) -> MinerUBatchItemResult:
         """Parse one file, write 00-Chaos artifacts, then feed DIKIWI."""
         source_path = source_path.resolve()
-        base_name = source_path.stem
-        transcript_target = self.vault_path / "00-Chaos" / f"{base_name}.md"
-        if self.skip_existing and transcript_target.exists():
-            return MinerUBatchItemResult(
-                source_path=str(source_path),
-                title=base_name,
-                status="skipped",
-                transcript_path=str(transcript_target),
-            )
 
         extracted = await self.processor.process(source_path)
         if extracted is None:
             return MinerUBatchItemResult(
                 source_path=str(source_path),
-                title=base_name,
+                title=source_path.stem,
                 status="failed",
                 error="mineru_extraction_failed",
+            )
+
+        base_name = chaos_base_name(extracted, source_path)
+        transcript_target = self.vault_path / "00-Chaos" / f"{base_name}.md"
+        if self.skip_existing and transcript_target.exists():
+            return MinerUBatchItemResult(
+                source_path=str(source_path),
+                title=extracted.title or base_name,
+                status="skipped",
+                transcript_path=str(transcript_target),
             )
 
         saved = self._persist_extraction(extracted, source_path)
@@ -254,6 +271,7 @@ class MinerUChaosBatchRunner:
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
         base_name = chaos_base_name(extracted, source_path)
+        display_title = _semantic_title(extracted, source_path) or extracted.title or base_name
         transcript_path = transcript_dir / f"{base_name}.md"
         counter = 1
         while transcript_path.exists() and not self.skip_existing:
@@ -261,13 +279,15 @@ class MinerUChaosBatchRunner:
             counter += 1
 
         lines = [
-            f"# {extracted.title or base_name}",
+            f"# {display_title}",
             "",
             f"**Original File:** {source_path.name}",
             "",
             f"**Type:** {extracted.source_type}",
             "",
             f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            f"**Semantic Node:** {base_name}",
             "",
             "---",
             "",
@@ -283,9 +303,10 @@ class MinerUChaosBatchRunner:
         base_name: str,
     ) -> str:
         """Render the audit markdown persisted under .processed."""
+        display_title = _semantic_title(extracted, source_path) or extracted.title or base_name
         return "\n".join(
             [
-                f"# {extracted.title or base_name}",
+                f"# {display_title}",
                 "",
                 f"**Source:** {source_path.name}",
                 "",
@@ -301,10 +322,87 @@ class MinerUChaosBatchRunner:
 
 
 def chaos_base_name(extracted: ExtractedContentMultimodal, source_path: Path) -> str:
-    """Choose a stable filename for persisted Chaos artifacts."""
+    """Choose a stable semantic filename for persisted Chaos artifacts.
+
+    Obsidian graph nodes should represent content identity, not the source
+    storage name. Explicit external overrides are honored unless they are just
+    the source filename stem, which older MinerU wiring used as a default.
+    """
     base_name = extracted.metadata.get("chaos_base_name")
-    if isinstance(base_name, str) and base_name.strip():
-        return base_name.strip()
-    if extracted.source_type == "mineru_markdown" and source_path.name.lower() == "full.md":
-        return source_path.parent.name
-    return source_path.stem
+    if isinstance(base_name, str) and base_name.strip() and base_name.strip() != source_path.stem:
+        return _slugify_semantic_name(base_name)
+
+    semantic_title = _semantic_title(extracted, source_path)
+    if semantic_title:
+        return _slugify_semantic_name(semantic_title)
+
+    meaningful_tags = [_normalize_title(tag) for tag in extracted.tags if _is_meaningful_title(tag, source_path)]
+    if meaningful_tags:
+        tag_name = " ".join(meaningful_tags[:4])
+        return _slugify_semantic_name(tag_name)
+
+    content_hash = hashlib.sha1(extracted.get_full_text()[:4000].encode("utf-8")).hexdigest()[:8]
+    return f"untitled-content-{content_hash}"
+
+
+def _semantic_title(extracted: ExtractedContentMultimodal, source_path: Path) -> str:
+    """Return the best content-derived title available without using filename."""
+    candidates: list[str] = []
+    if extracted.title:
+        candidates.append(extracted.title)
+
+    text = extracted.get_full_text()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            candidates.append(stripped.lstrip("#").strip())
+            continue
+        if len(stripped) > 12:
+            candidates.append(stripped)
+        if len(candidates) >= 12:
+            break
+
+    for candidate in candidates:
+        if _is_meaningful_title(candidate, source_path):
+            return _normalize_title(candidate)
+    return ""
+
+
+def _normalize_title(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value)).strip(" -:_")
+    return cleaned[:120].rsplit(" ", 1)[0] if len(cleaned) > 120 and " " in cleaned[:120] else cleaned[:120]
+
+
+def _is_meaningful_title(value: str, source_path: Path) -> bool:
+    cleaned = _normalize_title(value)
+    if not cleaned:
+        return False
+    if cleaned == source_path.stem or cleaned == source_path.name:
+        return False
+    lowered = re.sub(r"[^a-z0-9 ]+", " ", cleaned.lower())
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    if lowered in GENERIC_CHAOS_TITLES:
+        return False
+    if lowered.endswith((".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx")):
+        return False
+    words = [word for word in re.split(r"\s+", lowered) if word]
+    if len(words) < 2:
+        return False
+    if len(cleaned) < 12:
+        return False
+    if sum(ch.isalpha() for ch in cleaned) < 8:
+        return False
+    return True
+
+
+def _slugify_semantic_name(value: str, max_length: int = 120) -> str:
+    cleaned = re.sub(r"[^\w\s-]", "", value, flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_")
+    if not cleaned:
+        return "untitled-content"
+    slug = cleaned.replace(" ", "_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug[:max_length].rstrip("_") or "untitled-content"

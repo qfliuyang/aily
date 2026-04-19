@@ -58,6 +58,28 @@ def _slugify_title(title: str, max_length: int = 150) -> str:
     return cleaned[:max_length].rstrip("_")
 
 
+GRAPH_BOOKKEEPING_TAGS = {
+    "action",
+    "data",
+    "dikiwi",
+    "fact",
+    "general",
+    "impact",
+    "information",
+    "input",
+    "insight",
+    "knowledge",
+    "medium",
+    "mineru",
+    "pattern",
+    "pending",
+    "principle",
+    "proposal",
+    "unclassified",
+    "wisdom",
+}
+
+
 class DikiwiObsidianWriter:
     """Full-featured Obsidian integration for DIKIWI knowledge system.
 
@@ -188,9 +210,9 @@ tags:
 
 ## Notes
 ```dataview
-TABLE date_created, source
+TABLE dikiwi_level, type, date_created, source
 FROM "/"
-WHERE note_type = "permanent" AND contains(tags, "{tag}")
+WHERE contains(tags, "{tag}") OR contains(semantic_topics, "{tag}")
 SORT date_created DESC
 ```
 """
@@ -208,6 +230,43 @@ SORT date_created DESC
                 continue
             map_path = self.zettelkasten_maps_root / f"{self._sanitize_map_name(tag)}.md"
             map_path.write_text(self._build_topic_map(tag), encoding="utf-8")
+
+    @staticmethod
+    def _meaningful_graph_tags(tags: list[str] | tuple[str, ...] | None) -> list[str]:
+        """Filter tags down to content concepts worth making graph edges for."""
+        meaningful: list[str] = []
+        seen: set[str] = set()
+        for raw in tags or []:
+            tag = str(raw).strip().strip("#")
+            if not tag:
+                continue
+            normalized = tag.lower().replace(" ", "_")
+            if normalized in GRAPH_BOOKKEEPING_TAGS:
+                continue
+            if normalized.startswith(("type:", "has:")):
+                continue
+            if "/" in tag or "\\" in tag or tag.endswith((".pdf", ".ppt", ".pptx", ".doc", ".docx")):
+                continue
+            if len(tag) < 3:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            meaningful.append(tag)
+        return meaningful
+
+    def _concept_neighborhood_section(self, tags: list[str] | tuple[str, ...] | None) -> tuple[list[str], str]:
+        """Build explicit topic links so the graph clusters by concepts, not files."""
+        semantic_tags = self._meaningful_graph_tags(tags)
+        if not semantic_tags:
+            return [], ""
+
+        self._update_topic_maps(semantic_tags)
+        lines = ["## Concept Neighborhood", ""]
+        for tag in semantic_tags[:8]:
+            moc_name = self._sanitize_map_name(tag)
+            lines.append(f"- [[99-MOC/{moc_name}|#{tag}]]")
+        return semantic_tags, "\n".join(lines)
 
     def _ensure_structure(self) -> None:
         """Create full DIKIWI folder structure with MOC files."""
@@ -817,6 +876,12 @@ LIMIT 10
         if source_paths:
             fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
 
+        semantic_tags, concept_section = self._concept_neighborhood_section(fm.get("tags", []))
+        if semantic_tags:
+            fm["semantic_topics"] = semantic_tags
+            if "## Concept Neighborhood" not in body:
+                body = f"{body.rstrip()}\n\n{concept_section}"
+
         heading = h1_title if h1_title else title
         note_content = f"{self._format_frontmatter(fm)}\n\n# {heading}\n\n{body}\n"
         path.write_text(note_content, encoding="utf-8")
@@ -1040,6 +1105,10 @@ LIMIT 10
         if source_paths:
             fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
 
+        semantic_tags, concept_section = self._concept_neighborhood_section(deduped_tags)
+        if semantic_tags:
+            fm["semantic_topics"] = semantic_tags
+
         body_lines: list[str] = [
             self._format_frontmatter(fm), "",
             f"# {title}", "",
@@ -1060,6 +1129,8 @@ LIMIT 10
                     body_lines.append(f"- {self._make_link(matched_id, link)}")
                 # Skip unresolved conceptual links to avoid broken wiki-links in the vault
             body_lines.append("")
+        if concept_section:
+            body_lines += [concept_section, ""]
         if grounded_in:
             body_lines += ["## Grounded In", "", *[f"- {g}" for g in grounded_in], ""]
         body_lines += ["---", "", f"*Source: {source}*"]
@@ -1659,6 +1730,9 @@ LIMIT 10
         deduped_tags = _dedupe_preserve_order([dikiwi_level, *tags])
         if deduped_tags:
             frontmatter["tags"] = deduped_tags
+        semantic_tags, concept_section = self._concept_neighborhood_section(deduped_tags)
+        if semantic_tags:
+            frontmatter["semantic_topics"] = semantic_tags
 
         # Build content
         content_lines = [
@@ -1680,6 +1754,9 @@ LIMIT 10
                 content_lines.append(f"- [[{link}]]")
             content_lines.append("")
 
+        if concept_section:
+            content_lines.extend([concept_section, ""])
+
         content_lines.extend([
             f"---",
             f"",
@@ -1687,7 +1764,6 @@ LIMIT 10
         ])
 
         note_path.write_text("\n".join(content_lines), encoding="utf-8")
-        self._update_topic_maps(tags)
         logger.info("Wrote Zettelkasten note: %s (%d words)", filename, len(content.split()))
 
         return note_path
