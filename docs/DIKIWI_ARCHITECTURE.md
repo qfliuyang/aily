@@ -8,7 +8,10 @@ The continuous DIKIWI entrypoint is:
 
 - `aily/sessions/dikiwi_mind.py`
 
-That file builds an `AgentContext`, instantiates `DikiwiOrchestrator`, registers the stage agents, and runs the pipeline.
+That file builds `AgentContext` objects, instantiates the stage agents, and runs DIKIWI in either:
+
+- single-drop mode through `DikiwiOrchestrator`
+- stage-latched batch mode through `DikiwiMind.process_inputs_batched()`
 
 ## Stage Runtime
 
@@ -30,11 +33,14 @@ The semantic boundary is important:
 - `DATA` is raw scattered datapoints from the incoming file/message.
 - `INFORMATION` is classified, tagged datapoints written into GraphDB and the vault.
 - `KNOWLEDGE` and later stages operate on selected graph neighborhoods, not only on the current file text.
+- In batch ingestion, `00-Chaos` is filled first, then all new drops advance through `DATA`, then all surviving drops through `INFORMATION`, then `KNOWLEDGE`.
 
 `KNOWLEDGE` now scans the GraphDB node structure through `aily/dikiwi/network_synthesis.py`. It selects meaningful subgraphs around changed information nodes, shared tags, existing information neighbors, edge density, and source diversity. If the graph-change score does not cross the configured threshold, or the changed nodes do not attach to an existing information neighborhood, the pipeline stops at `KNOWLEDGE` and does not generate `INSIGHT`, `WISDOM`, `IMPACT`, or post-impact proposals.
 
 The relevant settings are:
 
+- `DIKIWI_INCREMENTAL_TRIGGER_RATIO` / `dikiwi_incremental_trigger_ratio`
+- `DIKIWI_BATCH_STAGE_CONCURRENCY` / `dikiwi_batch_stage_concurrency`
 - `DIKIWI_NETWORK_MIN_NODES` / `dikiwi_network_min_nodes`
 - `DIKIWI_NETWORK_TRIGGER_SCORE` / `dikiwi_network_trigger_score`
 - `DIKIWI_NETWORK_MAX_CANDIDATE_NODES` / `dikiwi_network_max_candidate_nodes`
@@ -124,16 +130,34 @@ GraphDB currently stores:
 - business scores
 - review metadata
 
+## Batch And Incremental Runtime
+
+DIKIWI now has an explicit stage-latched batch path for chaos ingestion.
+
+1. MinerU or other chaos extractors write semantic source notes into `00-Chaos`.
+2. After the batch is extracted, `DikiwiMind.process_inputs_batched()` advances the whole batch through `DATA`, then `INFORMATION`, then `KNOWLEDGE`.
+3. This keeps later stages latched to earlier stages instead of letting one PDF race ahead to `INSIGHT` while others are still entering `DATA`.
+4. Within a stage, item execution can still be parallelized. The stage boundary is the barrier.
+
+The active chaos batch path lives in:
+
+- `aily/chaos/mineru_batch.py`
+- `aily/chaos/dikiwi_bridge.py`
+- `aily/sessions/dikiwi_mind.py`
+
 ## Graph-Triggered Generation
 
 DIKIWI uses a lightweight dynamic-graph trigger rather than blindly running the whole six-stage ladder for every file.
 
 1. `INFORMATION` writes every classified datapoint as an information node and connects it to tag nodes.
-2. `KNOWLEDGE` loads neighborhoods around changed nodes, especially shared tag neighborhoods.
-3. The network selector scores candidate subgraphs by changed-node count, existing information neighbors, source diversity, edge count, and local relation strength.
-4. If the best candidate crosses threshold, `KNOWLEDGE` asks the LLM to map durable relations across the selected graph subgraph.
-5. `INSIGHT` receives the selected subgraph and generated relations, then looks for 2-4 node paths that reveal non-obvious mechanisms, tensions, gaps, or opportunities.
-6. `WISDOM` and `IMPACT` use those network-grounded insights, not the raw file, as their grounding.
+2. After the batch finishes `INFORMATION`, Aily measures graph growth as the ratio of new information nodes to the existing information graph.
+3. If the incremental growth ratio is below threshold, the batch stops after `KNOWLEDGE`.
+4. If the batch crosses threshold, `KNOWLEDGE` loads neighborhoods around changed nodes, especially shared tag neighborhoods.
+5. The network selector scores candidate subgraphs by changed-node count, existing information neighbors, source diversity, edge count, and local relation strength.
+6. Only contexts whose `KNOWLEDGE` stage found a synthesis-grade subgraph continue into `INSIGHT`, `WISDOM`, and `IMPACT`.
+7. `INSIGHT` uses short information-to-information paths.
+8. `WISDOM` uses longer graph paths that connect more distant information nodes.
+9. `IMPACT` uses high-connectivity information center nodes.
 
 Research basis:
 

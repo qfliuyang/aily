@@ -20,9 +20,10 @@ The current active pieces are:
 file arrives
   -> chaos queue processor
   -> content extraction
+  -> write 00-Chaos / .processed batch artifacts
   -> optional tagging
   -> RainDrop conversion
-  -> DikiwiMind.process_input()
+  -> DikiwiMind.process_inputs_batched()
   -> numbered Obsidian vault + GraphDB
 ```
 
@@ -36,7 +37,14 @@ file arrives
 ### DIKIWI Bridge
 
 - file: `aily/chaos/dikiwi_bridge.py`
-- role: convert extracted chaos content into a `RainDrop` and hand it to `DikiwiMind`
+- role: convert extracted chaos content into `RainDrop` objects and hand them to `DikiwiMind`
+
+The bridge now has both:
+
+- single-item `process_extracted_content()`
+- batch `process_extracted_content_batch()`
+
+The batch path is the active semantics for folder ingestion.
 
 ### Processors
 
@@ -69,6 +77,13 @@ The bridge hands extracted content into:
 
 Once that handoff happens, the same DIKIWI, Reactor, Residual, Entrepreneur, and Guru path applies.
 
+For batch folder ingestion the runtime is explicitly two-phase:
+
+1. Extract files in parallel and persist semantic `00-Chaos` notes.
+2. Run DIKIWI as a stage-latched batch over the new drops.
+
+That means later DIKIWI stages wait for the earlier stage to finish across the batch.
+
 ## Output Layout
 
 The current vault layout is the numbered DIKIWI structure:
@@ -84,6 +99,8 @@ The current vault layout is the numbered DIKIWI structure:
 - `08-Entrepreneurship`
 
 Chaos-derived inputs enter at `00-Chaos` and then promote through the later directories.
+
+Higher-order promotion is incremental. The information graph grows with new nodes, and batch DIKIWI only continues past `KNOWLEDGE` when information-node growth crosses the configured incremental threshold and the changed graph region forms meaningful neighborhoods.
 
 ## What This Document Does Not Claim
 

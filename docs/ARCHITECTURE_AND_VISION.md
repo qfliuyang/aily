@@ -50,10 +50,19 @@ Responsibilities:
 - keep per-pipeline memory and LLM budget
 - write structured vault outputs
 - populate GraphDB with nodes and relationships
+- support both single-drop pipelines and stage-latched batch pipelines
 
 Stage flow:
 
 `DATA -> INFORMATION -> KNOWLEDGE -> INSIGHT -> WISDOM -> IMPACT`
+
+For chaos batches, the active behavior is:
+
+1. fill `00-Chaos`
+2. advance the whole batch to `01-Data`
+3. advance the whole batch to `02-Information`
+4. advance the whole batch to `03-Knowledge`
+5. continue only affected contexts into higher-order stages when graph growth crosses threshold
 
 ### 2. Reactor
 
@@ -131,6 +140,7 @@ Current vault layout:
 GraphDB is used for:
 
 - DIKIWI nodes and edges
+- incremental information-graph growth measurement
 - residual proposal persistence
 - innovation and business scoring
 - review outcomes and related metadata
@@ -150,6 +160,7 @@ The current system is moving toward:
 
 - stronger proposal schemas
 - stricter prompt contracts
+- stage-latched corpus growth rather than document-local higher-order synthesis
 - better proposal scoring based on buyer, workflow, and proof artifacts
 - business review that fits deep-tech and EDA rather than consumer-startup defaults
 - durable review artifacts in `08-Entrepreneurship`

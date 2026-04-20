@@ -550,7 +550,7 @@ async def scenario_full_pipeline(
         clean_generated_vault(vault_path)
 
     with llm_trace_logging(llm_log):
-        runtime = await build_runtime(vault_path=vault_path, enable_business=True)
+        runtime = await build_runtime(vault_path=vault_path, enable_business=False)
         try:
             pdf_dir = CHAOS_FOLDER / "pdf"
             pdf_files = sorted(pdf_dir.glob("*.pdf"))
@@ -562,29 +562,47 @@ async def scenario_full_pipeline(
             processor = PDFProcessor(config=ChaosConfig())
             doc_results = []
             total_start = time.monotonic()
+            transcript_dir = vault_path / "00-Chaos"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            semaphore = asyncio.Semaphore(max(1, SETTINGS.mineru_batch_extract_concurrency))
+
+            async def _extract_one(pdf_path: Path) -> tuple[Path, ExtractedContentMultimodal | None, float]:
+                doc_start = time.monotonic()
+                async with semaphore:
+                    extracted = await processor.process(pdf_path)
+                if extracted:
+                    transcript_path = transcript_dir / f"{pdf_path.stem}.md"
+                    transcript_path.write_text(
+                        f"# {extracted.title or pdf_path.stem}\n\n{extracted.get_full_text()}",
+                        encoding="utf-8",
+                    )
+                return pdf_path, extracted, round(time.monotonic() - doc_start, 2)
+
+            extracted_results = await asyncio.gather(*[_extract_one(pdf_path) for pdf_path in pdf_files])
+            extracted_contents: list[ExtractedContentMultimodal] = []
+            extraction_elapsed: dict[str, float] = {}
+            for pdf_path, extracted, elapsed in extracted_results:
+                extraction_elapsed[pdf_path.name] = elapsed
+                if extracted is None:
+                    doc_results.append({"pdf": pdf_path.name, "error": "extraction_failed", "elapsed": elapsed})
+                else:
+                    extracted_contents.append(extracted)
+
+            bridge_batch = await runtime.bridge.process_extracted_content_batch(extracted_contents)
+            bridge_by_source = {
+                Path(item["source_path"]).name: item
+                for item in bridge_batch.get("results", [])
+                if item.get("source_path")
+            }
 
             for pdf_path in pdf_files:
-                doc_start = time.monotonic()
-                extracted = await processor.process(pdf_path)
-                if not extracted:
-                    doc_results.append({"pdf": pdf_path.name, "error": "extraction_failed"})
+                if any(item.get("pdf") == pdf_path.name for item in doc_results):
                     continue
-
-                transcript_dir = vault_path / "00-Chaos"
-                transcript_dir.mkdir(parents=True, exist_ok=True)
-                transcript_path = transcript_dir / f"{pdf_path.stem}.md"
-                transcript_path.write_text(
-                    f"# {extracted.title or pdf_path.stem}\n\n{extracted.get_full_text()}",
-                    encoding="utf-8",
-                )
-
-                bridge_result = await runtime.bridge.process_extracted_content(extracted)
-                usage = runtime.llm_client.get_usage_stats()
                 doc_results.append({
                     "pdf": pdf_path.name,
-                    "bridge_result": bridge_result,
-                    "elapsed": round(time.monotonic() - doc_start, 2),
-                    "tokens": usage,
+                    "bridge_result": bridge_by_source.get(pdf_path.name, {"error": "missing_batch_result"}),
+                    "elapsed": extraction_elapsed.get(pdf_path.name, 0.0),
+                    "tokens": runtime.llm_client.get_usage_stats(),
                 })
 
             reactor_elapsed = None
@@ -606,6 +624,9 @@ async def scenario_full_pipeline(
                 "documents": len(doc_results),
                 "results": doc_results,
                 "elapsed_seconds": total_elapsed,
+                "batch_incremental_ratio": bridge_batch.get("incremental_ratio"),
+                "batch_incremental_threshold": bridge_batch.get("incremental_threshold"),
+                "batch_higher_order_triggered": bridge_batch.get("higher_order_triggered"),
                 "reactor_elapsed_seconds": reactor_elapsed,
                 "entrepreneur_elapsed_seconds": entrepreneur_elapsed,
                 "reactor_proposals": len(proposals),
@@ -706,4 +727,3 @@ async def scenario_army() -> dict[str, Any]:
         "insights": len(result.synthesized_insights),
         "top_insights": [insight.title for insight in result.top_insights[:3]],
     }
-

@@ -105,7 +105,11 @@ class NetworkSynthesisSelector:
         current_links: list[KnowledgeLink],
     ) -> GraphChangeAssessment:
         if not ctx.graph_db:
-            return self._fallback_local_assessment(current_nodes, current_links, "GraphDB unavailable")
+            return GraphChangeAssessment(
+                False,
+                "GraphDB unavailable; higher DIKIWI synthesis requires a persisted information graph",
+                metrics={"requires_persisted_graph": True},
+            )
 
         if not current_nodes:
             return GraphChangeAssessment(False, "No current information nodes to attach to graph")
@@ -202,64 +206,6 @@ class NetworkSynthesisSelector:
                 "min_nodes": self.min_nodes,
                 "requires_existing_information_neighbor": True,
             },
-        )
-
-    def _fallback_local_assessment(
-        self,
-        current_nodes: list[InformationNode],
-        current_links: list[KnowledgeLink],
-        reason: str,
-    ) -> GraphChangeAssessment:
-        if len(current_nodes) < self.min_nodes:
-            return GraphChangeAssessment(False, reason)
-
-        node_dicts = [
-            {
-                "id": node.id,
-                "type": "information",
-                "label": node.content,
-                "source": "current_drop",
-                "properties": {
-                    "tags": node.tags,
-                    "domain": node.domain,
-                    "concept": node.concept,
-                },
-            }
-            for node in current_nodes[: self.max_candidate_nodes]
-        ]
-        edge_dicts = [
-            {
-                "id": f"local_{idx}",
-                "source_node_id": link.source_id,
-                "target_node_id": link.target_id,
-                "relation_type": link.relation_type,
-                "weight": link.strength,
-                "source": "current_drop",
-            }
-            for idx, link in enumerate(current_links)
-        ]
-        score = len(current_nodes) + sum(link.strength for link in current_links)
-        candidate = self._build_candidate(
-            anchor_id="current_drop",
-            anchor_label="current drop local subgraph",
-            anchor_type="local",
-            nodes=node_dicts,
-            edges=edge_dicts,
-            changed_node_ids={node.id for node in current_nodes},
-            current_links=current_links,
-        )
-        candidate.score = score
-        candidate.reason = f"{reason}; using current-drop bootstrap subgraph"
-        return GraphChangeAssessment(
-            triggered=score >= self.trigger_score,
-            reason=(
-                "Bootstrap local subgraph crossed synthesis threshold"
-                if score >= self.trigger_score
-                else f"{reason}; local score {score:.2f} below threshold {self.trigger_score:.2f}"
-            ),
-            score=score,
-            candidates=[candidate],
-            metrics={"fallback": True, "trigger_score": self.trigger_score},
         )
 
     def _build_candidate(

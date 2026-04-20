@@ -10,6 +10,7 @@ import uuid
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.llm_tools import multi_agent_json
+from aily.dikiwi.network_synthesis import SubgraphCandidate
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.sessions.dikiwi_mind import DikiwiStage, InformationNode, Insight, StageResult, ZettelkastenNote
 
@@ -31,15 +32,24 @@ class WisdomAgent(DikiwiAgent):
 
             insights: list[Insight] = insight_result.data.get("insights", [])
             insight_note_ids: list[str] = insight_result.data.get("insight_note_ids", [])
+            candidates: list[SubgraphCandidate] = insight_result.data.get("subgraph_candidates", [])
             info_nodes: list[InformationNode] = []
             if knowledge_result:
                 info_nodes = knowledge_result.data.get("network_nodes", [])
-            if not info_nodes:
-                info_nodes = info_result.data.get("information_nodes", [])
 
             zettels: list[ZettelkastenNote] = []
-            if info_nodes:
-                zettels = await self._llm_synthesize_wisdom(insights, info_nodes, ctx)
+            long_path_context = self._long_path_context(candidates)
+            if insights and info_nodes and long_path_context:
+                zettels = await self._llm_synthesize_wisdom(
+                    insights,
+                    info_nodes,
+                    ctx,
+                    long_path_context,
+                )
+                provenance = self._graph_provenance(candidates, "long_information_paths")
+                for zettel in zettels:
+                    setattr(zettel, "source", "dikiwi_graph")
+                    setattr(zettel, "graph_provenance", provenance)
 
             # Build title -> dikiwi_id map so Related links resolve exactly
             title_map: dict[str, str] = {}
@@ -60,11 +70,10 @@ class WisdomAgent(DikiwiAgent):
             # Write wisdom notes
             wisdom_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer and zettels:
-                source_paths = ctx.drop.metadata.get("source_paths", [])
                 for zettel in zettels:
                     try:
                         wid = await ctx.dikiwi_obsidian_writer.write_wisdom_note(
-                            zettel, insight_note_ids, ctx.drop, source_paths, link_map=title_map
+                            zettel, insight_note_ids, ctx.drop, None, link_map=title_map
                         )
                         wisdom_note_ids.append(wid)
                         logger.info(
@@ -108,6 +117,7 @@ class WisdomAgent(DikiwiAgent):
         insights: list[Insight],
         info_nodes: list[InformationNode],
         ctx: AgentContext,
+        long_path_context: str = "",
     ) -> list[ZettelkastenNote]:
         insights_desc = "\n".join(
             f"- [{i.insight_type}] {i.description[:200]}"
@@ -117,14 +127,17 @@ class WisdomAgent(DikiwiAgent):
             f"- [{n.domain}] {n.content[:220]}"
             for n in info_nodes[:20]
         )
+        knowledge_context = (
+            "\n\n".join(part for part in (long_path_context, info_samples) if part)
+        ).strip()
 
         memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=1500)
         messages = DikiwiPromptRegistry.wisdom(
             insights_desc=insights_desc,
-            info_samples=info_samples,
+            info_samples=knowledge_context,
             memory_context=memory_context,
         )
-        stage_key = f"wisdom:{hashlib.sha1((insights_desc + info_samples).encode('utf-8')).hexdigest()[:8]}"
+        stage_key = f"wisdom:{hashlib.sha1((insights_desc + knowledge_context).encode('utf-8')).hexdigest()[:8]}"
 
         try:
             result = await multi_agent_json(
@@ -146,7 +159,8 @@ class WisdomAgent(DikiwiAgent):
                     ),
                     context_sections=(
                         ("Insights", insights_desc or "No insights available."),
-                        ("Knowledge Base", info_samples or "No information samples available."),
+                        ("Graph Long Paths", long_path_context or "No long-path context available."),
+                        ("Knowledge Base", knowledge_context or "No information samples available."),
                     ),
                 ),
                 temperature=0.5,
@@ -172,6 +186,73 @@ class WisdomAgent(DikiwiAgent):
         except Exception as exc:
             logger.debug("[DIKIWI] Wisdom synthesis failed: %s", exc)
             return []
+
+    @staticmethod
+    def _long_path_context(candidates: list[SubgraphCandidate]) -> str:
+        """Describe longer candidate paths connecting distant information nodes."""
+        paths: list[str] = []
+        for candidate in candidates:
+            labels = {str(node.get("id")): str(node.get("label", "")) for node in candidate.nodes}
+            info_ids = [str(node.get("id")) for node in candidate.nodes if node.get("type") == "information"]
+            adjacency: dict[str, list[tuple[str, dict]]] = {node_id: [] for node_id in info_ids}
+            for edge in candidate.edges:
+                src = str(edge.get("source_node_id", ""))
+                tgt = str(edge.get("target_node_id", ""))
+                if src in adjacency and tgt in adjacency:
+                    adjacency[src].append((tgt, edge))
+                    adjacency[tgt].append((src, edge))
+            for start in info_ids[:4]:
+                seen = {start}
+                path_nodes = [start]
+                path_edges: list[dict] = []
+                current = start
+                for _ in range(3):
+                    next_items = [(n, e) for n, e in adjacency.get(current, []) if n not in seen]
+                    if not next_items:
+                        break
+                    next_node, edge = sorted(
+                        next_items,
+                        key=lambda item: float(item[1].get("weight", 0.0)),
+                        reverse=True,
+                    )[0]
+                    seen.add(next_node)
+                    path_nodes.append(next_node)
+                    path_edges.append(edge)
+                    current = next_node
+                if len(path_nodes) >= 3:
+                    rendered = []
+                    for idx, node_id in enumerate(path_nodes):
+                        rendered.append(labels.get(node_id, node_id)[:120])
+                        if idx < len(path_edges):
+                            rendered.append(f"--{path_edges[idx].get('relation_type')}-->")
+                    paths.append(f"- {candidate.id}: " + " ".join(rendered))
+        if not paths:
+            return ""
+        return "\n".join(["Long-path candidates for Wisdom synthesis:", *paths])
+
+    @staticmethod
+    def _graph_provenance(candidates: list[SubgraphCandidate], mode: str) -> dict:
+        return {
+            "mode": mode,
+            "subgraph_ids": [candidate.id for candidate in candidates],
+            "anchors": list(dict.fromkeys(candidate.anchor_label for candidate in candidates)),
+            "node_ids": list(
+                dict.fromkeys(
+                    str(node.get("id"))
+                    for candidate in candidates
+                    for node in candidate.nodes
+                    if node.get("id")
+                )
+            ),
+            "edge_ids": list(
+                dict.fromkeys(
+                    str(edge.get("id"))
+                    for candidate in candidates
+                    for edge in candidate.edges
+                    if edge.get("id")
+                )
+            ),
+        }
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

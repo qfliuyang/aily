@@ -261,6 +261,18 @@ class DikiwiResult:
         return None
 
 
+@dataclass
+class DikiwiBatchRun:
+    """Batch DIKIWI execution metadata for stage-latched runs."""
+
+    results: list[DikiwiResult] = field(default_factory=list)
+    pre_information_nodes: int = 0
+    post_information_nodes: int = 0
+    incremental_ratio: float = 0.0
+    incremental_threshold: float = 0.05
+    higher_order_triggered: bool = False
+
+
 class DikiwiMind:
     """DIKIWI filtration pipeline using pure LLM-based processing.
 
@@ -349,6 +361,82 @@ class DikiwiMind:
             if stored_memory is memory:
                 return self._llm_budgets.get(pipeline_id)
         return None
+
+    @staticmethod
+    def _make_pipeline_id(drop: "RainDrop", prefix: str = "dikiwi") -> str:
+        return f"{prefix}_{drop.id[:12]}_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+
+    def _build_agent_registry(self) -> dict[DikiwiStage, Any]:
+        from aily.dikiwi.agents.data_agent import DataAgent
+        from aily.dikiwi.agents.impact_agent import ImpactAgent
+        from aily.dikiwi.agents.information_agent import InformationAgent
+        from aily.dikiwi.agents.insight_agent import InsightAgent
+        from aily.dikiwi.agents.knowledge_agent import KnowledgeAgent
+        from aily.dikiwi.agents.wisdom_agent import WisdomAgent
+
+        return {
+            DikiwiStage.DATA: DataAgent(),
+            DikiwiStage.INFORMATION: InformationAgent(),
+            DikiwiStage.KNOWLEDGE: KnowledgeAgent(),
+            DikiwiStage.INSIGHT: InsightAgent(),
+            DikiwiStage.WISDOM: WisdomAgent(),
+            DikiwiStage.IMPACT: ImpactAgent(),
+        }
+
+    def _build_agent_context(self, drop: "RainDrop", pipeline_id: str):
+        from aily.dikiwi.agents.context import AgentContext
+
+        memory = self._get_or_create_memory(pipeline_id)
+        self._llm_budgets[pipeline_id] = LLMUsageBudget(
+            max_calls=SETTINGS.dikiwi_max_llm_calls_per_source,
+            stage_round_limit=SETTINGS.dikiwi_stage_round_limit,
+        )
+        return AgentContext(
+            pipeline_id=pipeline_id,
+            correlation_id=pipeline_id,
+            drop=drop,
+            memory=memory,
+            budget=self._llm_budgets[pipeline_id],
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+
+    async def _execute_batch_stage(
+        self,
+        contexts: list[Any],
+        *,
+        stage: DikiwiStage,
+        agent: Any,
+        max_concurrency: int,
+    ) -> list[Any]:
+        semaphore = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def _run(ctx: Any) -> StageResult:
+            async with semaphore:
+                try:
+                    result = await agent.execute(ctx)
+                except Exception as exc:
+                    logger.exception("[DIKIWI] Batch stage %s failed for %s", stage.name, ctx.pipeline_id)
+                    result = StageResult(
+                        stage=stage,
+                        success=False,
+                        error_message=str(exc),
+                    )
+                ctx.stage_results.append(result)
+                return result
+
+        return await asyncio.gather(*[_run(ctx) for ctx in contexts])
+
+    @staticmethod
+    def _incremental_growth_ratio(pre_count: int, post_count: int) -> float:
+        if post_count <= pre_count:
+            return 0.0
+        if pre_count <= 0:
+            return 1.0
+        return max(0.0, (post_count - pre_count) / pre_count)
 
     async def _chat_json(
         self,
@@ -650,6 +738,165 @@ class DikiwiMind:
             self._llm_budgets.pop(pipeline_id, None)
 
         return result
+
+    async def process_inputs_batched(
+        self,
+        drops: list["RainDrop"],
+        *,
+        incremental_threshold: float | None = None,
+        max_concurrency: int | None = None,
+    ) -> DikiwiBatchRun:
+        """Run DIKIWI as a stage-latched batch over many drops.
+
+        00-Chaos is assumed to be ready already. This method advances the whole
+        batch through DATA, then INFORMATION, then KNOWLEDGE. Higher-order
+        synthesis only runs for affected contexts when graph growth crosses the
+        incremental threshold.
+        """
+        if not drops:
+            return DikiwiBatchRun()
+
+        if not self.enabled:
+            return DikiwiBatchRun(
+                results=[
+                    DikiwiResult(
+                        input_id=drop.id,
+                        stage_results=[
+                            StageResult(
+                                stage=DikiwiStage.DATA,
+                                success=False,
+                                error_message="DIKIWI Mind disabled",
+                            )
+                        ],
+                    )
+                    for drop in drops
+                ]
+            )
+
+        threshold = (
+            incremental_threshold
+            if incremental_threshold is not None
+            else SETTINGS.dikiwi_incremental_trigger_ratio
+        )
+        concurrency = (
+            max_concurrency
+            if max_concurrency is not None
+            else SETTINGS.dikiwi_batch_stage_concurrency
+        )
+
+        self._total_inputs += len(drops)
+        pre_information_nodes = 0
+        if self.graph_db is not None:
+            try:
+                pre_information_nodes = await self.graph_db.count_nodes_by_type("information")
+            except Exception as exc:
+                logger.warning("[DIKIWI] Failed to count pre-batch information nodes: %s", exc)
+
+        agents = self._build_agent_registry()
+        contexts: list[Any] = []
+        results: list[DikiwiResult] = []
+
+        for drop in drops:
+            pipeline_id = self._make_pipeline_id(drop, prefix="dikiwi_batch")
+            ctx = self._build_agent_context(drop, pipeline_id)
+            contexts.append(ctx)
+            results.append(DikiwiResult(input_id=drop.id, pipeline_id=pipeline_id))
+
+        try:
+            stage_contexts = list(contexts)
+            await self._execute_batch_stage(
+                stage_contexts,
+                stage=DikiwiStage.DATA,
+                agent=agents[DikiwiStage.DATA],
+                max_concurrency=concurrency,
+            )
+            stage_contexts = [
+                ctx for ctx in stage_contexts
+                if ctx.stage_results and ctx.stage_results[-1].stage == DikiwiStage.DATA and ctx.stage_results[-1].success
+            ]
+
+            await self._execute_batch_stage(
+                stage_contexts,
+                stage=DikiwiStage.INFORMATION,
+                agent=agents[DikiwiStage.INFORMATION],
+                max_concurrency=concurrency,
+            )
+            stage_contexts = [
+                ctx for ctx in stage_contexts
+                if ctx.stage_results and ctx.stage_results[-1].stage == DikiwiStage.INFORMATION and ctx.stage_results[-1].success
+            ]
+
+            await self._execute_batch_stage(
+                stage_contexts,
+                stage=DikiwiStage.KNOWLEDGE,
+                agent=agents[DikiwiStage.KNOWLEDGE],
+                max_concurrency=concurrency,
+            )
+
+            post_information_nodes = pre_information_nodes
+            if self.graph_db is not None:
+                try:
+                    post_information_nodes = await self.graph_db.count_nodes_by_type("information")
+                except Exception as exc:
+                    logger.warning("[DIKIWI] Failed to count post-batch information nodes: %s", exc)
+
+            incremental_ratio = self._incremental_growth_ratio(
+                pre_information_nodes,
+                post_information_nodes,
+            )
+            higher_order_triggered = incremental_ratio >= threshold
+
+            if not higher_order_triggered:
+                logger.info(
+                    "[DIKIWI] Batch stopped after KNOWLEDGE: information graph growth %.2f%% below threshold %.2f%%",
+                    incremental_ratio * 100.0,
+                    threshold * 100.0,
+                )
+
+            higher_order_contexts = [
+                ctx
+                for ctx in stage_contexts
+                if ctx.stage_results
+                and ctx.stage_results[-1].stage == DikiwiStage.KNOWLEDGE
+                and ctx.stage_results[-1].success
+                and higher_order_triggered
+                and ctx.stage_results[-1].data.get("network_synthesis_triggered", False)
+            ]
+
+            if higher_order_contexts:
+                for stage in (DikiwiStage.INSIGHT, DikiwiStage.WISDOM, DikiwiStage.IMPACT):
+                    await self._execute_batch_stage(
+                        higher_order_contexts,
+                        stage=stage,
+                        agent=agents[stage],
+                        max_concurrency=concurrency,
+                    )
+                    higher_order_contexts = [
+                        ctx for ctx in higher_order_contexts
+                        if ctx.stage_results and ctx.stage_results[-1].stage == stage and ctx.stage_results[-1].success
+                    ]
+
+            completed_at = datetime.now(timezone.utc)
+            for result, ctx in zip(results, contexts):
+                result.stage_results = list(ctx.stage_results)
+                result.completed_at = completed_at
+                if result.stage_results and all(stage_result.success for stage_result in result.stage_results):
+                    self._successful_pipelines += 1
+                else:
+                    self._failed_pipelines += 1
+
+            return DikiwiBatchRun(
+                results=results,
+                pre_information_nodes=pre_information_nodes,
+                post_information_nodes=post_information_nodes,
+                incremental_ratio=incremental_ratio,
+                incremental_threshold=threshold,
+                higher_order_triggered=higher_order_triggered,
+            )
+        finally:
+            for ctx in contexts:
+                self._cleanup_memory(ctx.pipeline_id)
+                self._llm_budgets.pop(ctx.pipeline_id, None)
 
     _LONG_DOC_THRESHOLD = 5000   # chars: below this, single-pass extraction
     _CHUNK_SIZE = 4000            # chars per chunk for long documents

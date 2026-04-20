@@ -516,6 +516,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             output_contract=cls.WISDOM_CONTRACT,
             guidelines=(
                 "Do not produce a source summary masquerading as a note.",
+                "Use the supplied long-path graph context as the synthesis object; do not derive wisdom from a single source file.",
                 "Each note should defend one durable thesis, not blend multiple unrelated ideas.",
                 "Prefer atomic notes about one mechanism, one tradeoff, one workflow, or one decision rule.",
                 "Split long sources into multiple notes when they contain multiple mechanisms, claims, examples, workflows, constraints, tradeoffs, or definitions.",
@@ -554,7 +555,8 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
             objective="Identify the center that will explode as the next big thing. Convert the dense graph of wisdom into high-leverage, breakthrough actions.",
             output_contract=cls.IMPACT_CONTRACT,
             guidelines=(
-                "Base actions on the permanent notes, not on raw input.",
+                "Base actions on graph center nodes and permanent notes, not on raw input or one PDF.",
+                "Impact is a high-connectivity center node with innovation potential; do not invent impact from isolated notes.",
                 "Look for the single highest-leverage point where action could create explosive, compounding effects.",
                 "Prefer proposal seeds that name a user, buyer, workflow trigger, current workaround, and proof_of_value.",
                 "For semiconductor or EDA ideas, specify where the idea inserts into the flow.",

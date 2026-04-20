@@ -10,6 +10,7 @@ import pytest
 
 from aily.chaos.dikiwi_bridge import ChaosDikiwiBridge
 from aily.chaos.types import ExtractedContentMultimodal
+from aily.sessions.dikiwi_mind import DikiwiBatchRun, DikiwiResult, DikiwiStage, StageResult
 from scripts.run_chaos_daemon import ChaosDaemon
 
 
@@ -21,6 +22,27 @@ class FakeDikiwiMind:
             stage_results=[
                 SimpleNamespace(success=True, data={"zettels": ["z1", "z2"], "insights": ["i1"]}),
             ],
+        )
+
+    async def process_inputs_batched(self, drops):
+        return DikiwiBatchRun(
+            results=[
+                DikiwiResult(
+                    input_id=drop.id,
+                    pipeline_id=f"pipe_{index}",
+                    stage_results=[
+                        StageResult(
+                            stage=DikiwiStage.KNOWLEDGE,
+                            success=True,
+                            data={"zettels": ["z1", "z2"], "insights": ["i1"]},
+                        )
+                    ],
+                )
+                for index, drop in enumerate(drops, start=1)
+            ],
+            incremental_ratio=0.12,
+            incremental_threshold=0.05,
+            higher_order_triggered=True,
         )
 
 
@@ -49,6 +71,38 @@ async def test_bridge_batch_counts_zettels_created(tmp_path):
     assert result["processed"] == 1
     assert result["failed"] == 0
     assert result["zettels_created"] == 2
+    assert result["higher_order_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_bridge_processes_batch_in_stage_latched_mode():
+    content_a = ExtractedContentMultimodal(
+        text="First raw chaos",
+        title="Doc A",
+        source_type="text",
+        source_path=Path("/tmp/a.md"),
+        processing_timestamp=datetime(2026, 4, 12, 10, 0, 0),
+        processing_method="unit-test",
+    )
+    content_b = ExtractedContentMultimodal(
+        text="Second raw chaos",
+        title="Doc B",
+        source_type="text",
+        source_path=Path("/tmp/b.md"),
+        processing_timestamp=datetime(2026, 4, 12, 10, 5, 0),
+        processing_method="unit-test",
+    )
+
+    bridge = ChaosDikiwiBridge(dikiwi_mind=FakeDikiwiMind())
+    result = await bridge.process_extracted_content_batch([content_a, content_b])
+
+    assert result["processed"] == 2
+    assert result["failed"] == 0
+    assert result["zettels_created"] == 4
+    assert result["insights"] == 2
+    assert result["higher_order_triggered"] is True
+    assert len(result["results"]) == 2
+    assert result["results"][0]["source_path"] == "/tmp/a.md"
 
 
 @dataclass

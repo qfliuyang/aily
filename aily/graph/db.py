@@ -185,6 +185,13 @@ class GraphDB:
             for row in rows
         ]
 
+    async def count_nodes_by_type(self, node_type: str) -> int:
+        rows = await self._fetchall(
+            "SELECT COUNT(*) FROM nodes WHERE type = ?",
+            (node_type,),
+        )
+        return int(rows[0][0]) if rows else 0
+
     async def get_cooccurring_nodes(self, raw_log_id: str) -> list[dict]:
         rows = await self._fetchall(
             """

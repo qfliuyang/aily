@@ -64,6 +64,7 @@ class KnowledgeAgent(DikiwiAgent):
             # Write knowledge notes
             knowledge_note_ids: list[str] = []
             node_map = {n.id: n for n in [*info_nodes, *network_nodes]}
+            write_source = "dikiwi_network" if assessment.triggered else source
             if ctx.dikiwi_obsidian_writer and links:
                 for link in links:
                     src_node = node_map.get(link.source_id)
@@ -76,7 +77,7 @@ class KnowledgeAgent(DikiwiAgent):
                                 tgt_node,
                                 info_note_ids.get(link.source_id, ""),
                                 info_note_ids.get(link.target_id, ""),
-                                source,
+                                write_source,
                             )
                             knowledge_note_ids.append(kid)
                         except Exception as e:

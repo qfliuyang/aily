@@ -77,6 +77,75 @@ class ChaosDikiwiBridge:
             logger.exception(f"DIKIWI processing failed: {e}")
             return {"error": str(e), "drop_id": drop.id}
 
+    async def process_extracted_content_batch(
+        self,
+        contents: list[ExtractedContentMultimodal],
+    ) -> dict[str, Any]:
+        """Process extracted content as a stage-latched DIKIWI batch."""
+        if not contents:
+            return {
+                "results": [],
+                "processed": 0,
+                "failed": 0,
+                "zettels_created": 0,
+                "insights": 0,
+                "incremental_ratio": 0.0,
+                "higher_order_triggered": False,
+            }
+
+        drops = [self._create_raindrop(content) for content in contents]
+        batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
+
+        results: list[dict[str, Any]] = []
+        processed = 0
+        failed = 0
+        total_zettels = 0
+        total_insights = 0
+
+        for content, drop, pipeline_result in zip(contents, drops, batch_run.results):
+            final_stage = pipeline_result.final_stage_reached
+            final_stage_name = final_stage.name if final_stage else "UNKNOWN"
+
+            zettels_created = 0
+            insights_count = 0
+            stage_error = None
+            for sr in pipeline_result.stage_results:
+                if sr.success:
+                    zettels_created += len(sr.data.get("zettels", []))
+                    insights_count += len(sr.data.get("insights", []))
+                elif stage_error is None:
+                    stage_error = sr.error_message or f"{sr.stage.name} failed"
+
+            item = {
+                "drop_id": drop.id,
+                "pipeline_id": pipeline_result.pipeline_id,
+                "stage": final_stage_name,
+                "zettels_created": zettels_created,
+                "insights": insights_count,
+                "source_path": str(content.source_path) if content.source_path else None,
+            }
+            if stage_error:
+                item["error"] = stage_error
+                failed += 1
+            else:
+                processed += 1
+                total_zettels += zettels_created
+                total_insights += insights_count
+            results.append(item)
+
+        return {
+            "results": results,
+            "processed": processed,
+            "failed": failed,
+            "zettels_created": total_zettels,
+            "insights": total_insights,
+            "incremental_ratio": batch_run.incremental_ratio,
+            "incremental_threshold": batch_run.incremental_threshold,
+            "higher_order_triggered": batch_run.higher_order_triggered,
+            "pre_information_nodes": batch_run.pre_information_nodes,
+            "post_information_nodes": batch_run.post_information_nodes,
+        }
+
     def _create_raindrop(self, content: ExtractedContentMultimodal) -> RainDrop:
         """Convert Chaos content to RainDrop for DIKIWI processing."""
         # Build rich content from extracted data
@@ -158,9 +227,7 @@ class ChaosDikiwiBridge:
 
         logger.info(f"Processing {len(json_files)} items through DIKIWI...")
 
-        processed = 0
-        failed = 0
-        total_zettels = 0
+        contents: list[ExtractedContentMultimodal] = []
 
         for json_file in json_files:
             try:
@@ -179,24 +246,12 @@ class ChaosDikiwiBridge:
                     len(jobs),
                 )
 
-                for job in jobs:
-                    result = await self.process_extracted_content(job)
-                    if "error" not in result:
-                        processed += 1
-                        total_zettels += int(result.get("zettels_created", 0))
-                    else:
-                        failed += 1
+                contents.extend(jobs)
 
             except Exception as e:
                 logger.warning(f"Failed to process {json_file.name}: {e}")
-                failed += 1
-
-        stats = {
-            "processed": processed,
-            "failed": failed,
-            "zettels_created": total_zettels,
-            "source_folder": str(source_dir),
-        }
+        stats = await self.process_extracted_content_batch(contents)
+        stats["source_folder"] = str(source_dir)
 
         logger.info(f"Batch complete: {stats}")
         return stats

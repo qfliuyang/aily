@@ -10,6 +10,7 @@ import uuid
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.llm_tools import multi_agent_json
+from aily.dikiwi.network_synthesis import SubgraphCandidate
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.sessions.dikiwi_mind import DikiwiStage, InformationNode, Insight, KnowledgeLink, StageResult
 
@@ -28,25 +29,33 @@ class InsightAgent(DikiwiAgent):
             if not info_result or not knowledge_result:
                 raise RuntimeError("Prior stage results not found in context")
 
+            candidates: list[SubgraphCandidate] = knowledge_result.data.get("subgraph_candidates", [])
             info_nodes: list[InformationNode] = knowledge_result.data.get("network_nodes", [])
-            if not info_nodes:
-                info_nodes = info_result.data.get("information_nodes", [])
             links: list[KnowledgeLink] = knowledge_result.data.get("links", [])
             knowledge_note_ids: list[str] = knowledge_result.data.get("knowledge_note_ids", [])
             network_context: str = knowledge_result.data.get("network_context", "")
 
             insights: list[Insight] = []
-            if len(info_nodes) >= 2:
-                insights = await self._llm_detect_patterns(info_nodes, links, ctx, network_context)
+            if candidates and len(info_nodes) >= 2:
+                path_context = self._short_path_context(candidates)
+                if path_context:
+                    insights = await self._llm_detect_patterns(
+                        info_nodes,
+                        links,
+                        ctx,
+                        "\n\n".join(part for part in (network_context, path_context) if part).strip(),
+                    )
+                    provenance = self._graph_provenance(candidates, "short_information_paths")
+                    for insight_item in insights:
+                        setattr(insight_item, "graph_provenance", provenance)
 
             # Write insight notes
             insight_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer and insights:
-                source_paths = ctx.drop.metadata.get("source_paths", [])
                 for insight_item in insights:
                     try:
                         iid = await ctx.dikiwi_obsidian_writer.write_insight_note(
-                            insight_item, knowledge_note_ids, ctx.drop, source_paths
+                            insight_item, knowledge_note_ids, ctx.drop, None
                         )
                         insight_note_ids.append(iid)
                     except Exception as e:
@@ -70,6 +79,7 @@ class InsightAgent(DikiwiAgent):
                 data={
                     "insights": insights,
                     "insight_note_ids": insight_note_ids,
+                    "subgraph_candidates": candidates,
                 },
             )
 
@@ -129,6 +139,7 @@ class InsightAgent(DikiwiAgent):
                         "Keep the insight list compact but meaningful.",
                     ),
                     context_sections=(
+                        ("Graph Paths", network_context or "No graph path context available."),
                         ("Information Nodes", nodes_desc or "No nodes available."),
                         ("Relationships", links_desc or "No explicit relationships available."),
                     ),
@@ -180,6 +191,48 @@ class InsightAgent(DikiwiAgent):
                     if node_id:
                         resolved.append(node_id)
         return resolved
+
+    @staticmethod
+    def _short_path_context(candidates: list[SubgraphCandidate]) -> str:
+        """Describe graph paths; Insight must be derived from these paths."""
+        paths: list[str] = []
+        for candidate in candidates:
+            labels = {str(node.get("id")): str(node.get("label", "")) for node in candidate.nodes}
+            info_ids = {str(node.get("id")) for node in candidate.nodes if node.get("type") == "information"}
+            path_count = 0
+            for edge in candidate.edges:
+                src = str(edge.get("source_node_id", ""))
+                tgt = str(edge.get("target_node_id", ""))
+                if src not in info_ids or tgt not in info_ids:
+                    continue
+                path_count += 1
+                paths.append(
+                    f"- {candidate.id}: {labels.get(src, src)[:180]} "
+                    f"--{edge.get('relation_type')}({float(edge.get('weight', 0.0)):.2f})--> "
+                    f"{labels.get(tgt, tgt)[:180]}"
+                )
+                if path_count >= 10:
+                    break
+        if not paths:
+            return ""
+        return "\n".join(["Graph paths for Insight synthesis:", *paths])
+
+    @staticmethod
+    def _graph_provenance(candidates: list[SubgraphCandidate], mode: str) -> dict:
+        node_ids: list[str] = []
+        edge_ids: list[str] = []
+        anchors: list[str] = []
+        for candidate in candidates:
+            anchors.append(candidate.anchor_label)
+            node_ids.extend(str(node.get("id")) for node in candidate.nodes if node.get("id"))
+            edge_ids.extend(str(edge.get("id")) for edge in candidate.edges if edge.get("id"))
+        return {
+            "mode": mode,
+            "subgraph_ids": [candidate.id for candidate in candidates],
+            "anchors": list(dict.fromkeys(anchors)),
+            "node_ids": list(dict.fromkeys(node_ids)),
+            "edge_ids": list(dict.fromkeys(edge_ids)),
+        }
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

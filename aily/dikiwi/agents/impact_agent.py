@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from typing import Any
 
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.llm_tools import multi_agent_json
 from aily.llm.prompt_registry import DikiwiPromptRegistry
+
 from aily.sessions.dikiwi_mind import DikiwiStage, StageResult, ZettelkastenNote
 
 logger = logging.getLogger(__name__)
@@ -23,25 +25,29 @@ class ImpactAgent(DikiwiAgent):
 
         try:
             wisdom_result = self._find_stage_result(ctx, DikiwiStage.WISDOM)
-            insight_result = self._find_stage_result(ctx, DikiwiStage.INSIGHT)
             if not wisdom_result:
                 raise RuntimeError("WISDOM stage result not found in context")
 
             zettels: list[ZettelkastenNote] = wisdom_result.data.get("zettels", [])
             wisdom_note_ids: list[str] = wisdom_result.data.get("wisdom_note_ids", [])
-            insights: list = insight_result.data.get("insights", []) if insight_result else []
+            center_nodes = await self._graph_centers(ctx)
 
             impacts: list[dict] = []
-            if zettels:
-                impacts = await self._llm_generate_impacts(zettels, ctx)
+            if zettels and center_nodes:
+                impacts = await self._llm_generate_impacts(zettels, ctx, center_nodes)
+                provenance = {
+                    "mode": "high_connectivity_center_nodes",
+                    "center_node_ids": [str(node.get("id")) for node in center_nodes if node.get("id")],
+                }
+                for impact_item in impacts:
+                    impact_item["graph_provenance"] = provenance
 
             # Write impact notes
             if ctx.dikiwi_obsidian_writer and impacts:
-                source_paths = ctx.drop.metadata.get("source_paths", [])
                 for impact_item in impacts:
                     try:
                         await ctx.dikiwi_obsidian_writer.write_impact_note(
-                            impact_item, wisdom_note_ids, ctx.drop, source_paths
+                            impact_item, wisdom_note_ids, ctx.drop, None
                         )
                     except Exception as e:
                         logger.warning("[DIKIWI] Failed to write impact note: %s", e)
@@ -56,6 +62,7 @@ class ImpactAgent(DikiwiAgent):
                 processing_time_ms=processing_time,
                 data={
                     "impacts": impacts,
+                    "center_nodes": center_nodes,
                     "ready_for_scheduled_minds": len(impacts) > 0,
                 },
             )
@@ -72,17 +79,23 @@ class ImpactAgent(DikiwiAgent):
         self,
         zettels: list[ZettelkastenNote],
         ctx: AgentContext,
+        center_nodes: list[dict[str, Any]],
     ) -> list[dict]:
         zettels_desc = "\n".join(
             f"- {z.title[:100]}"
             for z in zettels[:3]
         )
+        center_context = "\n".join(
+            f"- C{i + 1}: [{node.get('type')}] {node.get('label')} "
+            f"(edges={node.get('edge_count')}, weight={float(node.get('total_weight', 0.0)):.2f})"
+            for i, node in enumerate(center_nodes[:10])
+        )
         memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=1200)
         messages = DikiwiPromptRegistry.impact(
-            zettels_desc=zettels_desc,
+            zettels_desc=("\n\n".join(part for part in (center_context, zettels_desc) if part)).strip(),
             memory_context=memory_context,
         )
-        stage_key = f"impact:{hashlib.sha1(zettels_desc.encode('utf-8')).hexdigest()[:8]}"
+        stage_key = f"impact:{hashlib.sha1((center_context + zettels_desc).encode('utf-8')).hexdigest()[:8]}"
 
         try:
             result = await multi_agent_json(
@@ -102,6 +115,7 @@ class ImpactAgent(DikiwiAgent):
                         "Prefer concrete next steps that compound the knowledge system.",
                     ),
                     context_sections=(
+                        ("Graph Center Nodes", center_context or "No graph center nodes available."),
                         ("Zettelkasten Principles", zettels_desc or "No zettels available."),
                     ),
                 ),
@@ -126,6 +140,17 @@ class ImpactAgent(DikiwiAgent):
             ]
         except Exception as exc:
             logger.debug("[DIKIWI] Impact generation failed: %s", exc)
+            return []
+
+    async def _graph_centers(self, ctx: AgentContext) -> list[dict[str, Any]]:
+        """Return central information nodes; Impact must be grounded in hubs."""
+        if not ctx.graph_db:
+            return []
+        try:
+            nodes = await ctx.graph_db.get_top_nodes_by_edge_count(limit=15)
+            return [node for node in nodes if node.get("type") == "information"]
+        except Exception as exc:
+            logger.warning("[DIKIWI] Failed to load graph centers for impact: %s", exc)
             return []
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:

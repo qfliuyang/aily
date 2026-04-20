@@ -18,14 +18,16 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 ## Active Flow
 
 1. Input enters through Feishu WebSocket, the chaos bridge, or queue-driven jobs.
-2. `DikiwiMind` always runs `DATA -> INFORMATION`, then `KNOWLEDGE` scans the GraphDB network for synthesis-grade changed subgraphs.
-3. If the graph-change threshold is reached and changed nodes attach to existing information neighbors, the run continues through `INSIGHT -> WISDOM -> IMPACT`; otherwise it stops at `KNOWLEDGE`.
-4. After IMPACT, `ReactorScheduler` generates proposal candidates from multiple frameworks.
-5. `ResidualAgent` synthesizes vault, graph, and reactor context into structured `residual_proposal` nodes.
-6. Reactor screens those residual proposals for innovation quality and promotes passing proposals to `pending_business`.
-7. `EntrepreneurScheduler` runs GStack business review on pending proposals.
-8. `Guru` writes an appendix for every reviewed proposal, including denied ones.
-9. Notes are written into the numbered Obsidian vault layout.
+2. For single inputs, `DikiwiMind` can still run one pipeline directly through `DATA -> INFORMATION -> KNOWLEDGE`.
+3. For batch chaos ingestion, `00-Chaos` is written first and then the whole batch advances stage-by-stage through `01-Data`, `02-Information`, and `03-Knowledge`.
+4. After batch `INFORMATION`, Aily measures incremental graph growth. If new information nodes add less than `5%` to the existing information graph, the batch stops after `KNOWLEDGE`.
+5. If the batch crosses the incremental threshold and a context has a synthesis-grade changed neighborhood, that context continues through `INSIGHT -> WISDOM -> IMPACT`.
+6. After IMPACT, `ReactorScheduler` generates proposal candidates from multiple frameworks.
+7. `ResidualAgent` synthesizes vault, graph, and reactor context into structured `residual_proposal` nodes.
+8. Reactor screens those residual proposals for innovation quality and promotes passing proposals to `pending_business`.
+9. `EntrepreneurScheduler` runs GStack business review on pending proposals.
+10. `Guru` writes an appendix for every reviewed proposal, including denied ones.
+11. Notes are written into the numbered Obsidian vault layout.
 
 ## Active Vault Layout
 
@@ -57,5 +59,6 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 ## Known Hybrid Areas
 
 - The Feishu WebSocket path routes directly into `DikiwiMind`.
+- The chaos batch path now uses `DikiwiMind.process_inputs_batched()` through `aily/chaos/dikiwi_bridge.py` and `aily/chaos/mineru_batch.py`.
 - Some older queue-based jobs still exist in `aily/main.py` for URL fetch, digest, voice, file, and session processing.
 - The passive capture scheduler exists, but its browser tab detection remains incomplete and should not be treated as the core ingestion path.

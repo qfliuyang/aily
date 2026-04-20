@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from aily.chaos.mineru_batch import MinerUChaosBatchRunner, chaos_base_name
 from aily.chaos.types import ExtractedContentMultimodal
@@ -92,3 +94,52 @@ def test_batch_runner_writes_transcript_with_stable_name(tmp_path: Path):
     content = transcript_path.read_text(encoding="utf-8")
     assert "# Imported Title" in content
     assert "**Original File:** paper.pdf" in content
+
+
+async def test_batch_runner_extracts_all_before_batched_dikiwi(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    file_a = source / "a.pdf"
+    file_b = source / "b.pdf"
+    file_a.write_text("x", encoding="utf-8")
+    file_b.write_text("x", encoding="utf-8")
+
+    runner = MinerUChaosBatchRunner(
+        source_folder=source,
+        vault_path=tmp_path / "vault",
+        processed_folder=tmp_path / ".processed",
+        run_dikiwi=True,
+    )
+
+    async def fake_process(path: Path):
+        return ExtractedContentMultimodal(
+            text=f"body for {path.name}",
+            title=path.stem.upper(),
+            source_type="pdf",
+            source_path=path,
+            metadata={},
+            processing_timestamp=datetime(2026, 4, 18, 12, 0, 0),
+        )
+
+    bridge = SimpleNamespace(
+        process_extracted_content_batch=AsyncMock(
+            return_value={
+                "results": [
+                    {"stage": "KNOWLEDGE", "zettels_created": 1, "insights": 0, "source_path": str(file_a)},
+                    {"stage": "INSIGHT", "zettels_created": 2, "insights": 1, "source_path": str(file_b)},
+                ]
+            }
+        )
+    )
+
+    runner.processor.process = AsyncMock(side_effect=fake_process)
+    runner._bridge = bridge
+    runner.initialize = AsyncMock(return_value=None)
+
+    summary = await runner.run(files=[file_a, file_b])
+
+    assert summary.processed == 2
+    assert summary.failed == 0
+    assert [item.stage for item in summary.results] == ["KNOWLEDGE", "INSIGHT"]
+    assert [item.zettels_created for item in summary.results] == [1, 2]
+    bridge.process_extracted_content_batch.assert_awaited_once()

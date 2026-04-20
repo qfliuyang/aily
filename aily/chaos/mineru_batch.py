@@ -203,16 +203,43 @@ class MinerUChaosBatchRunner:
         summary = MinerUBatchSummary(total=len(files))
         await self.initialize()
 
-        for index, path in enumerate(files, start=1):
-            logger.info("MinerU batch %s/%s: %s", index, len(files), path.name)
-            result = await self.process_file(path)
+        semaphore = asyncio.Semaphore(max(1, SETTINGS.mineru_batch_extract_concurrency))
+
+        async def _extract_one(index: int, path: Path) -> tuple[MinerUBatchItemResult, ExtractedContentMultimodal | None]:
+            async with semaphore:
+                logger.info("MinerU extract %s/%s: %s", index, len(files), path.name)
+                return await self._extract_file(path)
+
+        extracted_pairs = await asyncio.gather(
+            *[_extract_one(index, path) for index, path in enumerate(files, start=1)]
+        )
+
+        batch_inputs: list[tuple[MinerUBatchItemResult, ExtractedContentMultimodal]] = []
+        for result, extracted in extracted_pairs:
             summary.results.append(result)
             if result.status == "ok":
                 summary.processed += 1
+                if self.run_dikiwi and extracted is not None:
+                    batch_inputs.append((result, extracted))
             elif result.status == "skipped":
                 summary.skipped += 1
             else:
                 summary.failed += 1
+
+        if self.run_dikiwi and self._bridge is not None and batch_inputs:
+            bridge_results = await self._bridge.process_extracted_content_batch(
+                [extracted for _, extracted in batch_inputs]
+            )
+            for (batch_result, _), pipeline_result in zip(batch_inputs, bridge_results.get("results", [])):
+                if pipeline_result.get("error"):
+                    batch_result.status = "failed"
+                    batch_result.error = str(pipeline_result["error"])
+                    summary.processed -= 1
+                    summary.failed += 1
+                else:
+                    batch_result.stage = pipeline_result.get("stage")
+                    batch_result.zettels_created = int(pipeline_result.get("zettels_created", 0))
+                    batch_result.insights = int(pipeline_result.get("insights", 0))
 
         if self.run_business:
             await self.run_business_pass(summary)
@@ -260,48 +287,65 @@ class MinerUChaosBatchRunner:
 
     async def process_file(self, source_path: Path) -> MinerUBatchItemResult:
         """Parse one file, write 00-Chaos artifacts, then feed DIKIWI."""
+        result, extracted = await self._extract_file(source_path)
+        if result.status != "ok" or not self.run_dikiwi or self._bridge is None or extracted is None:
+            return result
+
+        pipeline_result = await self._bridge.process_extracted_content(extracted)
+        if "error" in pipeline_result:
+            result.status = "failed"
+            result.error = str(pipeline_result["error"])
+        else:
+            result.stage = pipeline_result.get("stage")
+            result.zettels_created = int(pipeline_result.get("zettels_created", 0))
+            result.insights = int(pipeline_result.get("insights", 0))
+
+        return result
+
+    async def _extract_file(
+        self,
+        source_path: Path,
+    ) -> tuple[MinerUBatchItemResult, ExtractedContentMultimodal | None]:
+        """Parse one file and persist 00-Chaos artifacts without advancing DIKIWI."""
         source_path = source_path.resolve()
 
         extracted = await self.processor.process(source_path)
         if extracted is None:
-            return MinerUBatchItemResult(
-                source_path=str(source_path),
-                title=source_path.stem,
-                status="failed",
-                error="mineru_extraction_failed",
+            return (
+                MinerUBatchItemResult(
+                    source_path=str(source_path),
+                    title=source_path.stem,
+                    status="failed",
+                    error="mineru_extraction_failed",
+                ),
+                None,
             )
 
         base_name = chaos_base_name(extracted, source_path)
         transcript_target = self.vault_path / "00-Chaos" / f"{base_name}.md"
         if self.skip_existing and transcript_target.exists():
-            return MinerUBatchItemResult(
-                source_path=str(source_path),
-                title=extracted.title or base_name,
-                status="skipped",
-                transcript_path=str(transcript_target),
+            return (
+                MinerUBatchItemResult(
+                    source_path=str(source_path),
+                    title=extracted.title or base_name,
+                    status="skipped",
+                    transcript_path=str(transcript_target),
+                ),
+                None,
             )
 
         saved = self._persist_extraction(extracted, source_path)
-        batch_result = MinerUBatchItemResult(
-            source_path=str(source_path),
-            title=extracted.title,
-            status="ok",
-            transcript_path=str(saved["transcript_path"]),
-            extraction_md_path=str(saved["markdown_path"]),
-            extraction_json_path=str(saved["json_path"]),
+        return (
+            MinerUBatchItemResult(
+                source_path=str(source_path),
+                title=extracted.title,
+                status="ok",
+                transcript_path=str(saved["transcript_path"]),
+                extraction_md_path=str(saved["markdown_path"]),
+                extraction_json_path=str(saved["json_path"]),
+            ),
+            extracted,
         )
-
-        if self.run_dikiwi and self._bridge is not None:
-            pipeline_result = await self._bridge.process_extracted_content(extracted)
-            if "error" in pipeline_result:
-                batch_result.status = "failed"
-                batch_result.error = str(pipeline_result["error"])
-            else:
-                batch_result.stage = pipeline_result.get("stage")
-                batch_result.zettels_created = int(pipeline_result.get("zettels_created", 0))
-                batch_result.insights = int(pipeline_result.get("insights", 0))
-
-        return batch_result
 
     def _persist_extraction(
         self,

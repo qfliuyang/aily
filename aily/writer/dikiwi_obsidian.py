@@ -1037,6 +1037,8 @@ LIMIT 10
         description = getattr(insight, "description", "")
         insight_type = getattr(insight, "insight_type", "pattern")
         confidence = float(getattr(insight, "confidence", 0.5))
+        graph_provenance = getattr(insight, "graph_provenance", None)
+        related_nodes = list(getattr(insight, "related_nodes", []))
 
         dikiwi_id = f"insight_{hashlib.sha1(insight_id.encode()).hexdigest()[:8]}"
         title = self._title_short(description, f"{insight_type.title()} Insight")
@@ -1049,6 +1051,10 @@ LIMIT 10
             "confidence": round(confidence, 2),
             "tags": _dedupe_preserve_order(["insight", insight_type]),
         }
+        if graph_provenance:
+            fm["graph_provenance"] = json.dumps(graph_provenance, ensure_ascii=False)
+        if related_nodes:
+            fm["related_information_nodes"] = related_nodes
         body = "\n".join([
             description,
             "",
@@ -1058,6 +1064,9 @@ LIMIT 10
             "",
             "## Source Knowledge",
             *(([f"- {k}" for k in from_knowledge]) or ["- *(no linked knowledge notes)*"]),
+            "",
+            "## Graph Provenance",
+            json.dumps(graph_provenance, ensure_ascii=False, indent=2) if graph_provenance else "*(no graph provenance recorded)*",
         ])
 
         return self._write_dikiwi_note("04-Insight", dikiwi_id, title, fm, body, source_paths)
@@ -1077,7 +1086,8 @@ LIMIT 10
         tags = list(getattr(zettel, "tags", []))
         links_to = list(getattr(zettel, "links_to", []))
         confidence = float(getattr(zettel, "confidence", 0.5))
-        source = getattr(drop, "source", "")
+        source = getattr(zettel, "source", getattr(drop, "source", ""))
+        graph_provenance = getattr(zettel, "graph_provenance", None)
 
         dikiwi_id = f"wisdom_{zettel_id_base}"
         deduped_tags = _dedupe_preserve_order(["wisdom"] + tags)
@@ -1106,6 +1116,8 @@ LIMIT 10
         }
         if source_paths:
             fm["source_paths"] = _dedupe_preserve_order([str(p) for p in source_paths])
+        if graph_provenance:
+            fm["graph_provenance"] = json.dumps(graph_provenance, ensure_ascii=False)
 
         semantic_tags, concept_section = self._concept_neighborhood_section(deduped_tags)
         if semantic_tags:
@@ -1135,6 +1147,15 @@ LIMIT 10
             body_lines += [concept_section, ""]
         if grounded_in:
             body_lines += ["## Grounded In", "", *[f"- {g}" for g in grounded_in], ""]
+        if graph_provenance:
+            body_lines += [
+                "## Graph Provenance",
+                "",
+                "```json",
+                json.dumps(graph_provenance, ensure_ascii=False, indent=2),
+                "```",
+                "",
+            ]
         body_lines += ["---", "", f"*Source: {source}*"]
 
         path.write_text("\n".join(body_lines), encoding="utf-8")
@@ -1154,6 +1175,7 @@ LIMIT 10
         priority = impact.get("priority", "medium")
         effort = impact.get("effort_estimate", "medium")
         rationale = impact.get("rationale", "")
+        graph_provenance = impact.get("graph_provenance")
 
         dikiwi_id = f"impact_{hashlib.sha1(description[:50].encode()).hexdigest()[:8]}"
         title = self._title_short(description, "Action Item")
@@ -1168,12 +1190,16 @@ LIMIT 10
             "status": "pending",
             "tags": _dedupe_preserve_order(["impact", impact_type, priority]),
         }
+        if graph_provenance:
+            fm["graph_provenance"] = json.dumps(graph_provenance, ensure_ascii=False)
         body = "\n".join([
             description, "",
             "## Rationale",
             rationale or "*(no rationale provided)*", "",
             "## Based On",
             *(([f"- {b}" for b in based_on]) or ["- *(no linked wisdom notes)*"]), "",
+            "## Graph Center",
+            json.dumps(graph_provenance, ensure_ascii=False, indent=2) if graph_provenance else "*(no graph center recorded)*", "",
             "## Task",
             f"- [ ] {description}",
         ])
