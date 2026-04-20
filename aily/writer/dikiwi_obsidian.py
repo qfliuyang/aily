@@ -60,10 +60,17 @@ def _slugify_title(title: str, max_length: int = 150) -> str:
 
 GRAPH_BOOKKEEPING_TAGS = {
     "action",
+    "applies_to",
+    "contradicts",
     "data",
+    "depends_on",
     "dikiwi",
+    "eda",
+    "enables",
+    "example_of",
     "fact",
     "general",
+    "has_tag",
     "impact",
     "information",
     "input",
@@ -71,10 +78,14 @@ GRAPH_BOOKKEEPING_TAGS = {
     "knowledge",
     "medium",
     "mineru",
+    "part_of",
     "pattern",
     "pending",
     "principle",
     "proposal",
+    "relates_to",
+    "supports",
+    "tradeoff_with",
     "unclassified",
     "wisdom",
 }
@@ -224,12 +235,9 @@ SORT date_created DESC
 
     def _update_topic_maps(self, tags: list[str]) -> None:
         """Keep simple topic MOCs available for Obsidian navigation."""
-        for tag in tags:
-            tag = str(tag).strip()
-            if not tag or tag == "zettel":
-                continue
-            map_path = self.zettelkasten_maps_root / f"{self._sanitize_map_name(tag)}.md"
-            map_path.write_text(self._build_topic_map(tag), encoding="utf-8")
+        # Do not auto-create one MOC per tag. High-volume automatic MOCs turn
+        # relation labels and broad categories into central graph nodes.
+        return
 
     @staticmethod
     def _meaningful_graph_tags(tags: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -256,17 +264,11 @@ SORT date_created DESC
         return meaningful
 
     def _concept_neighborhood_section(self, tags: list[str] | tuple[str, ...] | None) -> tuple[list[str], str]:
-        """Build explicit topic links so the graph clusters by concepts, not files."""
+        """Return semantic tag metadata without adding synthetic graph links."""
         semantic_tags = self._meaningful_graph_tags(tags)
         if not semantic_tags:
             return [], ""
-
-        self._update_topic_maps(semantic_tags)
-        lines = ["## Concept Neighborhood", ""]
-        for tag in semantic_tags[:8]:
-            moc_name = self._sanitize_map_name(tag)
-            lines.append(f"- [[99-MOC/{moc_name}|#{tag}]]")
-        return semantic_tags, "\n".join(lines)
+        return semantic_tags, ""
 
     def _ensure_structure(self) -> None:
         """Create full DIKIWI folder structure with MOC files."""
@@ -879,7 +881,7 @@ LIMIT 10
         semantic_tags, concept_section = self._concept_neighborhood_section(fm.get("tags", []))
         if semantic_tags:
             fm["semantic_topics"] = semantic_tags
-            if "## Concept Neighborhood" not in body:
+            if concept_section and "## Concept Neighborhood" not in body:
                 body = f"{body.rstrip()}\n\n{concept_section}"
 
         heading = h1_title if h1_title else title
@@ -1005,7 +1007,7 @@ LIMIT 10
             "nodes": nodes_list,
             "relation": relation,
             "strength": round(strength, 2),
-            "tags": ["knowledge", relation],
+            "tags": ["knowledge"],
         }
         body_lines: list[str] = []
         if reasoning:
@@ -1136,7 +1138,6 @@ LIMIT 10
         body_lines += ["---", "", f"*Source: {source}*"]
 
         path.write_text("\n".join(body_lines), encoding="utf-8")
-        self._update_topic_maps(tags)
         logger.info("Wrote wisdom note: %s (%d words)", filename, len(content.split()))
         return dikiwi_id
 
@@ -1476,7 +1477,7 @@ LIMIT 10
                 "relation_type": relation_type,
                 "strength": strength,
                 "date_created": datetime.now().astimezone().isoformat(),
-                "tags": ["dikiwi", "knowledge", relation_type],
+                "tags": ["dikiwi", "knowledge"],
             }
 
             note_content = f"""{self._format_frontmatter(frontmatter)}
