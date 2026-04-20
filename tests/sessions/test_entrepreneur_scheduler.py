@@ -284,7 +284,12 @@ class TestEntrepreneurScheduler:
                 ],
                 "business_plan": {
                     "core_thesis": "Win by reducing ECO turnaround.",
-                    "validation_program": ["Run one replay benchmark"],
+                    "validation_program": [
+                        {
+                            "step": "Run one replay benchmark",
+                            "artifact": "before/after ECO report",
+                        }
+                    ],
                     "decision_gates": ["Show >20% faster turnaround"],
                     "salvage_or_acceleration": ["Narrow to one signoff workflow"],
                 },
@@ -345,3 +350,4 @@ class TestEntrepreneurScheduler:
         assert write_call.kwargs["source_url"] == "aily://entrepreneur_appendix"
         assert "## Hypothesis-Driven Business Plan" in write_call.kwargs["markdown"]
         assert "## Simulation-Driven Development Plan" in write_call.kwargs["markdown"]
+        assert "before/after ECO report" in write_call.kwargs["markdown"]

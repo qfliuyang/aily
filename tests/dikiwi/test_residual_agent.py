@@ -29,6 +29,7 @@ async def test_persist_proposals_stores_structured_fields():
                 "economic_buyer": "VP of Silicon Engineering",
                 "proof_artifact": "Replay benchmark on ECO history",
                 "recommended_next_validation": "Run a pilot on one signoff team",
+                "status": "ready_for_screening",
             }
         ],
         report_note_id="07-Proposal/report.md",
@@ -37,7 +38,10 @@ async def test_persist_proposals_stores_structured_fields():
 
     assert graph_db.insert_node.await_count == 1
     persisted_keys = [call.args[1] for call in graph_db.set_node_property.await_args_list]
+    persisted_pairs = [(call.args[1], call.args[2]) for call in graph_db.set_node_property.await_args_list]
     assert "status" in persisted_keys
+    assert ("status", "pending_innovation") in persisted_pairs
+    assert ("readiness_status", "ready_for_screening") in persisted_pairs
     assert "validation_attempts" in persisted_keys
     assert "title" in persisted_keys
     assert "problem" in persisted_keys

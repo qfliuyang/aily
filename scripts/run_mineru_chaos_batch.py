@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch-ingest a folder through MinerU directly into 00-Chaos and DIKIWI."""
+"""Batch-ingest a folder through MinerU into 00-Chaos, DIKIWI, and business review."""
 
 from __future__ import annotations
 
@@ -24,7 +24,9 @@ logging.basicConfig(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a folder through MinerU -> 00-Chaos -> DIKIWI")
+    parser = argparse.ArgumentParser(
+        description="Run a folder through MinerU -> 00-Chaos -> DIKIWI -> business review"
+    )
     parser.add_argument("--folder", "-f", type=Path, default=Path.home() / "aily_chaos")
     parser.add_argument(
         "--vault",
@@ -36,6 +38,23 @@ async def main() -> None:
     parser.add_argument("--limit", "-n", type=int, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--no-dikiwi", action="store_true", help="Only write 00-Chaos and .processed artifacts")
+    parser.add_argument(
+        "--no-business",
+        action="store_true",
+        help="Skip the end-of-batch Reactor -> Entrepreneur -> Guru pass",
+    )
+    parser.add_argument(
+        "--business-limit",
+        type=int,
+        default=None,
+        help="Maximum proposals for Entrepreneur/Guru to evaluate in this batch",
+    )
+    parser.add_argument(
+        "--business-screening-limit",
+        type=int,
+        default=None,
+        help="Maximum Residual proposals for Reactor to score before Entrepreneur/Guru",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--summary-file", type=Path, default=None)
     args = parser.parse_args()
@@ -45,6 +64,9 @@ async def main() -> None:
         vault_path=args.vault,
         processed_folder=args.processed_folder,
         run_dikiwi=not args.no_dikiwi,
+        run_business=not args.no_dikiwi and not args.no_business,
+        business_max_per_session=args.business_limit,
+        business_screening_limit=args.business_screening_limit,
         skip_existing=args.skip_existing,
     )
 

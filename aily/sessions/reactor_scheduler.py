@@ -21,6 +21,8 @@ from aily.sessions.models import Proposal, ProposalStage
 
 logger = logging.getLogger(__name__)
 
+RESIDUAL_PROPOSAL_REACTOR_STATUSES = ("pending_innovation", "ready_for_screening")
+
 
 class InnovationMethod(Enum):
     """Available innovation methodologies."""
@@ -289,20 +291,24 @@ class ReactorScheduler(BaseMindScheduler):
         # Limit output
         return filtered[:self.nozzle_config.max_proposals_per_session]
 
-    async def _evaluate_residual_proposals(self) -> list[Proposal]:
+    async def _evaluate_residual_proposals(self, max_nodes: int | None = None) -> list[Proposal]:
         """Score and gate Residual proposals through innovation screening."""
         if not self.graph_db:
             return []
 
         try:
-            nodes = await self.graph_db.get_nodes_by_property(
-                "residual_proposal", "status", "pending_innovation"
-            )
+            nodes_by_id: dict[str, dict] = {}
+            for status in RESIDUAL_PROPOSAL_REACTOR_STATUSES:
+                for node in await self.graph_db.get_nodes_by_property(
+                    "residual_proposal", "status", status
+                ):
+                    nodes_by_id[node["id"]] = node
+            nodes = list(nodes_by_id.values())
         except Exception as e:
             logger.warning(f"[Reactor] Failed to query residual proposals: {e}")
             return []
 
-        pending = nodes
+        pending = nodes[:max_nodes] if max_nodes is not None else nodes
 
         if not pending:
             logger.info("[Reactor] No pending Residual proposals to evaluate")

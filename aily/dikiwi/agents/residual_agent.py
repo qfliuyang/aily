@@ -19,6 +19,17 @@ from aily.sessions.dikiwi_mind import DikiwiStage, StageResult
 
 logger = logging.getLogger(__name__)
 
+WORKFLOW_PROPOSAL_PROPERTY_KEYS = {
+    "status",
+    "validation_attempts",
+    "residual_report_path",
+    "innovation_score",
+    "innovation_score_details",
+    "rejection_reason",
+    "business_score",
+    "business_score_details",
+}
+
 
 class ResidualAgent(DikiwiAgent):
     """Post-pipeline agent that analyzes the Obsidian vault and drafts formal reports.
@@ -391,6 +402,10 @@ class ResidualAgent(DikiwiAgent):
                 for key, value in proposal.items():
                     if value in ("", None, [], {}):
                         continue
+                    if key == "status":
+                        key = "readiness_status"
+                    if key in WORKFLOW_PROPOSAL_PROPERTY_KEYS:
+                        key = f"proposal_{key}"
                     await ctx.graph_db.set_node_property(node_id, key, value)
             except Exception as exc:
                 logger.warning("[RESIDUAL] Failed to insert proposal node: %s", exc)

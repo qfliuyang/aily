@@ -184,7 +184,7 @@ Prefer depth over breadth."""
       "framework_contribution": "Which Reactor framework(s) contributed, if any",
       "risks": ["Key technical, workflow, adoption, or market risks"],
       "recommended_next_validation": "Best next experiment or validation step",
-      "status": "ready_for_screening|needs_specification"
+      "readiness_status": "ready_for_screening|needs_specification"
     }
   ],
   "recommended_next_steps": [
@@ -592,7 +592,7 @@ Only include links with strength > 0.5. Omit weak or generic connections. Maximu
                 "Proposals must be grounded in specific evidence from the vault, graph, or Reactor frameworks.",
                 "Draft venture hypotheses, not only strategic themes.",
                 "Every proposal should name a target_user, economic_buyer, current_workaround, integration_boundary, proof_artifact, and recommended_next_validation.",
-                "If buyer, user, or workflow insertion point cannot be inferred responsibly, set status to needs_specification instead of bluffing.",
+                "If buyer, user, or workflow insertion point cannot be inferred responsibly, set readiness_status to needs_specification instead of bluffing.",
                 "For semiconductor or EDA proposals, specify the workflow insertion point such as RTL, synthesis, floorplan, timing signoff, ECO, verification, characterization, silicon debug, or operations.",
                 "Prefer narrow high-value wedges over broad ecosystem or platform language.",
                 "When Reactor frameworks and vault insights conflict, resolve the tension explicitly.",

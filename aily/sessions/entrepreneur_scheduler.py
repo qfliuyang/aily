@@ -6,6 +6,7 @@ Acts like Garry Tan - actually pulls up code, runs tests, checks metrics.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -349,6 +350,24 @@ class EntrepreneurScheduler(BaseMindScheduler):
         }
 
     @staticmethod
+    def _markdown_value(value: Any) -> str:
+        """Render arbitrary LLM JSON values as safe markdown text."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)) or value is None:
+            return str(value)
+        return json.dumps(value, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _markdown_list_item(value: Any) -> str:
+        """Render arbitrary LLM JSON values as one bullet-safe line."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)) or value is None:
+            return str(value)
+        return json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
     def _render_guru_appendix(title: str, guru_plan: dict[str, Any], evaluation_meta: dict[str, Any]) -> str:
         """Render the Guru appendix as markdown."""
         lines = [
@@ -362,20 +381,23 @@ class EntrepreneurScheduler(BaseMindScheduler):
 
         executive_take = guru_plan.get("executive_take", "")
         if executive_take:
-            lines.extend(["", "## Executive Take", "", executive_take])
+            lines.extend(["", "## Executive Take", "", EntrepreneurScheduler._markdown_value(executive_take)])
 
         decision_posture = guru_plan.get("decision_posture", "")
         if decision_posture:
-            lines.extend(["", f"**Decision Posture:** {decision_posture}"])
+            lines.extend(["", f"**Decision Posture:** {EntrepreneurScheduler._markdown_list_item(decision_posture)}"])
 
         fact_base = guru_plan.get("fact_base", [])
         if fact_base:
             lines.extend(["", "## Fact Base", ""])
             for item in fact_base:
-                item_type = item.get("type", "fact")
-                statement = item.get("statement", "")
-                implication = item.get("implication", "")
-                lines.append(f"- **{item_type}:** {statement} -> {implication}")
+                if isinstance(item, dict):
+                    item_type = EntrepreneurScheduler._markdown_list_item(item.get("type", "fact"))
+                    statement = EntrepreneurScheduler._markdown_list_item(item.get("statement", ""))
+                    implication = EntrepreneurScheduler._markdown_list_item(item.get("implication", ""))
+                    lines.append(f"- **{item_type}:** {statement} -> {implication}")
+                else:
+                    lines.append(f"- {EntrepreneurScheduler._markdown_list_item(item)}")
 
         business_plan = guru_plan.get("business_plan", {})
         if business_plan:
@@ -389,7 +411,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
             ):
                 value = business_plan.get(key, "")
                 if value:
-                    lines.extend([f"### {heading}", "", value, ""])
+                    lines.extend([f"### {heading}", "", EntrepreneurScheduler._markdown_value(value), ""])
             for heading, key in (
                 ("Validation Program", "validation_program"),
                 ("Decision Gates", "decision_gates"),
@@ -399,7 +421,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 if entries:
                     lines.extend([f"### {heading}", ""])
                     for entry in entries:
-                        lines.append(f"- {entry}")
+                        lines.append(f"- {EntrepreneurScheduler._markdown_list_item(entry)}")
                     lines.append("")
 
         development_plan = guru_plan.get("development_plan", {})
@@ -412,7 +434,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
             ):
                 value = development_plan.get(key, "")
                 if value:
-                    lines.extend([f"### {heading}", "", value, ""])
+                    lines.extend([f"### {heading}", "", EntrepreneurScheduler._markdown_value(value), ""])
             for heading, key in (
                 ("Simulation Program", "simulation_program"),
                 ("Constraints", "constraints"),
@@ -425,16 +447,16 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 if entries:
                     lines.extend([f"### {heading}", ""])
                     for entry in entries:
-                        lines.append(f"- {entry}")
+                        lines.append(f"- {EntrepreneurScheduler._markdown_list_item(entry)}")
                     lines.append("")
 
         briefing_notes = guru_plan.get("briefing_notes", {})
         if briefing_notes:
             lines.extend(["## Briefing Notes", ""])
             if briefing_notes.get("ceo"):
-                lines.extend(["### CEO", "", briefing_notes["ceo"], ""])
+                lines.extend(["### CEO", "", EntrepreneurScheduler._markdown_value(briefing_notes["ceo"]), ""])
             if briefing_notes.get("cto"):
-                lines.extend(["### CTO", "", briefing_notes["cto"], ""])
+                lines.extend(["### CTO", "", EntrepreneurScheduler._markdown_value(briefing_notes["cto"]), ""])
 
         return "\n".join(lines).rstrip() + "\n"
 

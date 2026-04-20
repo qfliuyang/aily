@@ -21,6 +21,8 @@ from aily.config import SETTINGS
 from aily.graph.db import GraphDB
 from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.sessions.dikiwi_mind import DikiwiMind
+from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
+from aily.sessions.reactor_scheduler import ReactorScheduler
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,12 @@ class MinerUBatchSummary:
     processed: int = 0
     failed: int = 0
     skipped: int = 0
+    business_enabled: bool = False
+    reactor_screened_limit: int | None = None
+    reactor_approved: int = 0
+    entrepreneur_evaluated: int = 0
+    entrepreneur_approved: int = 0
+    business_error: str | None = None
     results: list[MinerUBatchItemResult] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +80,12 @@ class MinerUBatchSummary:
             "processed": self.processed,
             "failed": self.failed,
             "skipped": self.skipped,
+            "business_enabled": self.business_enabled,
+            "reactor_screened_limit": self.reactor_screened_limit,
+            "reactor_approved": self.reactor_approved,
+            "entrepreneur_evaluated": self.entrepreneur_evaluated,
+            "entrepreneur_approved": self.entrepreneur_approved,
+            "business_error": self.business_error,
             "results": [item.__dict__ for item in self.results],
         }
 
@@ -86,8 +100,14 @@ class MinerUChaosBatchRunner:
         vault_path: Path,
         processed_folder: Path | None = None,
         run_dikiwi: bool = True,
+        run_business: bool = False,
+        business_max_per_session: int | None = None,
+        business_screening_limit: int | None = None,
         skip_existing: bool = False,
     ) -> None:
+        if run_business and not run_dikiwi:
+            raise ValueError("run_business requires run_dikiwi=True")
+
         self.source_folder = source_folder.expanduser().resolve()
         self.vault_path = vault_path.expanduser().resolve()
         self.processed_folder = (
@@ -96,6 +116,9 @@ class MinerUChaosBatchRunner:
             else (self.source_folder / ".processed").resolve()
         )
         self.run_dikiwi = run_dikiwi
+        self.run_business = run_business
+        self.business_max_per_session = business_max_per_session
+        self.business_screening_limit = business_screening_limit
         self.skip_existing = skip_existing
 
         self.config = ChaosConfig(
@@ -107,6 +130,8 @@ class MinerUChaosBatchRunner:
 
         self._graph_db: GraphDB | None = None
         self._bridge: ChaosDikiwiBridge | None = None
+        self._llm_client: Any | None = None
+        self._obsidian_writer: DikiwiObsidianWriter | None = None
 
     def discover_files(self) -> list[Path]:
         """Discover MinerU-supported documents under the source folder."""
@@ -146,11 +171,13 @@ class MinerUChaosBatchRunner:
             max_concurrency=SETTINGS.llm_max_concurrency,
             min_interval_seconds=SETTINGS.llm_min_interval_seconds,
         )
+        self._llm_client = llm_client
 
         self._graph_db = GraphDB(db_path=SETTINGS.graph_db_path)
         await self._graph_db.initialize()
 
         obsidian_writer = DikiwiObsidianWriter(vault_path=self.vault_path)
+        self._obsidian_writer = obsidian_writer
         dikiwi_mind = DikiwiMind(
             graph_db=self._graph_db,
             llm_client=llm_client,
@@ -187,7 +214,49 @@ class MinerUChaosBatchRunner:
             else:
                 summary.failed += 1
 
+        if self.run_business:
+            await self.run_business_pass(summary)
+
         return summary
+
+    async def run_business_pass(self, summary: MinerUBatchSummary) -> None:
+        """Run Reactor screening and Entrepreneur/Guru once after batch ingestion."""
+        summary.business_enabled = True
+        business_max = (
+            self.business_max_per_session
+            if self.business_max_per_session is not None
+            else SETTINGS.minds.proposal_max_per_session
+        )
+        screening_limit = self.business_screening_limit
+        if screening_limit is None:
+            screening_limit = max(business_max * 3, business_max)
+        summary.reactor_screened_limit = screening_limit
+
+        if self._graph_db is None or self._llm_client is None or self._obsidian_writer is None:
+            summary.business_error = "dikiwi_runtime_not_initialized"
+            return
+
+        try:
+            reactor = ReactorScheduler(
+                graph_db=self._graph_db,
+                llm_client=self._llm_client,
+                obsidian_writer=self._obsidian_writer,
+            )
+            approved = await reactor._evaluate_residual_proposals(max_nodes=screening_limit)
+            summary.reactor_approved = len(approved)
+
+            entrepreneur = EntrepreneurScheduler(
+                graph_db=self._graph_db,
+                llm_client=self._llm_client,
+                obsidian_writer=self._obsidian_writer,
+                proposal_max_per_session=business_max,
+            )
+            result = await entrepreneur._run_session()
+            summary.entrepreneur_evaluated = int(result.get("evaluated", 0))
+            summary.entrepreneur_approved = int(result.get("proposals_generated", 0))
+        except Exception as exc:
+            logger.exception("MinerU business pass failed")
+            summary.business_error = str(exc)
 
     async def process_file(self, source_path: Path) -> MinerUBatchItemResult:
         """Parse one file, write 00-Chaos artifacts, then feed DIKIWI."""

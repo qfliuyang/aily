@@ -162,3 +162,45 @@ class TestReactorScheduler:
         assert "Economic Buyer: VP of Silicon Engineering" in captured["prompt"]
         assert "Workflow Insertion: timing signoff" in captured["prompt"]
         assert "workflow_insertion_clarity" in captured["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_evaluate_residual_proposals_accepts_legacy_ready_for_screening(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+        monkeypatch,
+    ):
+        scheduler = ReactorScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+        )
+
+        async def fake_get_nodes_by_property(node_type, key, value):
+            if value == "ready_for_screening":
+                return [
+                    {
+                        "id": "residual_legacy",
+                        "label": "Timing Closure Copilot: Assistant",
+                        "properties": {
+                            "title": "Timing Closure Copilot",
+                            "description": "Assistant for signoff ECOs.",
+                        },
+                    }
+                ]
+            return []
+
+        async def fake_score(node, budget=None):
+            return {"pass": True, "confidence": 0.82}
+
+        mock_graph_db.get_nodes_by_property.side_effect = fake_get_nodes_by_property
+        monkeypatch.setattr(scheduler, "_score_proposal", fake_score)
+
+        approved = await scheduler._evaluate_residual_proposals()
+
+        assert len(approved) == 1
+        queried_statuses = [call.args[2] for call in mock_graph_db.get_nodes_by_property.await_args_list]
+        assert "pending_innovation" in queried_statuses
+        assert "ready_for_screening" in queried_statuses
+        mock_graph_db.set_node_property.assert_any_await(
+            "residual_legacy", "status", "pending_business"
+        )
