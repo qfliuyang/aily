@@ -1209,7 +1209,9 @@ LIMIT 10
         source_url: str = "",
     ) -> str:
         """Write a generic note to the vault (compatible with ObsidianWriter interface)."""
-        safe_title = _slugify_title(title).replace("/", "_").replace("..", "_")[:120]
+        # Preserve the displayed title in frontmatter and markdown callers. Only
+        # the filesystem slug is bounded to stay within common filename limits.
+        safe_title = _slugify_title(title, max_length=220).replace("/", "_").replace("..", "_")
 
         # Route entrepreneur notes to dedicated folder
         if source_url and source_url.startswith("aily://entrepreneur"):

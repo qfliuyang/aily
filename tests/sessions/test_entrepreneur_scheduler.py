@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aily.sessions.gstack_agent import GStackPanelResult, GStackSession
+from aily.sessions.gstack_agent import ActionResult, GStackPanelResult, GStackSession
 from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 from aily.sessions.models import Proposal, ProposalStatus
 
@@ -265,11 +265,10 @@ class TestEntrepreneurScheduler:
         assert "Every idea deserves a serious salvage" in messages[0]["content"]
 
     @pytest.mark.asyncio
-    async def test_write_guru_appendix_creates_appendix_note(
+    async def test_build_guru_appendix_markdown_handles_nested_output(
         self,
         mock_llm_client,
         mock_graph_db,
-        mock_obsidian_writer,
     ):
         mock_llm_client.chat_json = AsyncMock(
             return_value={
@@ -311,10 +310,9 @@ class TestEntrepreneurScheduler:
         scheduler = EntrepreneurScheduler(
             llm_client=mock_llm_client,
             graph_db=mock_graph_db,
-            obsidian_writer=mock_obsidian_writer,
         )
 
-        await scheduler._write_guru_appendix(
+        markdown = await scheduler._build_guru_appendix_markdown(
             proposal_node={
                 "id": "residual_1234",
                 "label": "Timing Closure Copilot: fallback",
@@ -345,9 +343,75 @@ class TestEntrepreneurScheduler:
             innovation_proposals=[],
         )
 
+        assert markdown is not None
+        assert "## Hypothesis-Driven Business Plan" in markdown
+        assert "## Simulation-Driven Development Plan" in markdown
+        assert "before/after ECO report" in markdown
+
+    @pytest.mark.asyncio
+    async def test_write_proposal_note_appends_guru_and_preserves_full_text(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+        mock_obsidian_writer,
+    ):
+        long_title = (
+            "Constraint Verification Platform Pre-Physical-Design Constraint Quality Assurance "
+            "Without Misleading Truncated Titles"
+        )
+        long_output = (
+            "This action output contains the complete evaluation details and must not be cut after "
+            "an arbitrary character boundary because the omitted tail changes the conclusion."
+        )
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            obsidian_writer=mock_obsidian_writer,
+        )
+
+        await scheduler._write_proposal_note(
+            proposal_node={
+                "id": "residual_5678",
+                "label": f"{long_title}: fallback",
+                "properties": {
+                    "title": long_title,
+                    "hypothesis": "A complete-title plan can avoid misleading operators.",
+                    "problem": "Truncated notes hide material context.",
+                    "solution": "Preserve full titles and outputs in the plan.",
+                    "target_user": "CEO and CTO reviewers",
+                },
+            },
+            panel_or_session=GStackPanelResult(
+                sessions=[
+                    GStackSession(
+                        session_id="g2",
+                        hypothesis="A complete-title plan can avoid misleading operators.",
+                        problem="Truncated notes hide material context.",
+                        solution="Preserve full titles and outputs in the plan.",
+                        target_user="CEO and CTO reviewers",
+                        verdict="needs_more_validation",
+                        confidence=0.62,
+                        actions=[
+                            ActionResult(
+                                action="validate_problem",
+                                status="success",
+                                output=long_output,
+                            )
+                        ],
+                    )
+                ],
+                final_verdict="needs_more_validation",
+                final_confidence=0.62,
+                synthesis_reasoning="Needs more validation.",
+            ),
+            approved=False,
+            guru_appendix_markdown="# Guru Appendix: Full\n\nAppendix body",
+        )
+
         write_call = mock_obsidian_writer.write_note.await_args
-        assert write_call.kwargs["title"].startswith("appendix-kill_it-")
-        assert write_call.kwargs["source_url"] == "aily://entrepreneur_appendix"
-        assert "## Hypothesis-Driven Business Plan" in write_call.kwargs["markdown"]
-        assert "## Simulation-Driven Development Plan" in write_call.kwargs["markdown"]
-        assert "before/after ECO report" in write_call.kwargs["markdown"]
+        assert write_call.kwargs["title"] == f"denied-{long_title}"
+        assert write_call.kwargs["source_url"] == "aily://entrepreneur"
+        assert f"# {long_title}" in write_call.kwargs["markdown"]
+        assert long_output in write_call.kwargs["markdown"]
+        assert "# Guru Appendix: Full" in write_call.kwargs["markdown"]
+        assert "[[appendix-" not in write_call.kwargs["markdown"]

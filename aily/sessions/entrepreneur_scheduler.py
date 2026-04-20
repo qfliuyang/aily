@@ -142,15 +142,16 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     proposal_node, evaluation_result
                 )
 
+            guru_appendix_markdown = await self._build_guru_appendix_markdown(
+                proposal_node=proposal_node,
+                panel_or_session=evaluation_result,
+                innovation_proposals=innovation_proposals,
+            )
             await self._write_proposal_note(
                 proposal_node,
                 evaluation_result,
                 approved=entrepreneur_proposal is not None,
-            )
-            await self._write_guru_appendix(
-                proposal_node=proposal_node,
-                panel_or_session=evaluation_result,
-                innovation_proposals=innovation_proposals,
+                guru_appendix_markdown=guru_appendix_markdown,
             )
 
             if entrepreneur_proposal:
@@ -177,7 +178,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 for node in pending_proposals:
                     props = node.get("properties", {})
                     if props.get("status") in ("rejected_business", "rejected_innovation"):
-                        summary_lines.append(f"- {node['label'][:80]}... — {props.get('rejection_reason', '')}")
+                        summary_lines.append(f"- {node['label']} — {props.get('rejection_reason', '')}")
 
                 await self.obsidian_writer.write_note(
                     title=f"Entrepreneur Session {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
@@ -331,7 +332,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 lines.append(f"- **{label}:** {value}")
         risks = hypothesis.get("risks", [])
         if risks:
-            lines.append("- **Key Risks:** " + "; ".join(str(risk) for risk in risks[:5]))
+            lines.append("- **Key Risks:** " + "; ".join(str(risk) for risk in risks))
         lines.append("")
 
     @staticmethod
@@ -460,15 +461,13 @@ class EntrepreneurScheduler(BaseMindScheduler):
 
         return "\n".join(lines).rstrip() + "\n"
 
-    async def _write_guru_appendix(
+    async def _build_guru_appendix_markdown(
         self,
         proposal_node: dict,
         panel_or_session: Any,
         innovation_proposals: list[dict],
-    ) -> None:
-        """Write the Guru planning appendix for future reference."""
-        if not self.obsidian_writer:
-            return
+    ) -> str | None:
+        """Build the Guru planning appendix markdown for embedding in the plan note."""
         try:
             hypothesis = self._build_hypothesis_from_node(proposal_node)
             context = self._build_gstack_context(
@@ -479,18 +478,10 @@ class EntrepreneurScheduler(BaseMindScheduler):
             guru_plan = await self.gstack_agent.generate_guru_plan(context, panel_or_session)
             evaluation_meta = self._evaluation_result_meta(panel_or_session)
             title = hypothesis["title"]
-            verdict = str(evaluation_meta.get("verdict", "needs_more_validation"))
-            safe_title = "".join(c for c in title if c.isalnum() or c in "_- ").rstrip("_- ")[:80]
-            appendix_title = f"appendix-{verdict}-{safe_title}"
-            markdown = self._render_guru_appendix(title, guru_plan, evaluation_meta)
-            await self.obsidian_writer.write_note(
-                title=appendix_title,
-                markdown=markdown,
-                source_url="aily://entrepreneur_appendix",
-            )
-            logger.info("[Entrepreneur] Wrote guru appendix: %s", appendix_title)
+            return self._render_guru_appendix(title, guru_plan, evaluation_meta)
         except Exception as e:
-            logger.warning("[Entrepreneur] Failed to write guru appendix: %s", e)
+            logger.warning("[Entrepreneur] Failed to build guru appendix: %s", e)
+            return None
 
     async def _process_gstack_panel_verdict(
         self, proposal_node: dict, panel: GStackPanelResult
@@ -540,7 +531,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 mind_name="entrepreneur",
                 title=proposal_brief["title"],
                 content=panel.synthesis_reasoning or panel.sessions[0].hypothesis,
-                summary=panel.synthesis_reasoning[:200] if panel.synthesis_reasoning else panel.sessions[0].hypothesis[:200],
+                summary=panel.synthesis_reasoning or panel.sessions[0].hypothesis,
                 confidence=confidence,
                 proposal_type=ProposalType.BUSINESS,
                 status=ProposalStatus.PENDING,
@@ -560,7 +551,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     "risks": panel.sessions[0].blockers,
                     "opportunities": panel.sessions[0].opportunities,
                     "actions_taken": sum(len(s.actions) for s in panel.sessions),
-                    "key_findings": panel.sessions[0].key_findings[:10],
+                    "key_findings": panel.sessions[0].key_findings,
                 },
             )
 
@@ -613,7 +604,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 mind_name="entrepreneur",
                 title=proposal_brief["title"],
                 content=session.hypothesis,
-                summary=session.hypothesis[:200],
+                summary=session.hypothesis,
                 confidence=confidence,
                 proposal_type=ProposalType.BUSINESS,
                 status=ProposalStatus.PENDING,
@@ -631,7 +622,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     "risks": session.blockers,
                     "opportunities": session.opportunities,
                     "actions_taken": len(session.actions),
-                    "key_findings": session.key_findings[:10],
+                    "key_findings": session.key_findings,
                 },
             )
 
@@ -662,7 +653,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
         if not self.graph_db:
             return
         try:
-            label = proposal_node.get("label", "")[:120]
+            label = proposal_node.get("label", "")
             await self.graph_db.add_residual_feedback(label, reason)
             logger.info("[Entrepreneur] Wrote rejection feedback for %s", proposal_node.get("id"))
         except Exception as e:
@@ -693,7 +684,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 lines.append("## Synthesis Reasoning")
                 lines.append(panel_or_session.synthesis_reasoning or "No reasoning provided.")
                 lines.append("")
-                key_findings = panel_or_session.sessions[0].key_findings[:5] if panel_or_session.sessions else []
+                key_findings = panel_or_session.sessions[0].key_findings if panel_or_session.sessions else []
                 blockers = []
                 for s in panel_or_session.sessions:
                     blockers.extend(s.blockers)
@@ -702,7 +693,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 lines.append(f"**Verdict:** {session.verdict}")
                 lines.append(f"**Confidence:** {session.confidence:.0%}")
                 lines.append("")
-                key_findings = session.key_findings[:5]
+                key_findings = session.key_findings
                 blockers = session.blockers
 
             lines.append("## Next Steps")
@@ -722,7 +713,11 @@ class EntrepreneurScheduler(BaseMindScheduler):
             logger.warning("[Entrepreneur] Failed to create incubation task: %s", e)
 
     async def _write_proposal_note(
-        self, proposal_node: dict, panel_or_session: Any, approved: bool
+        self,
+        proposal_node: dict,
+        panel_or_session: Any,
+        approved: bool,
+        guru_appendix_markdown: str | None = None,
     ) -> None:
         """Write a detailed proposal note with full GStack reasoning to Obsidian."""
         if not self.obsidian_writer:
@@ -731,12 +726,9 @@ class EntrepreneurScheduler(BaseMindScheduler):
             hypothesis = self._build_hypothesis_from_node(proposal_node)
             title = hypothesis["title"]
             prefix = "approved" if approved else "denied"
-            safe_title = "".join(c for c in title if c.isalnum() or c in "_- ").rstrip("_- ")[:80]
-            note_title = f"{prefix}-{safe_title}"
-            evaluation_meta = self._evaluation_result_meta(panel_or_session)
-            appendix_title = f"appendix-{evaluation_meta.get('verdict', 'needs_more_validation')}-{safe_title}"
+            note_title = f"{prefix}-{title}"
 
-            lines = [f"# {title}", "", f"**Guru Appendix:** [[{appendix_title}]]", ""]
+            lines = [f"# {title}", ""]
             self._append_proposal_context(lines, hypothesis)
 
             if isinstance(panel_or_session, GStackPanelResult):
@@ -776,7 +768,7 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     lines.append("")
                     lines.append("#### Actions Taken")
                     for action in session.actions:
-                        lines.append(f"- [{action.status}] {action.action}: {action.output[:200]}")
+                        lines.append(f"- [{action.status}] {action.action}: {action.output}")
                     lines.append("")
             else:
                 session = panel_or_session
@@ -801,8 +793,11 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 lines.append("")
                 lines.append("#### Actions Taken")
                 for action in session.actions:
-                    lines.append(f"- [{action.status}] {action.action}: {action.output[:200]}")
+                    lines.append(f"- [{action.status}] {action.action}: {action.output}")
                 lines.append("")
+
+            if guru_appendix_markdown:
+                lines.extend(["", "---", "", guru_appendix_markdown.rstrip(), ""])
 
             await self.obsidian_writer.write_note(
                 title=note_title,
