@@ -128,6 +128,22 @@ class TestProposal:
 
         assert "## Source Knowledge" not in markdown
 
+    def test_to_markdown_serializes_structured_content(self):
+        """Structured proposal fields are rendered safely as markdown text."""
+        proposal = Proposal(
+            title="Structured Proposal",
+            content={"current_state": ["benchmarks", "tribal knowledge"]},
+            summary={"headline": "Structured summary"},
+            confidence=0.85,
+            metadata={"details": {"buyer": "CAD Director"}},
+        )
+
+        markdown = proposal.to_markdown()
+
+        assert '"current_state"' in markdown
+        assert '"headline"' in markdown
+        assert '"buyer"' in markdown
+
     def test_to_feishu_summary(self):
         """Convert to brief summary for Feishu."""
         proposal = Proposal(

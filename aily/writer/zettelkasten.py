@@ -204,7 +204,7 @@ GROUP BY tags
         """Create a zettel from an insight."""
         zettel_id = self.id_gen.next_main()
 
-        title = insight.get("description", "Untitled")[:60]
+        title = insight.get("description", "Untitled")
         content = insight.get("description", "")
 
         # Extract content-based tags
@@ -234,7 +234,7 @@ GROUP BY tags
         zettel_id = self.id_gen.next_sub(parent_id)
 
         principle = wisdom.get("principle", "")
-        title = principle[:60] if principle else "Principle"
+        title = principle if principle else "Principle"
 
         content_parts = [principle]
         if wisdom.get("context"):
@@ -274,7 +274,7 @@ GROUP BY tags
         else:
             zettel_id = self.id_gen.next_main()
 
-        title = content[:60]
+        title = content
         tags = self._extract_tags(content)
 
         zettel = Zettel(

@@ -6,12 +6,19 @@ import pytest
 
 import aily.sessions.reactor_scheduler as reactor_scheduler_module
 from aily.sessions.reactor_scheduler import (
+    DEFAULT_REACTOR_METHODS,
     InnovationMethod,
     ReactorScheduler,
     MethodResult,
     NozzleConfig,
 )
 from aily.sessions.models import Proposal
+from aily.thinking.models import (
+    FrameworkInsight,
+    FrameworkType,
+    InsightPriority,
+    PrincipleRecommendation,
+)
 
 
 @pytest.fixture
@@ -45,6 +52,8 @@ class TestReactorScheduler:
         assert scheduler.mind_name == "reactor"
         assert scheduler.schedule_hour == 8
         assert scheduler.schedule_minute == 0
+        assert scheduler.nozzle_config.enabled_methods == DEFAULT_REACTOR_METHODS
+        assert InnovationMethod.TRIZ in scheduler.nozzle_config.enabled_methods
 
     @pytest.mark.asyncio
     async def test_run_session_stores_current_proposals(
@@ -82,6 +91,83 @@ class TestReactorScheduler:
         assert result["proposals_generated"] == 1
         assert scheduler.get_current_proposals() == [proposal]
         mock_obsidian_writer.write_note.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_persist_framework_proposals_enqueues_for_entrepreneur(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = ReactorScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+        )
+        proposal = Proposal(
+            id="reactor_prop_1",
+            mind_name="reactor",
+            title="TRIZ Principle 10: Prior Action for Timing Closure",
+            content="Use precomputed ECO hypotheses before signoff.",
+            summary="Use precomputed ECO hypotheses before signoff.",
+            confidence=0.82,
+            framework_used="TRIZ",
+        )
+
+        await scheduler._persist_framework_proposals([proposal])
+
+        mock_graph_db.insert_node.assert_any_await(
+            node_id="reactor_prop_1",
+            node_type="reactor_proposal",
+            label="TRIZ Principle 10: Prior Action for Timing Closure: Use precomputed ECO hypotheses before signoff.",
+            source="reactor",
+        )
+        mock_graph_db.set_node_property.assert_any_await(
+            "reactor_prop_1", "status", "pending_business"
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_method_adapts_triz_framework_output(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = ReactorScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            nozzle_config=NozzleConfig(enabled_methods={InnovationMethod.TRIZ}),
+        )
+
+        fake_triz = MagicMock()
+        fake_triz.analyze = AsyncMock(
+            return_value=FrameworkInsight(
+                framework_type=FrameworkType.TRIZ,
+                insights=["Precompute fixes before timing closure loops begin."],
+                confidence=0.83,
+                priority=InsightPriority.HIGH,
+                raw_analysis={
+                    "contradictions": [],
+                    "principle_recommendations": [
+                        PrincipleRecommendation(
+                            principle_number=10,
+                            principle_name="Prior action",
+                            application="Precompute fixes before timing closure loops begin.",
+                            confidence_score=0.83,
+                        )
+                    ],
+                },
+                processing_time_ms=123,
+            )
+        )
+        scheduler._analyzers[InnovationMethod.TRIZ] = fake_triz
+
+        result = await scheduler._run_method(
+            InnovationMethod.TRIZ,
+            {"focus_areas": ["eda"], "recent_insights": [{"label": "Timing ECO loops", "type": "problem"}]},
+        )
+
+        assert isinstance(result, MethodResult)
+        assert result.method == InnovationMethod.TRIZ
+        assert result.proposals
+        assert result.proposals[0].framework_used == "TRIZ"
 
     def test_node_to_proposal_keeps_structured_residual_metadata(
         self,

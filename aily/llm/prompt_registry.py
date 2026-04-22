@@ -259,6 +259,24 @@ Prefer depth over breadth."""
 }
 One entry per input item matching its index. Maximum 5 tags per item. Use a single domain value, not pipe-separated."""
 
+    INFORMATION_CLUSTER_CONTRACT = """Respond with JSON:
+{
+  "clusters": [
+    {
+      "canonical_title": "Durable human-readable title for the shared information unit",
+      "member_indices": [0, 2, 5],
+      "summary": "2-4 sentence synthesis of the shared information created by these datapoints. Must read as classified information, not a source summary.",
+      "tags": ["tag1", "tag2", "tag3"],
+      "keywords": ["keyword1", "keyword2"],
+      "info_type": "fact|claim|evidence|definition|method|tradeoff|constraint|workflow|metric|question",
+      "domain": "technology|business|science|philosophy|arts|general|engineering|ai|semiconductor|eda",
+      "source_evidence": ["Short paraphrased evidence anchor from the source"],
+      "confidence": 0.0-1.0
+    }
+  ]
+}
+Every datapoint should appear in at most one cluster. Singleton clusters are allowed. Do not output gibberish or low-signal OCR fragments as clusters."""
+
     @classmethod
     def data_extraction(
         cls,
@@ -334,6 +352,43 @@ One entry per input item matching its index. Maximum 5 tags per item. Use a sing
             context_sections=(
                 ("Source", source),
                 ("Numbered Items", items_desc),
+                ("Shared Memory", memory_context or "No earlier stage memory available."),
+            ),
+        )
+        return cls._build_messages(spec)
+
+    @classmethod
+    def information_clustering_batch(
+        cls,
+        *,
+        data_points: list,
+        source: str,
+        memory_context: str = "",
+    ) -> list[dict[str, str]]:
+        items_desc = "\n".join(
+            f"{i}. [{getattr(dp, 'concept', '') or getattr(dp, 'content', '')[:60]}] "
+            f"(modality={getattr(dp, 'modality', 'text')}, page={getattr(dp, 'source_page', '')}) "
+            f"{getattr(dp, 'content', '')[:280]}"
+            for i, dp in enumerate(data_points[:40])
+        )
+        spec = PromptSpec(
+            stage="INFORMATION",
+            role="Information Clusterer",
+            objective="Group datapoints into reusable classified information units. Information is clustered, tagged, and titled data.",
+            output_contract=cls.INFORMATION_CLUSTER_CONTRACT,
+            guidelines=(
+                "Cluster datapoints only when they express the same reusable information unit, not merely because they came from the same file.",
+                "A cluster should preserve one durable information unit such as a method, metric, constraint, workflow rule, evidence pattern, or tradeoff.",
+                "Use singleton clusters when a datapoint stands alone.",
+                "Do not merge loosely related ideas into one cluster just to reduce count.",
+                "Drop low-signal OCR noise, slide chrome, logos, agenda fragments, and malformed token soup by excluding them from clusters.",
+                "The summary must synthesize what the datapoints jointly say, in clear technical language.",
+                "Prefer technical tags that increase future graph linking value.",
+                "When several datapoints support the same mechanism or constraint, give them the same canonical information title through one cluster.",
+            ),
+            context_sections=(
+                ("Source", source),
+                ("Numbered Datapoints", items_desc),
                 ("Shared Memory", memory_context or "No earlier stage memory available."),
             ),
         )

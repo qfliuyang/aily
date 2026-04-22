@@ -43,6 +43,7 @@ class VisualElement:
     source_page: int | None = None  # For documents
     timestamp: float | None = None  # For video (seconds)
     base64_data: str | None = None  # Thumbnail or full image
+    asset_path: str | None = None  # Relative or absolute extracted asset path
     ocr_text: str | None = None  # Text extracted via OCR
     llm_analysis: str | None = None  # GPT-4V description
 
@@ -54,6 +55,7 @@ class VisualElement:
             "description": self.description,
             "source_page": self.source_page,
             "timestamp": self.timestamp,
+            "asset_path": self.asset_path,
             "ocr_text": self.ocr_text,
             "llm_analysis": self.llm_analysis,
             # Skip base64_data in dict (too large)

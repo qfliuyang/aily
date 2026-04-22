@@ -214,7 +214,8 @@ class MinerUProcessor(ContentProcessor):
             "mineru_method": self.config.mineru.method,
             "mineru_model_source": self.config.mineru.model_source,
             "mineru_markdown_path": str(markdown_path),
-            "mineru_output_dir": str(output_dir),
+            "mineru_output_dir": str(markdown_path.parent),
+            "mineru_cache_dir": str(output_dir),
         }
         result.tags = list(dict.fromkeys([*result.tags, "mineru"]))
         return result

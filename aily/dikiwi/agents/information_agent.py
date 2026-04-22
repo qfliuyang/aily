@@ -6,6 +6,7 @@ import hashlib
 import logging
 import time
 import uuid
+from collections import defaultdict
 
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class InformationAgent(DikiwiAgent):
-    """Stage 2: Batch classify data points into information nodes."""
+    """Stage 2: Cluster data points into classified information nodes."""
 
     async def execute(self, ctx: AgentContext) -> StageResult:
         start = time.time()
@@ -31,6 +32,7 @@ class InformationAgent(DikiwiAgent):
             data_points: list[DataPoint] = data_result.data.get("data_points", [])
             data_note_id: str = data_result.data.get("data_note_id", "")
             data_note_ids: list[str] = data_result.data.get("data_note_ids", [])
+            data_note_id_map: dict[str, str] = data_result.data.get("data_note_id_map", {})
             source = ctx.drop.source
 
             logger.info(
@@ -38,43 +40,28 @@ class InformationAgent(DikiwiAgent):
                 len(data_points), len(data_note_ids), data_note_ids[0] if data_note_ids else "(none)"
             )
 
-            classifications = await self._llm_classify_batch(data_points, source, ctx)
+            clusters = await self._llm_cluster_batch(data_points, source, ctx)
 
             # Build a map from data_point chunk index to the corresponding data note id
             def _dp_to_data_note_id(dp_id: str) -> str:
                 """Extract chunk index from dp_id (format: dp_{uuid}_{chunk_index}_{i}) and look up data_note_id."""
+                mapped = data_note_id_map.get(dp_id)
+                if mapped:
+                    return mapped
                 if not data_note_ids:
                     logger.warning("[DIKIWI] data_note_ids is empty, falling back to data_note_id=%s", data_note_id)
                     return data_note_id
-                parts = dp_id.split("_")
-                if len(parts) >= 3:
-                    try:
-                        chunk_idx = int(parts[-2])
-                        if 0 <= chunk_idx < len(data_note_ids):
-                            return data_note_ids[chunk_idx]
-                    except ValueError:
-                        pass
                 logger.warning("[DIKIWI] Could not map dp_id=%s to data_note_id", dp_id)
                 return data_note_id
 
-            info_nodes: list[InformationNode] = []
-            for dp, cls in zip(data_points, classifications):
-                node = InformationNode(
-                    id=f"info_{uuid.uuid4().hex[:8]}",
-                    data_point_id=dp.id,
-                    content=dp.content,
-                    concept=dp.concept,
-                    tags=cls.get("tags", []),
-                    info_type=cls.get("info_type", "fact"),
-                    domain=self._clean_domain(cls.get("domain", "general")),
-                )
-                info_nodes.append(node)
+            info_nodes = self._build_information_nodes(data_points, clusters)
 
-                if ctx.graph_db:
+            if ctx.graph_db:
+                for node in info_nodes:
                     await ctx.graph_db.insert_node(
                         node_id=node.id,
                         node_type="information",
-                        label=node.content[:200],
+                        label=(node.concept or node.content)[:200],
                         source=source,
                     )
                     await self._store_node_metadata(node, ctx)
@@ -85,10 +72,17 @@ class InformationAgent(DikiwiAgent):
                 source_paths = ctx.drop.metadata.get("source_paths", [])
                 for node in info_nodes:
                     try:
-                        # Link to the specific data chunk this concept was extracted from
-                        specific_data_note_id = _dp_to_data_note_id(node.data_point_id)
+                        specific_data_note_ids = [
+                            _dp_to_data_note_id(dp_id) for dp_id in (node.data_point_ids or [node.data_point_id])
+                        ]
+                        specific_data_note_id = specific_data_note_ids[0] if specific_data_note_ids else _dp_to_data_note_id(node.data_point_id)
                         nid = await ctx.dikiwi_obsidian_writer.write_information_note(
-                            node, specific_data_note_id, source, source_paths, data_point_id=node.data_point_id
+                            node,
+                            specific_data_note_id,
+                            source,
+                            source_paths,
+                            data_point_id=node.data_point_id,
+                            data_note_ids=specific_data_note_ids,
                         )
                         info_note_ids[node.id] = nid
                     except Exception as e:
@@ -126,7 +120,7 @@ class InformationAgent(DikiwiAgent):
                 processing_time_ms=(time.time() - start) * 1000,
             )
 
-    async def _llm_classify_batch(
+    async def _llm_cluster_batch(
         self,
         data_points: list[DataPoint],
         source: str,
@@ -136,16 +130,12 @@ class InformationAgent(DikiwiAgent):
             return []
 
         memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=1200)
-        messages = DikiwiPromptRegistry.classification_batch(
+        messages = DikiwiPromptRegistry.information_clustering_batch(
             data_points=data_points,
             source=source,
             memory_context=memory_context,
         )
         stage_key = f"information:batch:{hashlib.sha1(source.encode('utf-8')).hexdigest()[:8]}"
-
-        fallback = [
-            {"tags": [], "info_type": "fact", "domain": "general", "confidence": 0.8}
-        ] * len(data_points)
 
         try:
             result = await chat_json(
@@ -157,29 +147,172 @@ class InformationAgent(DikiwiAgent):
                 budget=ctx.budget,
             )
         except Exception as exc:
-            logger.warning("[DIKIWI] Batch classification failed: %s", exc)
-            return fallback
+            logger.warning("[DIKIWI] Batch information clustering failed: %s", exc)
+            return self._fallback_clusters(data_points)
 
         if not isinstance(result, dict):
-            return fallback
+            return self._fallback_clusters(data_points)
 
-        raw_list = result.get("classifications", [])
-        index_map: dict[int, dict] = {}
-        for item in raw_list:
-            if isinstance(item, dict):
-                idx = item.get("index")
-                if isinstance(idx, int):
-                    index_map[idx] = item
+        raw_clusters = result.get("clusters", [])
+        clusters: list[dict] = []
+        for item in raw_clusters:
+            if not isinstance(item, dict):
+                continue
+            member_indices = sorted({
+                idx
+                for idx in item.get("member_indices", [])
+                if isinstance(idx, int) and 0 <= idx < len(data_points)
+            })
+            if not member_indices:
+                continue
+            clusters.append(
+                {
+                    "canonical_title": str(item.get("canonical_title", "")).strip(),
+                    "member_indices": member_indices,
+                    "summary": str(item.get("summary", "")).strip(),
+                    "tags": [str(tag).strip() for tag in item.get("tags", []) if str(tag).strip()][:6],
+                    "info_type": str(item.get("info_type", "fact")).strip() or "fact",
+                    "domain": self._clean_domain(str(item.get("domain", "general"))),
+                    "source_evidence": [
+                        str(e).strip()
+                        for e in item.get("source_evidence", [])
+                        if str(e).strip()
+                    ][:6],
+                    "confidence": float(item.get("confidence", 0.8)),
+                }
+            )
 
-        return [
-            {
-                "tags": index_map.get(i, {}).get("tags", [])[:5],
-                "info_type": index_map.get(i, {}).get("info_type", "fact"),
-                "domain": self._clean_domain(index_map.get(i, {}).get("domain", "general")),
-                "confidence": float(index_map.get(i, {}).get("confidence", 0.8)),
-            }
-            for i in range(len(data_points))
-        ]
+        return clusters or self._fallback_clusters(data_points)
+
+    def _build_information_nodes(self, data_points: list[DataPoint], clusters: list[dict]) -> list[InformationNode]:
+        info_nodes: list[InformationNode] = []
+        assigned: set[int] = set()
+
+        for cluster in clusters:
+            member_indices = [idx for idx in cluster.get("member_indices", []) if idx not in assigned]
+            if not member_indices:
+                continue
+            members = [data_points[idx] for idx in member_indices]
+            for idx in member_indices:
+                assigned.add(idx)
+
+            concept = cluster.get("canonical_title") or self._best_cluster_title(members)
+            info_nodes.append(
+                InformationNode(
+                    id=f"info_{uuid.uuid4().hex[:8]}",
+                    data_point_id=members[0].id,
+                    data_point_ids=[member.id for member in members],
+                    content=cluster.get("summary") or self._fallback_cluster_summary(concept, members),
+                    concept=concept,
+                    tags=self._merge_tags(cluster.get("tags", []), members),
+                    info_type=cluster.get("info_type", "fact"),
+                    domain=self._clean_domain(cluster.get("domain", "general")),
+                    source_evidence=self._merge_source_evidence(cluster.get("source_evidence", []), members),
+                    confidence=float(cluster.get("confidence", 0.8)),
+                )
+            )
+
+        for index, data_point in enumerate(data_points):
+            if index in assigned:
+                continue
+            concept = self._best_cluster_title([data_point])
+            info_nodes.append(
+                InformationNode(
+                    id=f"info_{uuid.uuid4().hex[:8]}",
+                    data_point_id=data_point.id,
+                    data_point_ids=[data_point.id],
+                    content=self._fallback_cluster_summary(concept, [data_point]),
+                    concept=concept,
+                    tags=self._merge_tags([], [data_point]),
+                    info_type="evidence" if data_point.modality == "visual" else "fact",
+                    domain="general",
+                    source_evidence=self._merge_source_evidence([], [data_point]),
+                    confidence=data_point.confidence,
+                )
+            )
+
+        return info_nodes
+
+    def _fallback_clusters(self, data_points: list[DataPoint]) -> list[dict]:
+        grouped: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for index, data_point in enumerate(data_points):
+            title = self._normalize_cluster_key(data_point.concept or data_point.content)
+            grouped[(title, data_point.modality or "text")].append(index)
+
+        clusters: list[dict] = []
+        for indices in grouped.values():
+            members = [data_points[idx] for idx in indices]
+            concept = self._best_cluster_title(members)
+            clusters.append(
+                {
+                    "canonical_title": concept,
+                    "member_indices": indices,
+                    "summary": self._fallback_cluster_summary(concept, members),
+                    "tags": self._merge_tags([], members),
+                    "info_type": "evidence" if any(member.modality == "visual" for member in members) else "fact",
+                    "domain": "general",
+                    "source_evidence": self._merge_source_evidence([], members),
+                    "confidence": sum(member.confidence for member in members) / max(len(members), 1),
+                }
+            )
+        return clusters
+
+    @staticmethod
+    def _normalize_cluster_key(value: str) -> str:
+        normalized = " ".join(str(value).lower().split())
+        return normalized[:120] if normalized else "untitled"
+
+    @staticmethod
+    def _best_cluster_title(members: list[DataPoint]) -> str:
+        for member in members:
+            if member.concept:
+                return member.concept
+        return max((member.content for member in members if member.content), key=len, default="Untitled information")[:120]
+
+    def _fallback_cluster_summary(self, concept: str, members: list[DataPoint]) -> str:
+        if len(members) == 1:
+            return members[0].content
+
+        lead = max(members, key=lambda member: len(member.content))
+        evidence = self._merge_source_evidence([], members)
+        summary = f"{concept}: {lead.content}"
+        if evidence:
+            summary += f" Supporting evidence includes {', '.join(evidence[:3])}."
+        else:
+            summary += f" This information cluster is supported by {len(members)} related datapoints."
+        return summary
+
+    @staticmethod
+    def _merge_tags(initial_tags: list[str], members: list[DataPoint]) -> list[str]:
+        tags: list[str] = []
+        for tag in initial_tags:
+            cleaned = str(tag).strip()
+            if cleaned and cleaned not in tags:
+                tags.append(cleaned)
+        for member in members:
+            if member.modality == "visual" and "visual" not in tags:
+                tags.append("visual")
+            if member.visual_type and member.visual_type not in tags:
+                tags.append(member.visual_type)
+        return tags[:6]
+
+    @staticmethod
+    def _merge_source_evidence(initial_evidence: list[str], members: list[DataPoint]) -> list[str]:
+        evidence: list[str] = []
+        for item in initial_evidence:
+            cleaned = str(item).strip()
+            if cleaned and cleaned not in evidence:
+                evidence.append(cleaned)
+        for member in members:
+            for item in getattr(member, "source_evidence", []):
+                cleaned = str(item).strip()
+                if cleaned and cleaned not in evidence:
+                    evidence.append(cleaned)
+            if member.source_page is not None:
+                page_marker = f"page {member.source_page}"
+                if page_marker not in evidence:
+                    evidence.append(page_marker)
+        return evidence[:6]
 
     async def _store_node_metadata(self, node: InformationNode, ctx: AgentContext) -> None:
         if not ctx.graph_db:
@@ -187,10 +320,12 @@ class InformationAgent(DikiwiAgent):
         source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
         try:
             await ctx.graph_db.set_node_property(node.id, "data_point_id", node.data_point_id)
+            await ctx.graph_db.set_node_property(node.id, "data_point_ids", node.data_point_ids)
             await ctx.graph_db.set_node_property(node.id, "concept", node.concept)
             await ctx.graph_db.set_node_property(node.id, "tags", node.tags)
             await ctx.graph_db.set_node_property(node.id, "info_type", node.info_type)
             await ctx.graph_db.set_node_property(node.id, "domain", node.domain)
+            await ctx.graph_db.set_node_property(node.id, "source_evidence", node.source_evidence)
             await ctx.graph_db.set_node_property(node.id, "source_paths", source_paths)
             await ctx.graph_db.set_node_property(node.id, "pipeline_id", ctx.pipeline_id)
         except AttributeError:

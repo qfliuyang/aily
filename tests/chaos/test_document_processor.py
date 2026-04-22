@@ -115,10 +115,12 @@ async def test_text_processor_splits_multi_url_import_into_atomic_items(
 async def test_text_processor_imports_mineru_full_markdown(tmp_path: Path):
     export_dir = tmp_path / "paper_export"
     export_dir.mkdir()
+    (export_dir / "images").mkdir()
+    (export_dir / "images" / "figure1.jpg").write_bytes(b"fake-image")
     file_path = export_dir / "full.md"
     file_path.write_text("# MinerU Paper Title\n\nStructured markdown body.", encoding="utf-8")
     (export_dir / "content_list.json").write_text(
-        '[{"page_idx": 0, "text": "a"}, {"page_idx": 1, "text": "b"}]',
+        '[{"page_idx": 0, "text": "a"}, {"page_idx": 1, "text": "b"}, {"type":"image","page_idx":2,"img_path":"images/figure1.jpg","image_caption":["Figure 1"]}]',
         encoding="utf-8",
     )
 
@@ -129,6 +131,35 @@ async def test_text_processor_imports_mineru_full_markdown(tmp_path: Path):
     assert result.source_type == "mineru_markdown"
     assert result.processing_method == "mineru_import"
     assert result.metadata["chaos_base_name"] == "paper_export"
-    assert result.metadata["pages"] == 2
+    assert result.metadata["pages"] == 3
     assert "content_list.json" in result.metadata["mineru_sidecar_files"]
     assert result.title == "MinerU Paper Title"
+    assert len(result.visual_elements) == 1
+    assert result.visual_elements[0].asset_path == "images/figure1.jpg"
+    assert result.visual_elements[0].description == "Figure 1"
+
+
+def test_text_processor_scans_full_mineru_content_list_for_late_images(tmp_path: Path):
+    export_dir = tmp_path / "late_images_export"
+    export_dir.mkdir()
+    file_path = export_dir / "full.md"
+    file_path.write_text("# Late Images\n\nBody", encoding="utf-8")
+    (export_dir / "images").mkdir()
+    (export_dir / "images" / "late_figure.jpg").write_bytes(b"fake-image")
+
+    items = [{"page_idx": i, "text": f"text {i}"} for i in range(35)]
+    items.append(
+        {
+            "type": "image",
+            "page_idx": 35,
+            "img_path": "images/late_figure.jpg",
+            "image_caption": ["Late Figure"],
+        }
+    )
+    (export_dir / "content_list.json").write_text(__import__("json").dumps(items), encoding="utf-8")
+
+    result = __import__("asyncio").run(TextProcessor(ChaosConfig()).process(file_path))
+
+    assert result is not None
+    assert len(result.visual_elements) == 1
+    assert result.visual_elements[0].asset_path == "images/late_figure.jpg"

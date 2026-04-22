@@ -6,6 +6,7 @@ Acts like Garry Tan - actually pulls up code, runs tests, checks metrics.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -13,7 +14,12 @@ from typing import Any
 
 from aily.sessions.base import BaseMindScheduler
 from aily.sessions.models import Proposal, ProposalType, ProposalStatus, ProposalStage
-from aily.sessions.gstack_agent import GStackAgent, GStackPanelResult, GSTACK_PERSONAS
+from aily.sessions.gstack_agent import (
+    GStackAgent,
+    GStackPanelResult,
+    GStackSession,
+    GSTACK_PERSONAS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +94,14 @@ class EntrepreneurScheduler(BaseMindScheduler):
             tool_executor=tool_executor,
             obsidian_writer=obsidian_writer,
             graph_db=graph_db,
+            request_timeout_seconds=min(
+                120.0,
+                max(30.0, float(innovation_timeout_minutes) * 15.0),
+            ),
+            guru_timeout_seconds=min(
+                180.0,
+                max(45.0, float(innovation_timeout_minutes) * 20.0),
+            ),
         )
 
     async def _run_session(self) -> dict[str, Any]:
@@ -114,30 +128,15 @@ class EntrepreneurScheduler(BaseMindScheduler):
                 hypothesis=hypothesis,
                 innovation_proposals=innovation_proposals,
             )
+            evaluation_result = await self._evaluate_business_case(hypothesis, context)
+            total_actions += self._count_evaluation_actions(evaluation_result)
 
-            if self.use_gstack_panel:
-                evaluation_result = await self.gstack_agent.evaluate_panel(
-                    hypothesis=hypothesis["hypothesis"],
-                    problem=hypothesis["problem"],
-                    solution=hypothesis["solution"],
-                    target_user=hypothesis["target_user"],
-                    context=context,
-                )
-                total_actions += sum(len(s.actions) for s in evaluation_result.sessions)
-
-                # Step 3: Process verdict and update GraphDB
+            # Step 3: Process verdict and update GraphDB
+            if isinstance(evaluation_result, GStackPanelResult):
                 entrepreneur_proposal = await self._process_gstack_panel_verdict(
                     proposal_node, evaluation_result
                 )
             else:
-                evaluation_result = await self.gstack_agent.evaluate(
-                    hypothesis=hypothesis["hypothesis"],
-                    problem=hypothesis["problem"],
-                    solution=hypothesis["solution"],
-                    target_user=hypothesis["target_user"],
-                    context=context,
-                )
-                total_actions += len(evaluation_result.actions)
                 entrepreneur_proposal = await self._process_gstack_verdict(
                     proposal_node, evaluation_result
                 )
@@ -194,6 +193,124 @@ class EntrepreneurScheduler(BaseMindScheduler):
             "evaluated": len(pending_proposals),
         }
 
+    async def _evaluate_business_case(
+        self,
+        hypothesis: dict[str, Any],
+        context: dict[str, Any],
+    ) -> GStackPanelResult | GStackSession:
+        """Run GStack with bounded time and degrade gracefully on slow evaluations."""
+        timeout_seconds = max(60.0, float(self.innovation_timeout_minutes) * 60.0)
+
+        try:
+            if self.use_gstack_panel:
+                return await asyncio.wait_for(
+                    self.gstack_agent.evaluate_panel(
+                        hypothesis=hypothesis["hypothesis"],
+                        problem=hypothesis["problem"],
+                        solution=hypothesis["solution"],
+                        target_user=hypothesis["target_user"],
+                        context=context,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            return await asyncio.wait_for(
+                self.gstack_agent.evaluate(
+                    hypothesis=hypothesis["hypothesis"],
+                    problem=hypothesis["problem"],
+                    solution=hypothesis["solution"],
+                    target_user=hypothesis["target_user"],
+                    context=context,
+                ),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[Entrepreneur] GStack evaluation timed out after %.1fs for %s",
+                timeout_seconds,
+                hypothesis.get("title", "untitled"),
+            )
+
+        fallback_timeout = min(90.0, max(20.0, timeout_seconds / 3.0))
+        try:
+            session = await asyncio.wait_for(
+                self.gstack_agent.evaluate(
+                    hypothesis=hypothesis["hypothesis"],
+                    problem=hypothesis["problem"],
+                    solution=hypothesis["solution"],
+                    target_user=hypothesis["target_user"],
+                    context=context,
+                    persona="general",
+                ),
+                timeout=fallback_timeout,
+            )
+            if self.use_gstack_panel:
+                return GStackPanelResult(
+                    sessions=[session],
+                    final_verdict=session.verdict or "needs_more_validation",
+                    final_confidence=session.confidence,
+                    synthesis_reasoning=(
+                        "Panel timed out; fell back to a single general-partner review."
+                    ),
+                    split_verdict=False,
+                )
+            return session
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[Entrepreneur] Fallback GStack evaluation timed out after %.1fs for %s",
+                fallback_timeout,
+                hypothesis.get("title", "untitled"),
+            )
+        except Exception as exc:
+            logger.warning("[Entrepreneur] Fallback GStack evaluation failed: %s", exc)
+
+        timeout_session = self._build_timeout_session(hypothesis)
+        if self.use_gstack_panel:
+            return GStackPanelResult(
+                sessions=[timeout_session],
+                final_verdict="needs_more_validation",
+                final_confidence=timeout_session.confidence,
+                synthesis_reasoning=(
+                    "Evaluation timed out before enough evidence was collected. "
+                    "Kept the proposal in validation instead of hanging the pipeline."
+                ),
+                split_verdict=False,
+            )
+        return timeout_session
+
+    @staticmethod
+    def _count_evaluation_actions(evaluation_result: GStackPanelResult | GStackSession) -> int:
+        """Count persisted GStack actions regardless of evaluation mode."""
+        if isinstance(evaluation_result, GStackPanelResult):
+            return sum(len(session.actions) for session in evaluation_result.sessions)
+        return len(evaluation_result.actions)
+
+    @staticmethod
+    def _build_timeout_session(hypothesis: dict[str, Any]) -> GStackSession:
+        """Create a synthetic session so stalled evaluations still leave a usable record."""
+        session = GStackSession(
+            session_id=f"gstack_timeout_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            hypothesis=hypothesis.get("hypothesis", ""),
+            problem=hypothesis.get("problem", ""),
+            solution=hypothesis.get("solution", ""),
+            target_user=hypothesis.get("target_user", ""),
+            persona="general",
+            verdict="needs_more_validation",
+            confidence=0.2,
+        )
+        session.add_action(
+            action="evaluation_timeout",
+            status="error",
+            output="GStack evaluation timed out before a full review completed.",
+        )
+        session.key_findings.append(
+            "Evaluation was time-bounded to keep the business pipeline responsive."
+        )
+        session.blockers.append(
+            "Need a shorter validation pass or smaller prompt context before a full committee review."
+        )
+        session.complete("needs_more_validation", 0.2)
+        return session
+
     def _get_innovation_proposals(self) -> list[dict]:
         """Get proposals from Innovation Mind."""
         if not self.innovation_scheduler:
@@ -232,14 +349,17 @@ class EntrepreneurScheduler(BaseMindScheduler):
                     logger.warning("[Entrepreneur] Obsidian write failed: %s", e)
 
     async def _query_pending_business_proposals(self) -> list[dict]:
-        """Query Residual proposals waiting for business evaluation."""
+        """Query proposals waiting for business evaluation."""
         if not self.graph_db:
             return []
         try:
-            nodes = await self.graph_db.get_nodes_by_property(
-                "residual_proposal", "status", "pending_business"
-            )
-            return nodes
+            nodes_by_id: dict[str, dict] = {}
+            for node_type in ("residual_proposal", "reactor_proposal"):
+                for node in await self.graph_db.get_nodes_by_property(
+                    node_type, "status", "pending_business"
+                ):
+                    nodes_by_id[node["id"]] = node
+            return list(nodes_by_id.values())
         except Exception as e:
             logger.exception("[Entrepreneur] Failed to query pending business proposals: %s", e)
             return []
@@ -651,6 +771,8 @@ class EntrepreneurScheduler(BaseMindScheduler):
     async def _write_rejection_feedback(self, proposal_node: dict, reason: str) -> None:
         """Append rejection reason to the Residual Feedback Index for future learning."""
         if not self.graph_db:
+            return
+        if proposal_node.get("type") != "residual_proposal":
             return
         try:
             label = proposal_node.get("label", "")

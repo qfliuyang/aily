@@ -201,7 +201,7 @@ class TextProcessor(ContentProcessor):
         """Convert key MinerU content blocks into Chaos visual elements."""
         visual_elements: list[VisualElement] = []
 
-        for idx, item in enumerate(items[:30]):
+        for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
             item_type = str(item.get("type", "")).lower()
@@ -219,22 +219,70 @@ class TextProcessor(ContentProcessor):
                 "content",
             ):
                 value = item.get(key)
-                if isinstance(value, list):
-                    description_parts.extend(str(part) for part in value if str(part).strip())
-                elif isinstance(value, str) and value.strip():
-                    description_parts.append(value.strip())
+                description_parts.extend(self._flatten_mineru_text(value))
+
+            content = item.get("content")
+            if isinstance(content, dict):
+                for key in (
+                    "image_caption",
+                    "table_caption",
+                    "chart_caption",
+                    "image_footnote",
+                    "table_footnote",
+                    "chart_footnote",
+                    "html",
+                    "text",
+                ):
+                    description_parts.extend(self._flatten_mineru_text(content.get(key)))
 
             description = " ".join(description_parts).strip() or item_type.title()
+            asset_path = self._extract_mineru_asset_path(item)
             visual_elements.append(
                 VisualElement(
                     element_id=f"mineru_{item_type}_{idx}",
                     element_type=item_type,
                     description=description[:500],
                     source_page=item.get("page_idx") + 1 if isinstance(item.get("page_idx"), int) else None,
+                    asset_path=asset_path,
                 )
             )
+            if len(visual_elements) >= 60:
+                break
 
         return visual_elements
+
+    def _extract_mineru_asset_path(self, item: dict) -> str | None:
+        """Extract the relative asset path from old or v2 MinerU content-list items."""
+        img_path = item.get("img_path")
+        if isinstance(img_path, str) and img_path.strip():
+            return img_path.strip()
+
+        content = item.get("content")
+        if isinstance(content, dict):
+            image_source = content.get("image_source")
+            if isinstance(image_source, dict):
+                path = image_source.get("path")
+                if isinstance(path, str) and path.strip():
+                    return path.strip()
+
+        return None
+
+    def _flatten_mineru_text(self, value: object) -> list[str]:
+        """Normalize MinerU caption/footnote fields into plain text fragments."""
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return [cleaned] if cleaned else []
+        if isinstance(value, dict):
+            flattened: list[str] = []
+            for key in ("content", "text", "html"):
+                flattened.extend(self._flatten_mineru_text(value.get(key)))
+            return flattened
+        if isinstance(value, list):
+            flattened: list[str] = []
+            for item in value:
+                flattened.extend(self._flatten_mineru_text(item))
+            return flattened
+        return []
 
     async def _maybe_fetch_urls_to_markdown(
         self,

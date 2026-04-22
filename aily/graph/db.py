@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,9 +18,10 @@ class GraphDB:
 
     async def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(self.db_path)
+        self._db = await aiosqlite.connect(self.db_path, timeout=30.0)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
+        await self._db.execute("PRAGMA busy_timeout=30000")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS nodes (
@@ -116,6 +118,20 @@ class GraphDB:
         )
         await self._db.commit()
 
+    async def _retry_db_op(self, op, attempts: int = 5, base_delay: float = 0.2):
+        """Retry transient SQLite lock errors."""
+        last_exc = None
+        for attempt in range(attempts):
+            try:
+                return await op()
+            except aiosqlite.OperationalError as exc:
+                last_exc = exc
+                if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                    raise
+                await asyncio.sleep(base_delay * (attempt + 1))
+        if last_exc is not None:
+            raise last_exc
+
     async def close(self) -> None:
         if self._db:
             await self._db.close()
@@ -124,14 +140,18 @@ class GraphDB:
     async def _execute(self, sql: str, params: tuple | None = None) -> None:
         if self._db is None:
             raise RuntimeError("GraphDB not initialized")
-        await self._db.execute(sql, params or ())
-        await self._db.commit()
+        async def op():
+            await self._db.execute(sql, params or ())
+            await self._db.commit()
+        await self._retry_db_op(op)
 
     async def _fetchall(self, sql: str, params: tuple | None = None) -> list[tuple]:
         if self._db is None:
             raise RuntimeError("GraphDB not initialized")
-        cursor = await self._db.execute(sql, params or ())
-        return await cursor.fetchall()
+        async def op():
+            cursor = await self._db.execute(sql, params or ())
+            return await cursor.fetchall()
+        return await self._retry_db_op(op)
 
     async def insert_node(self, node_id: str, node_type: str, label: str, source: str) -> None:
         await self._execute(
@@ -505,24 +525,26 @@ class GraphDB:
         """Set a single JSON-serializable property on a node."""
         if self._db is None:
             raise RuntimeError("GraphDB not initialized")
-        row = await self._db.execute(
-            "SELECT properties FROM node_properties WHERE node_id = ?",
-            (node_id,),
-        )
-        result = await row.fetchone()
-        props = json.loads(result[0]) if result else {}
-        props[key] = value
-        await self._db.execute(
-            """
-            INSERT INTO node_properties (node_id, properties, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(node_id) DO UPDATE SET
-                properties = excluded.properties,
-                updated_at = excluded.updated_at
-            """,
-            (node_id, json.dumps(props, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
-        )
-        await self._db.commit()
+        async def op():
+            row = await self._db.execute(
+                "SELECT properties FROM node_properties WHERE node_id = ?",
+                (node_id,),
+            )
+            result = await row.fetchone()
+            props = json.loads(result[0]) if result else {}
+            props[key] = value
+            await self._db.execute(
+                """
+                INSERT INTO node_properties (node_id, properties, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(node_id) DO UPDATE SET
+                    properties = excluded.properties,
+                    updated_at = excluded.updated_at
+                """,
+                (node_id, json.dumps(props, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+            )
+            await self._db.commit()
+        await self._retry_db_op(op)
 
     async def get_node_properties(self, node_id: str) -> dict[str, object]:
         """Get all properties for a node as a dict."""

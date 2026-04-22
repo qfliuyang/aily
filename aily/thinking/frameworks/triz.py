@@ -6,6 +6,7 @@ and applies 40 inventive principles to resolve them.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from aily.thinking.frameworks.base import FrameworkAnalyzer
@@ -98,8 +99,12 @@ class TrizAnalyzer(FrameworkAnalyzer):
 
         evolution_analysis = None
         if "evolution_analysis" in analysis_data:
+            evolution_payload = dict(analysis_data["evolution_analysis"])
+            evolution_payload["evolution_trends"] = self._normalize_evolution_trends(
+                evolution_payload.get("evolution_trends", [])
+            )
             evolution_analysis = EvolutionAnalysis(
-                **analysis_data["evolution_analysis"]
+                **evolution_payload
             )
 
         key_insights = analysis_data.get("key_insights", [])
@@ -136,6 +141,32 @@ class TrizAnalyzer(FrameworkAnalyzer):
             raw_analysis=raw_analysis,
             processing_time_ms=processing_time_ms,
         )
+
+    @staticmethod
+    def _normalize_evolution_trends(trends: Any) -> list[str]:
+        """Coerce model-generated trend objects into readable strings."""
+        if not isinstance(trends, list):
+            return []
+
+        normalized: list[str] = []
+        for item in trends:
+            if isinstance(item, str):
+                normalized.append(item)
+                continue
+            if isinstance(item, dict):
+                trend = str(item.get("trend", "")).strip()
+                description = str(item.get("description", "")).strip()
+                if trend and description:
+                    normalized.append(f"{trend}: {description}")
+                elif trend:
+                    normalized.append(trend)
+                elif description:
+                    normalized.append(description)
+                else:
+                    normalized.append(json.dumps(item, ensure_ascii=False))
+                continue
+            normalized.append(str(item))
+        return normalized
 
     @staticmethod
     def _parse_priority(

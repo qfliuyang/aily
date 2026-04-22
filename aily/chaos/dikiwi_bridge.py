@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from aily.chaos.types import ExtractedContentMultimodal
+from aily.config import SETTINGS
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.sessions.dikiwi_mind import DikiwiMind
 
@@ -94,7 +96,8 @@ class ChaosDikiwiBridge:
             }
 
         drops = [self._create_raindrop(content) for content in contents]
-        batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
+        async with self._batch_lock():
+            batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
 
         results: list[dict[str, Any]] = []
         processed = 0
@@ -146,6 +149,85 @@ class ChaosDikiwiBridge:
             "post_information_nodes": batch_run.post_information_nodes,
         }
 
+    async def process_chaos_markdown_batch(
+        self,
+        note_paths: list[Path],
+    ) -> dict[str, Any]:
+        """Process existing 00-Chaos markdown notes as one DIKIWI batch."""
+        drops: list[RainDrop] = []
+        effective_paths: list[Path] = []
+
+        for note_path in note_paths:
+            drop = self._create_raindrop_from_chaos_markdown(note_path)
+            if drop is None:
+                continue
+            drops.append(drop)
+            effective_paths.append(note_path)
+
+        if not drops:
+            return {
+                "results": [],
+                "processed": 0,
+                "failed": 0,
+                "zettels_created": 0,
+                "insights": 0,
+                "incremental_ratio": 0.0,
+                "higher_order_triggered": False,
+            }
+
+        async with self._batch_lock():
+            batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
+
+        results: list[dict[str, Any]] = []
+        processed = 0
+        failed = 0
+        total_zettels = 0
+        total_insights = 0
+
+        for note_path, drop, pipeline_result in zip(effective_paths, drops, batch_run.results):
+            final_stage = pipeline_result.final_stage_reached
+            final_stage_name = final_stage.name if final_stage else "UNKNOWN"
+
+            zettels_created = 0
+            insights_count = 0
+            stage_error = None
+            for sr in pipeline_result.stage_results:
+                if sr.success:
+                    zettels_created += len(sr.data.get("zettels", []))
+                    insights_count += len(sr.data.get("insights", []))
+                elif stage_error is None:
+                    stage_error = sr.error_message or f"{sr.stage.name} failed"
+
+            item = {
+                "drop_id": drop.id,
+                "pipeline_id": pipeline_result.pipeline_id,
+                "stage": final_stage_name,
+                "zettels_created": zettels_created,
+                "insights": insights_count,
+                "chaos_note_path": str(note_path),
+            }
+            if stage_error:
+                item["error"] = stage_error
+                failed += 1
+            else:
+                processed += 1
+                total_zettels += zettels_created
+                total_insights += insights_count
+            results.append(item)
+
+        return {
+            "results": results,
+            "processed": processed,
+            "failed": failed,
+            "zettels_created": total_zettels,
+            "insights": total_insights,
+            "incremental_ratio": batch_run.incremental_ratio,
+            "incremental_threshold": batch_run.incremental_threshold,
+            "higher_order_triggered": batch_run.higher_order_triggered,
+            "pre_information_nodes": batch_run.pre_information_nodes,
+            "post_information_nodes": batch_run.post_information_nodes,
+        }
+
     def _create_raindrop(self, content: ExtractedContentMultimodal) -> RainDrop:
         """Convert Chaos content to RainDrop for DIKIWI processing."""
         # Build rich content from extracted data
@@ -172,6 +254,9 @@ class ChaosDikiwiBridge:
             "source_type": content.source_type,
             "has_transcript": content.transcript is not None,
             "visual_elements_count": len(content.visual_elements),
+            "visual_elements": [elem.to_dict() for elem in content.visual_elements],
+            "chaos_note_path": content.metadata.get("chaos_note_path"),
+            "chaos_visual_assets": content.metadata.get("chaos_visual_assets", []),
             "original_tags": content.tags,
             "title": content.title,
         }
@@ -194,6 +279,71 @@ class ChaosDikiwiBridge:
             content=content_text,
             source="chaos_processor",
             source_id=str(content.source_path) if content.source_path else "unknown",
+            stream_type=StreamType.EXTRACT_ANALYZE,
+            metadata=metadata,
+        )
+
+    class _BatchLock:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.token = f"{os.getpid()}:{datetime.now().isoformat()}"
+
+        async def __aenter__(self) -> Path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(self.token, encoding="utf-8")
+            return self.path
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            try:
+                if self.path.exists() and self.path.read_text(encoding="utf-8") == self.token:
+                    self.path.unlink()
+            except Exception:
+                logger.warning("Failed to clean up DIKIWI batch lock: %s", self.path)
+
+    def _batch_lock(self) -> _BatchLock:
+        return self._BatchLock(SETTINGS.dikiwi_batch_lock_path)
+
+    def _create_raindrop_from_chaos_markdown(self, note_path: Path) -> RainDrop | None:
+        """Convert an existing 00-Chaos markdown note into a RainDrop."""
+        try:
+            raw = note_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to read chaos note %s: %s", note_path, exc)
+            return None
+
+        if note_path.name == "00 Zettelkasten Index.md":
+            return None
+
+        lines = raw.splitlines()
+        title = note_path.stem.replace("_", " ")
+        if lines and lines[0].startswith("# "):
+            title = lines[0][2:].strip() or title
+
+        original_file = ""
+        for line in lines[:12]:
+            if line.startswith("**Original File:**"):
+                original_file = line.split(":", 1)[1].strip()
+                break
+
+        if "\n---\n" in raw:
+            body = raw.split("\n---\n", 1)[1].strip()
+        else:
+            body = raw.strip()
+
+        content_text = f"# {title}\n\n{body}".strip()
+        metadata = {
+            "source_type": "chaos_markdown",
+            "source_paths": [str(note_path)],
+            "original_file": original_file,
+            "chaos_note_path": str(note_path),
+        }
+
+        return RainDrop(
+            id="",
+            rain_type=RainType.DOCUMENT,
+            content=content_text,
+            source="chaos_processor",
+            source_id=str(note_path),
             stream_type=StreamType.EXTRACT_ANALYZE,
             metadata=metadata,
         )

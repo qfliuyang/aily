@@ -78,3 +78,59 @@ async def test_relation_labels_do_not_become_graph_topic_nodes(tmp_path):
     assert 'semantic_topics:' not in text
     assert "[[99-MOC/example_of|#example_of]]" not in text
     assert not (tmp_path / "99-MOC" / "example_of.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_human_titles_are_not_truncated_in_written_notes(tmp_path):
+    writer = DikiwiObsidianWriter(vault_path=tmp_path, zettelkasten_only=False)
+
+    long_insight = (
+        "This insight title should remain fully intact without any artificial truncation "
+        "because shortening it changes the meaning of the conclusion"
+    )
+    long_wisdom = (
+        "This wisdom principle should remain fully intact without any artificial truncation "
+        "because shortening it changes the meaning of the principle"
+    )
+    long_impact = (
+        "This impact proposal should remain fully intact without any artificial truncation "
+        "because shortening it changes the meaning of the action"
+    )
+
+    class Insight:
+        insight_type = "pattern"
+        description = long_insight
+        confidence = 0.9
+
+    insight_paths = await writer.write_insights("msg1", [Insight()], "Source Note")
+    wisdom_paths = await writer.write_wisdom(
+        "msg2",
+        [{"principle": long_wisdom, "context": "", "implications": []}],
+    )
+    impact_paths = await writer.write_impact(
+        "msg3",
+        [{"proposal": long_impact, "rationale": "Because it matters.", "expected_outcome": "Clarity"}],
+    )
+
+    insight_text = insight_paths[0].read_text(encoding="utf-8")
+    wisdom_text = wisdom_paths[0].read_text(encoding="utf-8")
+    impact_text = impact_paths[0].read_text(encoding="utf-8")
+
+    assert f"# 🔍 Pattern: {long_insight}" in insight_text
+    assert f"# 🧠 Principle: {long_wisdom}" in wisdom_text
+    assert f"# 🚀 Proposal: {long_impact}" in impact_text
+
+
+@pytest.mark.asyncio
+async def test_reactor_notes_route_to_07_proposal(tmp_path):
+    writer = DikiwiObsidianWriter(vault_path=tmp_path, zettelkasten_only=False)
+
+    path = await writer.write_note(
+        title="Innovation: Timing Closure Copilot",
+        markdown="# Proposal\n\nDetails",
+        source_url="aily://reactor/2026-04-22/0",
+    )
+
+    note_path = Path(path)
+    assert note_path.parent.parent == tmp_path / "07-Proposal"
+    assert note_path.exists()

@@ -171,11 +171,15 @@ class GStackAgent:
         tool_executor: Callable | None = None,
         obsidian_writer: Any | None = None,
         graph_db: Any | None = None,
+        request_timeout_seconds: float = 90.0,
+        guru_timeout_seconds: float = 120.0,
     ) -> None:
         self.llm_client = llm_client
         self.tool_executor = tool_executor
         self.obsidian_writer = obsidian_writer
         self.graph_db = graph_db
+        self.request_timeout_seconds = max(5.0, float(request_timeout_seconds))
+        self.guru_timeout_seconds = max(self.request_timeout_seconds, float(guru_timeout_seconds))
 
         # Available GStack actions
         self.actions = {
@@ -186,6 +190,23 @@ class GStackAgent:
             "assess_tech_risk": self._assess_tech_risk,
             "check_deployment_readiness": self._check_deployment_readiness,
         }
+
+    async def _chat_json(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float = 0.7,
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        """Bound LLM calls so GStack sessions degrade instead of hanging forever."""
+        timeout = self.request_timeout_seconds if timeout_seconds is None else float(timeout_seconds)
+        return await asyncio.wait_for(
+            self.llm_client.chat_json(
+                messages=messages,
+                temperature=temperature,
+            ),
+            timeout=max(5.0, timeout),
+        )
 
     @staticmethod
     def _is_deeptech_context(context: dict[str, Any] | None = None, text: str = "") -> bool:
@@ -375,7 +396,7 @@ Return JSON:
 }}"""
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{
                     "role": "system",
                     "content": self._persona_system_prompt("general", context),
@@ -557,7 +578,7 @@ Return JSON:
 }}"""
 
         try:
-            return await self.llm_client.chat_json(
+            return await self._chat_json(
                 messages=[
                     {
                         "role": "system",
@@ -569,6 +590,7 @@ Return JSON:
                     },
                 ],
                 temperature=0.4,
+                timeout_seconds=self.guru_timeout_seconds,
             )
         except Exception as e:
             logger.error("[GStack Guru] Appendix generation failed: %s", e)
@@ -670,7 +692,7 @@ Return JSON:
 }}"""
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
             )
@@ -749,7 +771,7 @@ Return JSON:
 }}"""
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
             )
@@ -798,7 +820,7 @@ Return JSON:
 }}"""
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.8,
             )
@@ -845,7 +867,7 @@ Return JSON:
 }}"""
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
             )
@@ -946,7 +968,7 @@ Return JSON:
         })
 
         try:
-            result = await self.llm_client.chat_json(
+            result = await self._chat_json(
                 messages=[{
                     "role": "system",
                     "content": system_prompt,
@@ -969,7 +991,7 @@ Return JSON:
         """Generate human-readable session report."""
 
         lines = [
-            f"# GStack Evaluation: {session.hypothesis[:60]}...",
+            f"# GStack Evaluation: {session.hypothesis}",
             "",
             f"**Persona:** {GSTACK_PERSONAS.get(session.persona, {}).get('name', session.persona)}",
             f"**Verdict:** {session.verdict.upper()}",
@@ -1009,7 +1031,7 @@ Return JSON:
         """Generate human-readable panel report."""
 
         lines = [
-            f"# GStack Panel Evaluation: {panel.sessions[0].hypothesis[:60]}..." if panel.sessions else "# GStack Panel Evaluation",
+            f"# GStack Panel Evaluation: {panel.sessions[0].hypothesis}" if panel.sessions else "# GStack Panel Evaluation",
             "",
             f"**Final Verdict:** {panel.final_verdict.upper()}",
             f"**Final Confidence:** {panel.final_confidence:.0%}",

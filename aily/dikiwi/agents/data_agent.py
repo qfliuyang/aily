@@ -33,31 +33,39 @@ class DataAgent(DikiwiAgent):
         try:
             drop = await self._markdownize_drop(ctx)
             content = drop.content
+            visual_data_points = self._build_visual_data_points(ctx)
 
             # Content quality gate: skip LLM extraction on obviously thin content
             quality_check = self._assess_content_quality(content)
             if quality_check["is_too_thin"]:
-                logger.warning(
-                    "[DIKIWI] Content quality too low for %s: %s",
-                    drop.source,
-                    quality_check["reason"],
-                )
-                processing_time = (time.time() - start) * 1000
-                return StageResult(
-                    stage=DikiwiStage.DATA,
-                    success=True,
-                    items_processed=1,
-                    items_output=0,
-                    processing_time_ms=processing_time,
-                    data={
-                        "data_points": [],
-                        "doc_title": "",
-                        "doc_summary": "",
-                        "data_note_id": "",
-                        "quality_assessment": "low",
-                        "quality_reason": quality_check["reason"],
-                    },
-                )
+                if visual_data_points:
+                    logger.info(
+                        "[DIKIWI] Text quality low for %s but retaining %d visual datapoints",
+                        drop.source,
+                        len(visual_data_points),
+                    )
+                else:
+                    logger.warning(
+                        "[DIKIWI] Content quality too low for %s: %s",
+                        drop.source,
+                        quality_check["reason"],
+                    )
+                    processing_time = (time.time() - start) * 1000
+                    return StageResult(
+                        stage=DikiwiStage.DATA,
+                        success=True,
+                        items_processed=1,
+                        items_output=0,
+                        processing_time_ms=processing_time,
+                        data={
+                            "data_points": [],
+                            "doc_title": "",
+                            "doc_summary": "",
+                            "data_note_id": "",
+                            "quality_assessment": "low",
+                            "quality_reason": quality_check["reason"],
+                        },
+                    )
 
             # Add input to memory
             if ctx.memory:
@@ -96,6 +104,9 @@ class DataAgent(DikiwiAgent):
             data_points = all_data_points
             if not data_points:
                 data_points = await self._llm_fallback_extraction(content, drop.source, ctx)
+            if visual_data_points:
+                data_points = self._merge_data_points(data_points, visual_data_points)
+            data_points = self._filter_data_points(data_points)
 
             processing_time = (time.time() - start) * 1000
 
@@ -105,20 +116,21 @@ class DataAgent(DikiwiAgent):
                     f"Examples: {', '.join(dp.concept or dp.content[:50] for dp in data_points[:3])}..."
                 )
 
-            # Build raw content chunks for 01-Data (unclassified datapoints)
-            raw_chunks = self._chunk_content(content, chunk_size=800)
-
-            # Write raw unclassified chunks to 01-Data
             data_note_ids: list[str] = []
+            data_note_id_map: dict[str, str] = {}
             if ctx.dikiwi_obsidian_writer:
                 try:
-                    data_note_ids = await ctx.dikiwi_obsidian_writer.write_raw_data_chunks(
-                        message_id=ctx.pipeline_id,
-                        chunks=raw_chunks,
-                        source=drop.source,
-                    )
+                    source_paths = ctx.drop.metadata.get("source_paths", [])
+                    for data_point in data_points:
+                        note_id = await ctx.dikiwi_obsidian_writer.write_data_point_note(
+                            data_point=data_point,
+                            source=drop.source,
+                            source_paths=source_paths,
+                        )
+                        data_note_ids.append(note_id)
+                        data_note_id_map[data_point.id] = note_id
                 except Exception as e:
-                    logger.warning("[DIKIWI] Failed to write raw data chunks: %s", e)
+                    logger.warning("[DIKIWI] Failed to write data point notes: %s", e)
 
             return StageResult(
                 stage=DikiwiStage.DATA,
@@ -132,6 +144,7 @@ class DataAgent(DikiwiAgent):
                     "doc_summary": doc_summary,
                     "data_note_id": data_note_ids[0] if data_note_ids else "",
                     "data_note_ids": data_note_ids,
+                    "data_note_id_map": data_note_id_map,
                 },
             )
 
@@ -150,10 +163,13 @@ class DataAgent(DikiwiAgent):
         drop = ctx.drop
         metadata = getattr(drop, "metadata", {})
         if (
-            metadata.get("source_type") == "url_markdown"
+            metadata.get("source_type") in {"url_markdown", "chaos_markdown"}
             or metadata.get("processing_method") == "browser_url_markdown_fetch"
         ):
-            logger.info("[DIKIWI] Skipping markdownize for pre-fetched URL markdown")
+            logger.info(
+                "[DIKIWI] Skipping markdownize for pre-normalized content type=%s",
+                metadata.get("source_type", "unknown"),
+            )
             return drop
 
         content = drop.content
@@ -311,6 +327,7 @@ class DataAgent(DikiwiAgent):
         meta = {
             "title": str(result.get("title", "")),
             "summary": str(result.get("summary", "")),
+            "quality_assessment": str(result.get("quality_assessment", "medium")).lower(),
         }
         data_points: list[DataPoint] = []
         for i, pd in enumerate(result.get("data_points", [])):
@@ -324,6 +341,11 @@ class DataAgent(DikiwiAgent):
                     source=source,
                     confidence=float(pd.get("confidence", 0.8)),
                     concept=str(pd.get("concept", "")),
+                    source_evidence=[
+                        str(e).strip()
+                        for e in pd.get("source_evidence", [])
+                        if isinstance(e, str) and str(e).strip()
+                    ][:3],
                 )
             )
         return data_points, meta
@@ -365,3 +387,148 @@ class DataAgent(DikiwiAgent):
                 confidence=0.0,
             )
         ]
+
+    def _filter_data_points(self, data_points: list[DataPoint]) -> list[DataPoint]:
+        filtered: list[DataPoint] = []
+        seen: set[str] = set()
+        for data_point in data_points:
+            content = getattr(data_point, "content", "").strip()
+            if not content:
+                continue
+            reason = self._data_point_rejection_reason(data_point)
+            if reason:
+                logger.info("[DIKIWI] Dropping low-quality datapoint %s: %s", data_point.id, reason)
+                continue
+            key = " ".join(content.lower().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered.append(data_point)
+        return filtered
+
+    def _data_point_rejection_reason(self, data_point: DataPoint) -> str | None:
+        content = " ".join(data_point.content.split())
+        if data_point.modality == "visual":
+            if len(content) < 20:
+                return "visual datapoint too short"
+            return None
+
+        words = content.split()
+        if len(words) < 7:
+            return "too few words"
+        if len(content) < 45:
+            return "too short"
+
+        alpha_chars = sum(ch.isalpha() for ch in content)
+        punctuation_chars = sum(not ch.isalnum() and not ch.isspace() for ch in content)
+        if alpha_chars < 0.45 * max(len(content), 1):
+            return "too few alphabetic characters"
+        if punctuation_chars > 0.18 * max(len(content), 1):
+            return "too much punctuation noise"
+
+        long_words = [word for word in words if len(word) >= 4]
+        if len(long_words) < 3:
+            return "not enough meaningful tokens"
+
+        avg_word_len = sum(len(word) for word in words) / max(len(words), 1)
+        if avg_word_len < 3.2:
+            return "word shapes look like OCR noise"
+
+        generic_fillers = (
+            "plays a crucial role",
+            "is important because",
+            "has significant implications",
+            "strategic pathways",
+            "advantages for specialized hardware",
+            "involves various aspects",
+        )
+        lowered = content.lower()
+        if any(phrase in lowered for phrase in generic_fillers):
+            return "generic abstraction filler"
+
+        return None
+
+    def _build_visual_data_points(self, ctx: AgentContext) -> list[DataPoint]:
+        from aily.sessions.dikiwi_mind import DataPoint
+
+        metadata = getattr(ctx.drop, "metadata", {}) or {}
+        raw_visuals = metadata.get("visual_elements", [])
+        if not isinstance(raw_visuals, list):
+            return []
+
+        asset_map: dict[str, str] = {}
+        for entry in metadata.get("chaos_visual_assets", []):
+            if not isinstance(entry, dict):
+                continue
+            asset_path = entry.get("asset_path")
+            wikilink = entry.get("wikilink")
+            if isinstance(asset_path, str) and isinstance(wikilink, str):
+                asset_map[asset_path] = wikilink
+
+        visual_points: list[DataPoint] = []
+        for index, item in enumerate(raw_visuals):
+            if not isinstance(item, dict):
+                continue
+
+            description = str(item.get("description", "")).strip()
+            ocr_text = str(item.get("ocr_text", "")).strip()
+            analysis = str(item.get("llm_analysis", "")).strip()
+            element_type = str(item.get("element_type", "")).strip() or "visual"
+            asset_path = str(item.get("asset_path", "")).strip()
+
+            parts = []
+            if description:
+                parts.append(description)
+            if ocr_text:
+                parts.append(f"OCR: {ocr_text}")
+            if analysis:
+                parts.append(f"Analysis: {analysis}")
+            content = "\n".join(parts).strip()
+            if not content:
+                continue
+
+            source_page = item.get("source_page")
+            if not isinstance(source_page, int):
+                source_page = None
+
+            concept = description or f"{element_type.title()} datum {index + 1}"
+            context_bits = [f"Visual datapoint extracted from {element_type}"]
+            if source_page is not None:
+                context_bits.append(f"page {source_page}")
+
+            embeds = []
+            if asset_path and asset_path in asset_map:
+                embeds.append(asset_map[asset_path])
+
+            visual_points.append(
+                DataPoint(
+                    id=f"dpv_{uuid.uuid4().hex[:8]}_{index}",
+                    content=content,
+                    source=ctx.drop.source,
+                    context=", ".join(context_bits),
+                    confidence=0.95,
+                    concept=concept,
+                    modality="visual",
+                    source_page=source_page,
+                    visual_type=element_type,
+                    asset_embeds=embeds,
+                )
+            )
+
+        return visual_points
+
+    @staticmethod
+    def _merge_data_points(primary: list[DataPoint], additional: list[DataPoint]) -> list[DataPoint]:
+        seen = {
+            " ".join(dp.content.lower().split())
+            for dp in primary
+            if getattr(dp, "content", "").strip()
+        }
+        merged = list(primary)
+        for data_point in additional:
+            key = " ".join(data_point.content.lower().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(data_point)
+        return merged

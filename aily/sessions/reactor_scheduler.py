@@ -36,6 +36,16 @@ class InnovationMethod(Enum):
     FIRST_PRINCIPLES = "first_principles"
 
 
+DEFAULT_REACTOR_METHODS = {
+    InnovationMethod.TRIZ,
+    InnovationMethod.SIT,
+    InnovationMethod.SIX_HATS,
+    InnovationMethod.SCAMPER,
+    InnovationMethod.BLUE_OCEAN,
+    InnovationMethod.FIRST_PRINCIPLES,
+}
+
+
 @dataclass
 class MethodResult:
     """Result from a single innovation method."""
@@ -54,13 +64,7 @@ class NozzleConfig:
     min_feasibility_score: float = 0.4
     max_proposals_per_session: int = 10
     diversity_threshold: float = 0.7
-    enabled_methods: set = field(default_factory=lambda: {
-        InnovationMethod.SIT,
-        InnovationMethod.SIX_HATS,
-        InnovationMethod.SCAMPER,
-        InnovationMethod.BLUE_OCEAN,
-        InnovationMethod.FIRST_PRINCIPLES,
-    })
+    enabled_methods: set = field(default_factory=lambda: set(DEFAULT_REACTOR_METHODS))
 
 
 class ReactorScheduler(BaseMindScheduler):
@@ -218,6 +222,7 @@ class ReactorScheduler(BaseMindScheduler):
         # Synthesis nozzle
         proposals = await self._synthesis_nozzle(valid_results)
         self._current_session_proposals = proposals
+        await self._persist_framework_proposals(proposals)
 
         # Output
         await self._output_proposals(proposals, session_start)
@@ -251,6 +256,8 @@ class ReactorScheduler(BaseMindScheduler):
             context = {**context, "_llm_budget": budget}
 
         try:
+            if method == InnovationMethod.TRIZ:
+                return await self._run_triz_method(context)
             result = await analyzer.analyze(context)
             processing_time = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
 
@@ -271,7 +278,7 @@ class ReactorScheduler(BaseMindScheduler):
             )
 
     async def _synthesis_nozzle(self, results: list[MethodResult]) -> list[Proposal]:
-        """Filter and synthesize proposals."""
+        """Combine framework outputs without deciding the final business winner."""
         all_proposals: list[Proposal] = []
         for result in results:
             all_proposals.extend(result.proposals)
@@ -279,17 +286,184 @@ class ReactorScheduler(BaseMindScheduler):
         if not all_proposals:
             return []
 
-        # Filter by confidence
-        filtered = [
-            p for p in all_proposals
-            if p.confidence >= self.nozzle_config.min_confidence
-        ]
+        deduped: dict[str, Proposal] = {}
+        for proposal in all_proposals:
+            title = " ".join((proposal.title or "").lower().split())
+            key = title or proposal.id
+            existing = deduped.get(key)
+            if existing is None or proposal.confidence > existing.confidence:
+                deduped[key] = proposal
 
-        # Sort by confidence
-        filtered.sort(key=lambda x: x.confidence, reverse=True)
+        proposals = list(deduped.values())
+        proposals.sort(key=lambda x: x.confidence, reverse=True)
+        return proposals
 
-        # Limit output
-        return filtered[:self.nozzle_config.max_proposals_per_session]
+    async def _run_triz_method(self, context: dict[str, Any]) -> MethodResult:
+        """Adapt the legacy TRIZ analyzer into Reactor proposals."""
+        from aily.thinking.frameworks.triz import TrizAnalyzer
+        from aily.thinking.models import KnowledgePayload
+
+        analyzer = self._analyzers.get(InnovationMethod.TRIZ)
+        if analyzer is None:
+            analyzer = TrizAnalyzer(self.llm_client)
+            self._analyzers[InnovationMethod.TRIZ] = analyzer
+
+        recent_insights = context.get("recent_insights", [])
+        content_lines = [f"Focus Areas: {', '.join(context.get('focus_areas', ['general']))}"]
+        for insight in recent_insights[:12]:
+            if isinstance(insight, dict):
+                label = insight.get("label", "")
+                node_type = insight.get("type", "")
+                content_lines.append(f"- {node_type}: {label}".strip())
+            elif insight:
+                content_lines.append(f"- {insight}")
+        payload = KnowledgePayload(
+            content="\n".join(content_lines),
+            source_title="Reactor Context",
+            metadata={"focus_areas": context.get("focus_areas", [])},
+        )
+
+        insight = await analyzer.analyze(payload)
+        proposals = self._triz_insight_to_proposals(insight)
+        return MethodResult(
+            method=InnovationMethod.TRIZ,
+            proposals=proposals,
+            confidence=insight.confidence,
+            processing_time_ms=insight.processing_time_ms or 0,
+            metadata={"framework": "TRIZ"},
+        )
+
+    def _triz_insight_to_proposals(self, insight: Any) -> list[Proposal]:
+        """Convert FrameworkInsight-style TRIZ output into Reactor proposals."""
+        raw = getattr(insight, "raw_analysis", {}) or {}
+        contradictions = raw.get("contradictions", []) or []
+        recommendations = raw.get("principle_recommendations", []) or []
+        evolution = raw.get("evolution_analysis")
+        key_insights = list(getattr(insight, "insights", []) or [])
+
+        proposals: list[Proposal] = []
+        for index, recommendation in enumerate(recommendations[:3], start=1):
+            contradiction = contradictions[min(index - 1, len(contradictions) - 1)] if contradictions else None
+            contradiction_desc = getattr(contradiction, "description", "") if contradiction else ""
+            principle_number = getattr(recommendation, "principle_number", "")
+            principle_name = getattr(recommendation, "principle_name", "")
+            application = getattr(recommendation, "application", "")
+            confidence = float(getattr(recommendation, "confidence", getattr(insight, "confidence", 0.6)) or 0.6)
+            title_basis = contradiction_desc or application or (key_insights[0] if key_insights else "Inventive Resolution")
+            content_parts = [
+                application or "Apply the inventive principle to resolve the contradiction.",
+            ]
+            if contradiction_desc:
+                content_parts.extend(["", f"Contradiction: {contradiction_desc}"])
+            if key_insights:
+                content_parts.extend(["", "Key insights:"])
+                content_parts.extend([f"- {item}" for item in key_insights[:5]])
+            proposals.append(
+                Proposal(
+                    mind_name="reactor",
+                    title=f"TRIZ Principle {principle_number}: {title_basis}",
+                    content="\n".join(content_parts),
+                    summary=application or title_basis,
+                    confidence=confidence,
+                    priority="high" if confidence >= 0.8 else "medium",
+                    innovation_score=confidence,
+                    stage=ProposalStage.PENDING_BUSINESS,
+                    proposal_type=self._proposal_type_for_method(InnovationMethod.TRIZ),
+                    framework_used="TRIZ",
+                    metadata={
+                        "framework": "TRIZ",
+                        "principle_number": principle_number,
+                        "principle_name": principle_name,
+                        "contradiction": contradiction_desc,
+                        "key_insights": key_insights[:5],
+                    },
+                )
+            )
+
+        if not proposals and key_insights:
+            content = "\n".join(key_insights)
+            confidence = float(getattr(insight, "confidence", 0.6) or 0.6)
+            proposals.append(
+                Proposal(
+                    mind_name="reactor",
+                    title=f"TRIZ S-Curve Shift: {key_insights[0]}",
+                    content=content,
+                    summary=key_insights[0],
+                    confidence=confidence,
+                    priority="high" if confidence >= 0.8 else "medium",
+                    innovation_score=confidence,
+                    stage=ProposalStage.PENDING_BUSINESS,
+                    proposal_type=self._proposal_type_for_method(InnovationMethod.TRIZ),
+                    framework_used="TRIZ",
+                    metadata={"framework": "TRIZ"},
+                )
+            )
+
+        if evolution is not None:
+            prediction = getattr(evolution, "next_generation_prediction", "") or ""
+            if prediction:
+                confidence = float(getattr(insight, "confidence", 0.6) or 0.6)
+                proposals.append(
+                    Proposal(
+                        mind_name="reactor",
+                        title=f"TRIZ Next Generation: {prediction}",
+                        content=prediction,
+                        summary=prediction,
+                        confidence=confidence,
+                        priority="medium",
+                        innovation_score=confidence,
+                        stage=ProposalStage.PENDING_BUSINESS,
+                        proposal_type=self._proposal_type_for_method(InnovationMethod.TRIZ),
+                        framework_used="TRIZ",
+                        metadata={
+                            "framework": "TRIZ",
+                            "s_curve_position": getattr(evolution, "s_curve_position", ""),
+                            "evolution_trends": getattr(evolution, "evolution_trends", []),
+                        },
+                    )
+                )
+
+        return proposals
+
+    async def _persist_framework_proposals(self, proposals: list[Proposal]) -> None:
+        """Persist Reactor-generated proposals into GraphDB for entrepreneur review."""
+        if not self.graph_db:
+            return
+
+        for proposal in proposals:
+            if proposal.framework_used == "Reactor-Residual":
+                continue
+            try:
+                await self.graph_db.insert_node(
+                    node_id=proposal.id,
+                    node_type="reactor_proposal",
+                    label=f"{proposal.title}: {proposal.summary or proposal.content}",
+                    source="reactor",
+                )
+                await self.graph_db.set_node_property(proposal.id, "status", "pending_business")
+                await self.graph_db.set_node_property(proposal.id, "title", proposal.title)
+                await self.graph_db.set_node_property(proposal.id, "description", proposal.content)
+                await self.graph_db.set_node_property(proposal.id, "summary", proposal.summary)
+                await self.graph_db.set_node_property(proposal.id, "confidence", proposal.confidence)
+                await self.graph_db.set_node_property(proposal.id, "innovation_score", proposal.innovation_score or proposal.confidence)
+                await self.graph_db.set_node_property(proposal.id, "framework_used", proposal.framework_used)
+                await self.graph_db.set_node_property(proposal.id, "priority", proposal.priority)
+                await self.graph_db.set_node_property(proposal.id, "proposal_type", proposal.proposal_type.name.lower())
+                await self.graph_db.set_node_property(proposal.id, "stage", "pending_business")
+                await self.graph_db.set_node_property(proposal.id, "source_knowledge_ids", proposal.source_knowledge_ids)
+                for key, value in proposal.metadata.items():
+                    await self.graph_db.set_node_property(proposal.id, key, value)
+                for idx, source_id in enumerate(proposal.source_knowledge_ids):
+                    await self.graph_db.insert_edge(
+                        edge_id=f"reactor_{proposal.id}_{idx}",
+                        source_node_id=proposal.id,
+                        target_node_id=source_id,
+                        relation_type="informed_by",
+                        weight=proposal.confidence or 0.5,
+                        source="reactor",
+                    )
+            except Exception as exc:
+                logger.warning("[Reactor] Failed to persist proposal %s: %s", proposal.title, exc)
 
     async def _evaluate_residual_proposals(self, max_nodes: int | None = None) -> list[Proposal]:
         """Score and gate Residual proposals through innovation screening."""

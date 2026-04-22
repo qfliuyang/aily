@@ -5,6 +5,7 @@ Follows the same patterns as aily/thinking/models.py for consistency.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -102,6 +103,13 @@ class Proposal:
 
     def to_markdown(self) -> str:
         """Convert proposal to Markdown for Obsidian."""
+        def _as_markdown(value: Any) -> str:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, (int, float, bool)) or value is None:
+                return str(value)
+            return json.dumps(value, ensure_ascii=False, indent=2)
+
         lines = [
             f"# {self.title}",
             "",
@@ -114,11 +122,11 @@ class Proposal:
             "",
             "## Summary",
             "",
-            self.summary,
+            _as_markdown(self.summary),
             "",
             "## Details",
             "",
-            self.content,
+            _as_markdown(self.content),
             "",
         ]
 
@@ -138,7 +146,7 @@ class Proposal:
                 "```yaml",
             ])
             for key, value in self.metadata.items():
-                lines.append(f"{key}: {value}")
+                lines.append(f"{key}: {_as_markdown(value)}")
             lines.extend([
                 "```",
                 "",

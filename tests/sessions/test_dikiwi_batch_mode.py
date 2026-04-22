@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from aily.config import SETTINGS
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiStage, StageResult
 
@@ -92,3 +93,19 @@ async def test_batch_mode_runs_higher_order_only_for_affected_contexts(monkeypat
     impact_calls = [pipeline_id for stage, pipeline_id in log if stage == "IMPACT"]
     assert len(insight_calls) == 1
     assert insight_calls == wisdom_calls == impact_calls
+
+
+async def test_single_drop_chaos_processing_is_suppressed_when_batch_lock_active(tmp_path):
+    original_lock_path = SETTINGS.dikiwi_batch_lock_path
+    try:
+        SETTINGS.dikiwi_batch_lock_path = tmp_path / "dikiwi_batch.lock"
+        SETTINGS.dikiwi_batch_lock_path.write_text("active", encoding="utf-8")
+        mind = DikiwiMind(graph_db=None, llm_client=object())
+
+        result = await mind.process_input(_drop("locked"))
+
+        assert result.stage_results
+        assert result.stage_results[0].success is False
+        assert "batch lock" in (result.stage_results[0].error_message or "")
+    finally:
+        SETTINGS.dikiwi_batch_lock_path = original_lock_path

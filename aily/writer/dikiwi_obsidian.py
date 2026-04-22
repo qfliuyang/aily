@@ -769,12 +769,9 @@ LIMIT 10
         if not cleaned:
             return fallback
         sentence = cleaned.split(".")[0].strip()
-        candidate = sentence if 8 <= len(sentence) <= max_len else cleaned
-        if len(candidate) <= max_len:
-            return candidate
-        # Truncate at last word boundary, add ellipsis if truncated
-        truncated = candidate[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
-        return (truncated or fallback)
+        if sentence and len(sentence) >= 8:
+            return sentence
+        return cleaned
 
     @staticmethod
     def _extract_chunk_title(cleaned_chunk: str, chunk_index: int, max_len: int = 60) -> str:
@@ -824,15 +821,13 @@ LIMIT 10
             if stripped.startswith("#"):
                 title = stripped.lstrip("#").strip()
                 if len(title) >= 3 and title.lower() not in GENERIC_HEADINGS:
-                    return title if len(title) <= max_len else title[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
+                    return title
 
         # 2. Find first meaningful sentence across all lines
         for line in cleaned_chunk.splitlines():
             if _is_meaningful(line):
                 candidate = " ".join(line.split())
-                if len(candidate) <= max_len:
-                    return candidate
-                return candidate[:max_len].rsplit(" ", 1)[0].rstrip(" -:")
+                return candidate
 
         # 3. Fallback
         return f"Data Chunk {chunk_index}"
@@ -931,6 +926,68 @@ LIMIT 10
         body = "\n".join(body_parts)
         return self._write_dikiwi_note("01-Data", dikiwi_id, note_title, fm, body, source_paths)
 
+    async def write_data_point_note(
+        self,
+        data_point: Any,
+        source: str,
+        source_paths: list[str] | None = None,
+    ) -> str:
+        """Write one atomic DATA note for one extracted datapoint."""
+        data_point_id = getattr(data_point, "id", "")
+        content = getattr(data_point, "content", "")
+        concept = getattr(data_point, "concept", "")
+        context = getattr(data_point, "context", "")
+        confidence = float(getattr(data_point, "confidence", 0.8))
+        modality = getattr(data_point, "modality", "text") or "text"
+        source_page = getattr(data_point, "source_page", None)
+        visual_type = getattr(data_point, "visual_type", "")
+        asset_embeds = list(getattr(data_point, "asset_embeds", []))
+        source_evidence = list(getattr(data_point, "source_evidence", []))
+
+        dikiwi_id = f"data_{hashlib.sha1(data_point_id.encode()).hexdigest()[:8]}"
+        note_title = concept or self._title_short(content, fallback="Data Point")
+
+        fm: dict[str, Any] = {
+            "type": "data",
+            "data_point_id": data_point_id,
+            "source": source,
+            "confidence": round(confidence, 2),
+            "modality": modality,
+            "tags": _dedupe_preserve_order(["data", modality] + ([visual_type] if visual_type else [])),
+        }
+        if concept:
+            fm["concept"] = concept
+        if visual_type:
+            fm["visual_type"] = visual_type
+        if source_page is not None:
+            fm["source_page"] = source_page
+
+        body_parts = [
+            content,
+            "",
+            "## Data Characteristics",
+            f"- Concept: {concept or 'unlabeled datum'}",
+            f"- Modality: {modality}",
+            f"- Confidence: {confidence:.0%}",
+        ]
+        if source_page is not None:
+            body_parts.append(f"- Source Page: {source_page}")
+        if context:
+            body_parts.extend(["", "## Context", context])
+        if source_evidence:
+            body_parts.extend(["", "## Source Evidence", *[f"- {e}" for e in source_evidence]])
+        if asset_embeds:
+            body_parts.extend(["", "## Source Visuals", *asset_embeds])
+
+        return self._write_dikiwi_note(
+            "01-Data",
+            dikiwi_id,
+            note_title,
+            fm,
+            "\n".join(body_parts),
+            source_paths,
+        )
+
     async def write_information_note(
         self,
         node: Any,
@@ -938,6 +995,7 @@ LIMIT 10
         source: str,
         source_paths: list[str] | None = None,
         data_point_id: str = "",
+        data_note_ids: list[str] | None = None,
     ) -> str:
         """Write INFORMATION stage note for one classified idea chunk. Returns dikiwi_id."""
         nid = getattr(node, "id", "")
@@ -946,9 +1004,12 @@ LIMIT 10
         info_type = getattr(node, "info_type", "fact")
         tags = list(getattr(node, "tags", []))
         confidence = float(getattr(node, "confidence", 0.8) if hasattr(node, "confidence") else 0.8)
+        source_evidence = list(getattr(node, "source_evidence", []))
+        data_point_ids = list(getattr(node, "data_point_ids", []))
 
         dikiwi_id = f"information_{hashlib.sha1(nid.encode()).hexdigest()[:8]}"
-        title = self._title_short(content, fallback=f"{domain.title()} Concept")
+        concept = getattr(node, "concept", "")
+        title = concept or self._title_short(content, fallback=f"{domain.title()} Concept")
 
         fm: dict[str, Any] = {
             "type": "information",
@@ -957,20 +1018,32 @@ LIMIT 10
             "confidence": round(confidence, 2),
             "tags": _dedupe_preserve_order(["information", domain] + tags),
         }
+        if concept:
+            fm["concept"] = concept
         if data_note_id:
             fm["source"] = self._make_link(data_note_id)
         if data_point_id:
             fm["data_point_id"] = data_point_id
+        if data_point_ids:
+            fm["data_point_ids"] = data_point_ids
         body_lines = [
+            "## Classified Datum",
             content,
             "",
-            "## Classification",
+            "## Information Classification",
             f"- Domain: {domain}",
             f"- Type: {info_type}",
             f"- Confidence: {confidence:.0%}",
         ]
-        if data_note_id:
-            body_lines.append(f"- From: {self._make_link(data_note_id)}")
+        linked_notes = []
+        if data_note_ids:
+            linked_notes = [self._make_link(note_id) for note_id in data_note_ids if note_id]
+        elif data_note_id:
+            linked_notes = [self._make_link(data_note_id)]
+        if linked_notes:
+            body_lines.extend(["", "## Data Basis", *[f"- From Data: {link}" for link in linked_notes]])
+        if source_evidence:
+            body_lines.extend(["", "## Source Evidence", *[f"- {e}" for e in source_evidence]])
         body = "\n".join(body_lines)
 
         return self._write_dikiwi_note("02-Information", dikiwi_id, title, fm, body, source_paths)
@@ -1239,9 +1312,11 @@ LIMIT 10
         # the filesystem slug is bounded to stay within common filename limits.
         safe_title = _slugify_title(title, max_length=220).replace("/", "_").replace("..", "_")
 
-        # Route entrepreneur notes to dedicated folder
+        # Route scheduler notes to their dedicated folders.
         if source_url and source_url.startswith("aily://entrepreneur"):
             note_dir = self._get_day_dir("08-Entrepreneurship")
+        elif source_url and source_url.startswith("aily://reactor"):
+            note_dir = self._get_day_dir("07-Proposal")
         else:
             note_dir = self.vault_path
         path = note_dir / f"{safe_title}.md"
@@ -1568,7 +1643,7 @@ LIMIT 10
             content_lines = [
                 self._format_frontmatter(frontmatter),
                 f"",
-                f"# {emoji} {insight.insight_type.title()}: {insight.description[:50]}",
+                f"# {emoji} {insight.insight_type.title()}: {insight.description or 'Untitled'}",
                 f"",
                 f"{insight.description}",
                 f"",
@@ -1629,7 +1704,7 @@ LIMIT 10
             content_lines = [
                 self._format_frontmatter(frontmatter),
                 f"",
-                f"# 🧠 Principle: {principle[:50] if principle else 'Untitled'}",
+                f"# 🧠 Principle: {principle if principle else 'Untitled'}",
                 f"",
                 f"{principle}",
                 f"",
@@ -1693,7 +1768,7 @@ LIMIT 10
             content_lines = [
                 self._format_frontmatter(frontmatter),
                 f"",
-                f"# 🚀 Proposal: {proposal[:50] if proposal else 'Untitled'}",
+                f"# 🚀 Proposal: {proposal if proposal else 'Untitled'}",
                 f"",
                 f"{proposal}",
                 f"",

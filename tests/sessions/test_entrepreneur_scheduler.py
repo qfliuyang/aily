@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -213,6 +214,30 @@ class TestEntrepreneurScheduler:
         assert context["proof_artifact"] == "Replay benchmark on past ECO runs"
 
     @pytest.mark.asyncio
+    async def test_query_pending_business_proposals_includes_reactor_queue(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+        )
+
+        async def fake_get_nodes_by_property(node_type, key, value):
+            if node_type == "residual_proposal":
+                return [{"id": "residual_1", "type": "residual_proposal", "properties": {"status": "pending_business"}}]
+            if node_type == "reactor_proposal":
+                return [{"id": "reactor_1", "type": "reactor_proposal", "properties": {"status": "pending_business"}}]
+            return []
+
+        mock_graph_db.get_nodes_by_property.side_effect = fake_get_nodes_by_property
+
+        nodes = await scheduler._query_pending_business_proposals()
+
+        assert {node["id"] for node in nodes} == {"residual_1", "reactor_1"}
+
+    @pytest.mark.asyncio
     async def test_guru_prompt_requests_hypothesis_and_simulation_driven_plans(
         self,
         mock_llm_client,
@@ -263,6 +288,41 @@ class TestEntrepreneurScheduler:
         assert "hypothesis-driven, fact-based logical insight" in messages[0]["content"]
         assert "simulation-driven, constraint-based, feedback-evolving" in messages[1]["content"]
         assert "Every idea deserves a serious salvage" in messages[0]["content"]
+
+    def test_gstack_reports_keep_full_hypothesis_title(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+        )
+        hypothesis = (
+            "This business hypothesis should remain fully intact without artificial truncation "
+            "because shortening it changes the decision context"
+        )
+        session = GStackSession(
+            session_id="g1",
+            hypothesis=hypothesis,
+            problem="Problem",
+            solution="Solution",
+            target_user="Target user",
+            verdict="needs_more_validation",
+            confidence=0.61,
+        )
+        panel = GStackPanelResult(
+            sessions=[session],
+            final_verdict="needs_more_validation",
+            final_confidence=0.61,
+            synthesis_reasoning="Need more evidence.",
+        )
+
+        session_report = scheduler.gstack_agent.get_session_report(session)
+        panel_report = scheduler.gstack_agent.get_panel_report(panel)
+
+        assert f"# GStack Evaluation: {hypothesis}" in session_report
+        assert f"# GStack Panel Evaluation: {hypothesis}" in panel_report
 
     @pytest.mark.asyncio
     async def test_build_guru_appendix_markdown_handles_nested_output(
@@ -415,3 +475,74 @@ class TestEntrepreneurScheduler:
         assert long_output in write_call.kwargs["markdown"]
         assert "# Guru Appendix: Full" in write_call.kwargs["markdown"]
         assert "[[appendix-" not in write_call.kwargs["markdown"]
+
+    @pytest.mark.asyncio
+    async def test_evaluate_business_case_falls_back_after_panel_timeout(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            innovation_timeout_minutes=1,
+            use_gstack_panel=True,
+        )
+        scheduler.gstack_agent.evaluate_panel = AsyncMock(side_effect=asyncio.TimeoutError())
+        fallback_session = GStackSession(
+            session_id="gstack_fallback",
+            hypothesis="A timing closure copilot can reduce ECO turnaround.",
+            problem="Timing ECO loops are slow and manual.",
+            solution="Insert a ranked-fix assistant into the ECO workflow.",
+            target_user="Physical design engineers",
+            persona="general",
+            verdict="needs_more_validation",
+            confidence=0.44,
+        )
+        scheduler.gstack_agent.evaluate = AsyncMock(return_value=fallback_session)
+
+        result = await scheduler._evaluate_business_case(
+            {
+                "title": "Timing Closure Copilot",
+                "hypothesis": fallback_session.hypothesis,
+                "problem": fallback_session.problem,
+                "solution": fallback_session.solution,
+                "target_user": fallback_session.target_user,
+            },
+            {"proposal_node_id": "residual_1234"},
+        )
+
+        assert isinstance(result, GStackPanelResult)
+        assert result.final_verdict == "needs_more_validation"
+        assert result.sessions[0].session_id == "gstack_fallback"
+        assert "fell back" in result.synthesis_reasoning
+        scheduler.gstack_agent.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_evaluate_business_case_creates_timeout_session_when_all_paths_timeout(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            innovation_timeout_minutes=1,
+            use_gstack_panel=False,
+        )
+        scheduler.gstack_agent.evaluate = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        result = await scheduler._evaluate_business_case(
+            {
+                "title": "Timing Closure Copilot",
+                "hypothesis": "A timing closure copilot can reduce ECO turnaround.",
+                "problem": "Timing ECO loops are slow and manual.",
+                "solution": "Insert a ranked-fix assistant into the ECO workflow.",
+                "target_user": "Physical design engineers",
+            },
+            {"proposal_node_id": "residual_1234"},
+        )
+
+        assert isinstance(result, GStackSession)
+        assert result.verdict == "needs_more_validation"
+        assert result.actions[0].action == "evaluation_timeout"

@@ -105,6 +105,30 @@ async def test_bridge_processes_batch_in_stage_latched_mode():
     assert result["results"][0]["source_path"] == "/tmp/a.md"
 
 
+@pytest.mark.asyncio
+async def test_bridge_processes_existing_chaos_markdown_batch(tmp_path):
+    chaos_dir = tmp_path / "00-Chaos"
+    chaos_dir.mkdir(parents=True)
+    note_a = chaos_dir / "Doc_A.md"
+    note_b = chaos_dir / "Doc_B.md"
+    note_a.write_text(
+        "# Doc A\n\n**Original File:** a.pdf\n\n---\n\nAlpha body",
+        encoding="utf-8",
+    )
+    note_b.write_text(
+        "# Doc B\n\n**Original File:** b.pdf\n\n---\n\nBeta body",
+        encoding="utf-8",
+    )
+
+    bridge = ChaosDikiwiBridge(dikiwi_mind=FakeDikiwiMind())
+    result = await bridge.process_chaos_markdown_batch([note_a, note_b])
+
+    assert result["processed"] == 2
+    assert result["failed"] == 0
+    assert result["zettels_created"] == 4
+    assert result["results"][0]["chaos_note_path"] == str(note_a)
+
+
 @dataclass
 class FakeRecord:
     id: int

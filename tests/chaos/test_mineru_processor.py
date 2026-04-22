@@ -53,6 +53,8 @@ async def test_mineru_processor_normalizes_cli_output(tmp_path: Path, monkeypatc
     assert result.metadata["chaos_base_name"] == "deck"
     assert result.metadata["mineru_backend"] == "pipeline"
     assert result.metadata["mineru_model_source"] == "modelscope"
+    assert result.metadata["mineru_output_dir"].endswith("/deck/auto")
+    assert Path(result.metadata["mineru_cache_dir"]).name.startswith("deck_")
     assert result.visual_elements[0].element_type == "image"
     assert "mineru" in result.tags
 

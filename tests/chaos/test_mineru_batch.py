@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from aily.chaos.mineru_batch import MinerUChaosBatchRunner, chaos_base_name
-from aily.chaos.types import ExtractedContentMultimodal
+from aily.chaos.types import ExtractedContentMultimodal, VisualElement
 
 
 def test_discover_files_filters_supported_inputs(tmp_path: Path):
@@ -94,6 +94,51 @@ def test_batch_runner_writes_transcript_with_stable_name(tmp_path: Path):
     content = transcript_path.read_text(encoding="utf-8")
     assert "# Imported Title" in content
     assert "**Original File:** paper.pdf" in content
+
+
+def test_batch_runner_embeds_visual_assets_in_chaos_transcript(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    export_dir = tmp_path / ".processed" / ".mineru_cache" / "paper_hash" / "paper" / "auto"
+    image_dir = export_dir / "images"
+    image_dir.mkdir(parents=True)
+    image_path = image_dir / "figure1.jpg"
+    image_path.write_bytes(b"fake-image")
+
+    runner = MinerUChaosBatchRunner(
+        source_folder=source,
+        vault_path=tmp_path / "vault",
+        processed_folder=tmp_path / ".processed",
+        run_dikiwi=False,
+    )
+
+    extracted = ExtractedContentMultimodal(
+        text="Structured body",
+        title="Imported Title",
+        source_type="mineru_markdown",
+        source_path=source / "paper.pdf",
+        metadata={
+            "chaos_base_name": "paper_stable",
+            "mineru_output_dir": str(export_dir),
+        },
+        visual_elements=[
+            VisualElement(
+                element_id="figure_1",
+                element_type="image",
+                description="Figure 1",
+                asset_path="images/figure1.jpg",
+            )
+        ],
+        processing_timestamp=datetime(2026, 4, 18, 12, 0, 0),
+    )
+
+    transcript_path = runner._write_chaos_transcript(extracted, source / "paper.pdf")
+
+    asset_copy = tmp_path / "vault" / "00-Chaos" / "_assets" / "paper_stable" / "figure1.jpg"
+    assert asset_copy.exists()
+    content = transcript_path.read_text(encoding="utf-8")
+    assert "## Visual Assets" in content
+    assert "![[00-Chaos/_assets/paper_stable/figure1.jpg]]" in content
 
 
 async def test_batch_runner_extracts_all_before_batched_dikiwi(tmp_path: Path):

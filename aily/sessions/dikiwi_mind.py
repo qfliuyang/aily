@@ -107,6 +107,11 @@ class DataPoint:
     context: str = ""
     confidence: float = 1.0
     concept: str = ""  # Short name for this concept (3-8 words)
+    modality: str = "text"
+    source_page: int | None = None
+    visual_type: str = ""
+    asset_embeds: list[str] = field(default_factory=list)
+    source_evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -120,6 +125,9 @@ class InformationNode:
     info_type: str = ""
     domain: str = ""
     concept: str = ""  # Concept name inherited from data extraction
+    data_point_ids: list[str] = field(default_factory=list)
+    source_evidence: list[str] = field(default_factory=list)
+    confidence: float = 0.8
 
 
 @dataclass
@@ -438,6 +446,13 @@ class DikiwiMind:
             return 1.0
         return max(0.0, (post_count - pre_count) / pre_count)
 
+    @staticmethod
+    def _batch_lock_active() -> bool:
+        try:
+            return SETTINGS.dikiwi_batch_lock_path.exists()
+        except Exception:
+            return False
+
     async def _chat_json(
         self,
         *,
@@ -511,6 +526,22 @@ class DikiwiMind:
                         stage=DikiwiStage.DATA,
                         success=False,
                         error_message="DIKIWI Mind disabled",
+                    )
+                ],
+            )
+
+        if self._batch_lock_active() and getattr(drop, "source", "") == "chaos_processor":
+            logger.warning(
+                "[DIKIWI] Suppressing single-drop chaos processing while batch lock is active for %s",
+                getattr(drop, "source_id", drop.id),
+            )
+            return DikiwiResult(
+                input_id=drop.id,
+                stage_results=[
+                    StageResult(
+                        stage=DikiwiStage.DATA,
+                        success=False,
+                        error_message="single-drop chaos processing suppressed while DIKIWI batch lock is active",
                     )
                 ],
             )
@@ -1122,9 +1153,12 @@ class DikiwiMind:
         """Pre-process drop content - convert URLs to markdown."""
         import re
 
-        if drop.metadata.get("source_type") == "url_markdown" or \
+        if drop.metadata.get("source_type") in {"url_markdown", "chaos_markdown"} or \
            drop.metadata.get("processing_method") == "browser_url_markdown_fetch":
-            logger.info("[DIKIWI] Skipping markdownize for pre-fetched URL markdown")
+            logger.info(
+                "[DIKIWI] Skipping markdownize for pre-normalized content type=%s",
+                drop.metadata.get("source_type", "unknown"),
+            )
             return drop
 
         content = drop.content
@@ -1743,7 +1777,7 @@ class DikiwiMind:
 
 """
             for i, wisdom in enumerate(wisdom_items, 1):
-                markdown += f"""### {i}. {wisdom.principle[:60]}...
+                markdown += f"""### {i}. {wisdom.principle}
 
 **Principle**: {wisdom.principle}
 
@@ -1759,7 +1793,7 @@ class DikiwiMind:
 
 """
             for insight in insights[:3]:
-                markdown += f"- **{insight.insight_type}**: {insight.description[:80]}...\n"
+                markdown += f"- **{insight.insight_type}**: {insight.description}\n"
 
             await self.obsidian_writer.write_note(
                 title=f"Wisdom-LLM: {date_str} {drop.id[:8]}",
@@ -2074,7 +2108,7 @@ class DikiwiMind:
 ## Source Principles
 """
             for zettel in zettels[:3]:
-                markdown += f"- [[{zettel.title[:60]}]]\n"
+                markdown += f"- [[{zettel.title}]]\n"
 
             markdown += """
 ## Proposed Actions

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -361,6 +362,8 @@ class MinerUChaosBatchRunner:
         json_path = output_dir / f"{base_name}.json"
         markdown_path = output_dir / f"{base_name}.md"
         transcript_path = self._write_chaos_transcript(extracted, source_path)
+        extracted.metadata["chaos_note_path"] = str(transcript_path)
+        extracted.metadata["chaos_visual_assets"] = self._get_visual_asset_embeds(extracted, base_name)
 
         json_path.write_text(
             json.dumps(extracted.to_dict(), ensure_ascii=False, indent=2),
@@ -406,6 +409,9 @@ class MinerUChaosBatchRunner:
             "",
             extracted.get_full_text(),
         ]
+        asset_section = self._render_visual_asset_section(extracted, base_name)
+        if asset_section:
+            lines.extend(["", *asset_section])
         transcript_path.write_text("\n".join(lines), encoding="utf-8")
         return transcript_path
 
@@ -430,8 +436,98 @@ class MinerUChaosBatchRunner:
                 "---",
                 "",
                 extracted.get_full_text(),
+                *(["", *asset_section] if (asset_section := self._render_visual_asset_section(extracted, base_name)) else []),
             ]
         )
+
+    def _render_visual_asset_section(
+        self,
+        extracted: ExtractedContentMultimodal,
+        base_name: str,
+    ) -> list[str]:
+        """Copy extracted visual assets into the vault and render embed markdown."""
+        embeds = self._get_visual_asset_embeds(extracted, base_name)
+        if not embeds:
+            return []
+
+        lines = ["## Visual Assets", ""]
+        for embed in embeds:
+            caption = embed["caption"]
+            if caption:
+                lines.extend([f"### {caption}", ""])
+            lines.extend([embed["wikilink"], ""])
+        return lines[:-1] if lines and lines[-1] == "" else lines
+
+    def _get_visual_asset_embeds(
+        self,
+        extracted: ExtractedContentMultimodal,
+        base_name: str,
+    ) -> list[dict[str, str]]:
+        cached = extracted.metadata.get("chaos_visual_assets")
+        if isinstance(cached, list):
+            return [entry for entry in cached if isinstance(entry, dict)]
+
+        embeds = self._copy_visual_assets(extracted, base_name)
+        extracted.metadata["chaos_visual_assets"] = embeds
+        return embeds
+
+    def _copy_visual_assets(
+        self,
+        extracted: ExtractedContentMultimodal,
+        base_name: str,
+    ) -> list[dict[str, str]]:
+        """Copy MinerU-returned images/tables/charts into the vault for Obsidian embeds."""
+        output_dir_value = extracted.metadata.get("mineru_output_dir")
+        output_dir = Path(output_dir_value) if isinstance(output_dir_value, str) and output_dir_value else None
+        if output_dir is None:
+            return []
+
+        asset_dir = self.vault_path / "00-Chaos" / "_assets" / base_name
+        asset_dir.mkdir(parents=True, exist_ok=True)
+
+        seen_sources: set[str] = set()
+        copied: list[dict[str, str]] = []
+
+        for index, element in enumerate(extracted.visual_elements, start=1):
+            asset_path_value = getattr(element, "asset_path", None)
+            if not asset_path_value:
+                continue
+            resolved = self._resolve_visual_asset_path(output_dir, asset_path_value)
+            if resolved is None or not resolved.exists() or not resolved.is_file():
+                continue
+            resolved_key = str(resolved.resolve())
+            if resolved_key in seen_sources:
+                continue
+            seen_sources.add(resolved_key)
+
+            target_name = resolved.name or f"{element.element_type}_{index}{resolved.suffix}"
+            target_path = asset_dir / target_name
+            if not target_path.exists():
+                shutil.copy2(resolved, target_path)
+
+            vault_relative = target_path.relative_to(self.vault_path).as_posix()
+            caption = (element.description or "").strip()
+            copied.append(
+                {
+                    "caption": caption,
+                    "wikilink": f"![[{vault_relative}]]",
+                    "asset_path": asset_path_value,
+                    "element_type": element.element_type,
+                }
+            )
+
+        return copied
+
+    @staticmethod
+    def _resolve_visual_asset_path(output_dir: Path, asset_path_value: str) -> Path | None:
+        """Resolve a visual asset path stored by MinerU."""
+        asset_path = Path(asset_path_value)
+        if asset_path.is_absolute():
+            return asset_path
+        candidate = (output_dir / asset_path).resolve()
+        if output_dir.resolve() not in candidate.parents and candidate != output_dir.resolve():
+            return None
+        return candidate
 
 
 def chaos_base_name(extracted: ExtractedContentMultimodal, source_path: Path) -> str:

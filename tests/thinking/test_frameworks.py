@@ -89,6 +89,39 @@ class TestTrizAnalyzer:
         assert result.insights == []
         assert result.confidence == 0.0
 
+    @pytest.mark.asyncio
+    async def test_triz_normalizes_structured_evolution_trends(self):
+        """TRIZ accepts evolution_trends objects from the model."""
+        llm = MockLLMClient({
+            "key_insights": ["Move validation into continuous background loops."],
+            "confidence": 0.82,
+            "priority": "high",
+            "principle_recommendations": [
+                {
+                    "principle_number": 10,
+                    "principle_name": "Prior action",
+                    "application": "Shift validation earlier.",
+                    "confidence_score": 0.82,
+                }
+            ],
+            "evolution_analysis": {
+                "s_curve_position": "growth",
+                "evolution_trends": [
+                    {"trend": "Automation", "description": "More background validation."}
+                ],
+                "next_generation_prediction": "Persistent validation graph",
+            },
+        })
+
+        analyzer = TrizAnalyzer(llm)
+        payload = KnowledgePayload(content="We need continuous validation without blocking delivery.")
+
+        result = await analyzer.analyze(payload)
+
+        evolution = result.raw_analysis["evolution_analysis"]
+        assert evolution is not None
+        assert evolution.evolution_trends == ["Automation: More background validation."]
+
 
 class TestMcKinseyAnalyzer:
     """Tests for McKinsey analyzer."""

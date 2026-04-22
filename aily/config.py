@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     aily_digest_minute: int = 0
     aily_digest_feishu_open_id: str = ""
     aily_data_dir: Path = Path.home() / ".aily"
+    dikiwi_batch_lock_path: Path = Path.home() / ".aily" / "dikiwi_batch.lock"
 
     # Voice memo settings
     feishu_voice_enabled: bool = False  # Disabled by default until configured
