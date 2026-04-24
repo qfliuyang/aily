@@ -72,8 +72,8 @@ async def test_chat_json_repair_fails_raises_llm_error(client):
 
 
 @pytest.mark.asyncio
-async def test_kimi_k25_omits_temperature_and_disables_thinking_when_requested():
-    client = LLMClient(api_key="test-key", model="kimi-k2.5", thinking=False)
+async def test_kimi_k26_omits_temperature_and_disables_thinking_when_requested():
+    client = LLMClient(api_key="test-key", model="kimi-k2.6", thinking=False)
 
     mock_resp = MagicMock()
     mock_resp.status = 200
@@ -117,5 +117,35 @@ async def test_kimi_k2_thinking_enables_thinking_payload():
         result = await client.chat([{"role": "user", "content": "hi"}], temperature=1.0)
 
     assert result == "hello"
-    assert captured["json"]["temperature"] == 1.0
+    assert "temperature" not in captured["json"]
+    assert captured["json"]["thinking"] == {"type": "enabled"}
+
+
+@pytest.mark.asyncio
+async def test_deepseek_thinking_omits_temperature_and_sets_thinking_payload():
+    client = LLMClient(
+        api_key="test-key",
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-pro",
+        thinking=True,
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "hello"}}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    captured = {}
+
+    async def mock_post(*args, **kwargs):
+        captured.update(kwargs)
+        return mock_resp
+
+    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+        result = await client.chat([{"role": "user", "content": "hi"}], temperature=0.3)
+
+    assert result == "hello"
+    assert "temperature" not in captured["json"]
     assert captured["json"]["thinking"] == {"type": "enabled"}

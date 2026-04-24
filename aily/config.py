@@ -111,7 +111,8 @@ class Settings(BaseSettings):
     llm_provider: str = "kimi"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.moonshot.cn/v1"
-    llm_model: str = "kimi-k2.5"
+    llm_model: str = "kimi-k2.6"
+    llm_workload_routes_json: str = ""
     llm_max_concurrency: int = 1
     llm_min_interval_seconds: float = 3.0
     dikiwi_max_llm_calls_per_source: int = 30
@@ -123,9 +124,13 @@ class Settings(BaseSettings):
     dikiwi_network_max_candidate_nodes: int = 18
     mineru_batch_extract_concurrency: int = 4
     kimi_api_key: str = ""
-    kimi_model: str = "kimi-k2.5"
+    kimi_model: str = "kimi-k2.6"
+    kimi_vision_model: str = "kimi-k2.6"
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-v4-pro"
     zhipu_api_key: str = ""
-    zhipu_model: str = "glm-4-plus"
+    zhipu_model: str = "glm-5.1"
+    zhipu_vision_model: str = "glm-4.5v"
 
     # Tavily search API
     tavily_api_key: str = ""
@@ -189,6 +194,14 @@ class Settings(BaseSettings):
                 self.llm_api_key = self.zhipu_api_key
             self.llm_base_url = "https://open.bigmodel.cn/api/paas/v4"
             self.llm_model = self.zhipu_model or self.llm_model
+
+        if provider == "deepseek":
+            if not self.deepseek_api_key:
+                self.deepseek_api_key = self.llm_api_key
+            if not self.llm_api_key:
+                self.llm_api_key = self.deepseek_api_key
+            self.llm_base_url = "https://api.deepseek.com"
+            self.llm_model = self.deepseek_model or self.llm_model
 
         # Parse minds config from env vars
         env_vars = {

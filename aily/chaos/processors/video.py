@@ -1,4 +1,4 @@
-"""Video processor using ffmpeg, Kimi multimodal understanding, and Whisper fallback."""
+"""Video processor using ffmpeg, configurable multimodal understanding, and Whisper fallback."""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from PIL import Image
 
 from aily.chaos.processors.base import ContentProcessor
 from aily.chaos.types import ExtractedContentMultimodal, TimestampedSegment, VisualElement
-from aily.llm.kimi_client import KimiClient
+from aily.config import SETTINGS
+from aily.llm.provider_routes import PrimaryLLMRoute, ResolvedLLMRoute
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,9 @@ logger = logging.getLogger(__name__)
 class VideoProcessor(ContentProcessor):
     """Process video files: extract frames, transcribe audio, analyze visuals."""
 
-    VISION_API_URL = KimiClient.CHAT_COMPLETIONS_URL
-    VISION_MODEL = "kimi-k2.5"
+    def __init__(self, config, llm_client=None) -> None:
+        super().__init__(config, llm_client)
+        self._vision_route: ResolvedLLMRoute | None = None
 
     async def process(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Process video file."""
@@ -79,6 +81,8 @@ class VideoProcessor(ContentProcessor):
                     "format": file_path.suffix.lower(),
                     "frames_extracted": len(visual_elements),
                     "has_transcript": transcript is not None,
+                    "vision_provider": self._resolve_vision_route().provider,
+                    "vision_model": self._resolve_vision_route().model,
                     **video_info,
                 },
             )
@@ -204,21 +208,19 @@ class VideoProcessor(ContentProcessor):
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     async def _analyze_frame(self, base64_image: str) -> str | None:
-        """Analyze a video frame using Kimi multimodal chat completions."""
-        api_key = KimiClient.resolve_api_key(
-            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
-        )
-        if not api_key:
+        """Analyze a video frame using the configured multimodal route."""
+        route = self._resolve_vision_route()
+        if not route.api_key:
             return None
 
         try:
             headers = {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {route.api_key}",
                 "Content-Type": "application/json",
             }
 
             payload = {
-                "model": self.VISION_MODEL,
+                "model": route.model,
                 "messages": [
                     {
                         "role": "user",
@@ -241,7 +243,7 @@ class VideoProcessor(ContentProcessor):
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.VISION_API_URL,
+                    self._chat_completions_url(route),
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30),
@@ -257,11 +259,9 @@ class VideoProcessor(ContentProcessor):
             return None
 
     async def _transcribe_with_kimi_video(self, file_path: Path) -> dict | None:
-        """Transcribe spoken content using Kimi's native video input support."""
-        api_key = KimiClient.resolve_api_key(
-            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
-        )
-        if not api_key:
+        """Transcribe spoken content using the configured provider's native video input support."""
+        route = self._resolve_vision_route()
+        if not route.api_key:
             return None
 
         try:
@@ -276,7 +276,7 @@ class VideoProcessor(ContentProcessor):
 
             async with aiohttp.ClientSession() as session:
                 payload = {
-                    "model": self.VISION_MODEL,
+                    "model": route.model,
                     "messages": [
                         {"role": "system", "content": "You transcribe spoken content from videos and return structured JSON."},
                         {
@@ -302,16 +302,16 @@ class VideoProcessor(ContentProcessor):
                 }
 
                 async with session.post(
-                    self.VISION_API_URL,
+                    self._chat_completions_url(route),
                     json=payload,
                     headers={
-                        "Authorization": f"Bearer {api_key}",
+                        "Authorization": f"Bearer {route.api_key}",
                         "Content-Type": "application/json",
                     },
                     timeout=aiohttp.ClientTimeout(total=300),
                 ) as response:
                     if response.status != 200:
-                        logger.warning("Kimi video transcription failed with status %s", response.status)
+                        logger.warning("Video transcription failed with status %s", response.status)
                         return None
 
                     result = await response.json()
@@ -339,7 +339,7 @@ class VideoProcessor(ContentProcessor):
             return {"text": text, "segments": segments}
 
         except Exception as e:
-            logger.warning("Kimi video transcription failed: %s", e)
+            logger.warning("Video transcription failed: %s", e)
             return None
 
     async def _transcribe_with_whisper(self, file_path: Path) -> dict | None:
@@ -409,3 +409,12 @@ class VideoProcessor(ContentProcessor):
         """Check if file is a video."""
         ext = file_path.suffix.lower()
         return ext.lstrip(".") in self.config.video.supported_formats
+
+    def _resolve_vision_route(self) -> ResolvedLLMRoute:
+        if self._vision_route is None:
+            self._vision_route = PrimaryLLMRoute.resolve_route(SETTINGS, workload="chaos.vision")
+        return self._vision_route
+
+    @staticmethod
+    def _chat_completions_url(route: ResolvedLLMRoute) -> str:
+        return f"{route.base_url.rstrip('/')}/chat/completions"

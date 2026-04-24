@@ -157,21 +157,8 @@ class MinerUChaosBatchRunner:
         if not self.run_dikiwi or self._bridge is not None:
             return
 
-        api_key = (
-            os.getenv("KIMI_API_KEY")
-            or os.getenv("MOONSHOT_API_KEY")
-            or SETTINGS.kimi_api_key
-            or SETTINGS.llm_api_key
-        )
-        if not api_key:
-            raise RuntimeError("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running DIKIWI.")
-
-        llm_client = PrimaryLLMRoute.route_kimi(
-            api_key=api_key,
-            model=SETTINGS.kimi_model,
-            max_concurrency=SETTINGS.llm_max_concurrency,
-            min_interval_seconds=SETTINGS.llm_min_interval_seconds,
-        )
+        llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+        llm_client = llm_resolver("dikiwi")
         self._llm_client = llm_client
 
         self._graph_db = GraphDB(db_path=SETTINGS.graph_db_path)
@@ -182,6 +169,7 @@ class MinerUChaosBatchRunner:
         dikiwi_mind = DikiwiMind(
             graph_db=self._graph_db,
             llm_client=llm_client,
+            llm_client_resolver=llm_resolver,
             dikiwi_obsidian_writer=obsidian_writer,
         )
         self._bridge = ChaosDikiwiBridge(dikiwi_mind=dikiwi_mind, processed_folder=self.processed_folder)

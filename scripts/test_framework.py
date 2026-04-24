@@ -32,7 +32,6 @@ from aily.config import SETTINGS
 from aily.gating.drainage import RainDrop, RainType
 from aily.graph.db import GraphDB
 from aily.llm.client import LLMClient
-from aily.llm.kimi_client import KimiClient
 from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.processing.router import ProcessingRouter
 from aily.bot.message_intent import IntentRouter
@@ -89,22 +88,15 @@ class RuntimeBundle:
     bridge: ChaosDikiwiBridge
 
 
-def require_kimi_api_key() -> str:
-    api_key = KimiClient.resolve_api_key(
-        SETTINGS.kimi_api_key or SETTINGS.llm_api_key
-    )
-    if not api_key:
-        raise RuntimeError("Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY before running this scenario.")
-    return api_key
+def require_primary_api_key() -> str:
+    route = PrimaryLLMRoute.resolve_route(SETTINGS, workload="default")
+    if not route.api_key:
+        raise RuntimeError("Set the provider API key for the configured default route before running this scenario.")
+    return route.api_key
 
 
 def build_primary_llm_client() -> LLMClient:
-    return PrimaryLLMRoute.route_kimi(
-        api_key=require_kimi_api_key(),
-        model=SETTINGS.kimi_model,
-        max_concurrency=SETTINGS.llm_max_concurrency,
-        min_interval_seconds=SETTINGS.llm_min_interval_seconds,
-    )
+    return PrimaryLLMRoute.from_settings(SETTINGS, workload="default")
 
 
 def clean_generated_vault(vault_path: Path, graph_db_path: Path | None = None) -> dict[str, Any]:
@@ -306,8 +298,9 @@ async def scenario_processors() -> dict[str, Any]:
 
 
 async def scenario_dikiwi_smoke(limit: int = 2, url: str | None = None) -> dict[str, Any]:
-    kimi_api_key = require_kimi_api_key()
-    client = KimiClient(api_key=kimi_api_key, model="kimi-k2.5")
+    require_primary_api_key()
+    llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+    client = llm_resolver("default")
     direct_checks = {
         "chat": False,
         "json": False,
@@ -338,10 +331,17 @@ async def scenario_dikiwi_smoke(limit: int = 2, url: str | None = None) -> dict[
         direct_checks["json"] = False
 
     try:
-        result = await client.classify_semantic(
-            content="Reinforcement learning improves model alignment",
-            categories=["technology", "business", "science"],
-            context="AI research topic",
+        result = await client.chat_json(
+            messages=[
+                {"role": "system", "content": "Classify the topic and return JSON only."},
+                {
+                    "role": "user",
+                    "content": (
+                        'Classify "Reinforcement learning improves model alignment" into one of '
+                        '["technology","business","science"] and return {"category":"..."}'
+                    ),
+                },
+            ],
         )
         direct_checks["classification"] = isinstance(result, dict) and bool(result.get("category"))
     except Exception:
@@ -354,10 +354,10 @@ async def scenario_dikiwi_smoke(limit: int = 2, url: str | None = None) -> dict[
 
     try:
         mind = DikiwiMind(
-            kimi_api_key=kimi_api_key,
             graph_db=graph_db,
             enabled=True,
-            model="kimi-k2.5",
+            llm_client=llm_resolver("dikiwi"),
+            llm_client_resolver=llm_resolver,
         )
         selected_messages = [url] if url else TEST_MESSAGES[:limit]
         pipeline_runs = []
@@ -412,7 +412,7 @@ async def extract_images(image_paths: list[Path]) -> list[ExtractedContentMultim
         title=f"Image Session ({len(results)} photos)",
         source_type="image_session",
         source_path=image_paths[0],
-        processing_method="kimi-k2.5-vision",
+        processing_method="multimodal-vision-session",
         metadata={"image_count": len(results), "paths": [str(p) for p in image_paths]},
         tags=[],
     )

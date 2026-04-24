@@ -40,8 +40,11 @@ class LLMClient:
         self._last_request_started = 0.0
         self.usage_stats = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
 
-    def _is_kimi_k25_model(self) -> bool:
-        return self.model.startswith("kimi-k2.5")
+    def _is_kimi_k2_model(self) -> bool:
+        return self.model.startswith("kimi-k2")
+
+    def _is_deepseek_model(self) -> bool:
+        return self.model.startswith("deepseek-") or "deepseek.com" in self.base_url
 
     def _build_payload(
         self,
@@ -54,18 +57,17 @@ class LLMClient:
             "messages": messages,
         }
 
-        # Kimi documents recommend leaving temperature implicit for kimi-k2.5.
-        if not self._is_kimi_k25_model():
+        # Kimi K2.x and DeepSeek thinking mode both prefer temperature omitted.
+        if not self._is_kimi_k2_model() and not (self._is_deepseek_model() and self.thinking):
             payload["temperature"] = temperature
 
         if response_format:
             payload["response_format"] = response_format
 
-        if self._is_kimi_k25_model():
-            if not self.thinking:
-                payload["thinking"] = {"type": "disabled"}
-        elif self.thinking and "kimi-k2" in self.model:
-            payload["thinking"] = {"type": "enabled"}
+        if self._is_kimi_k2_model():
+            payload["thinking"] = {"type": "enabled" if self.thinking else "disabled"}
+        elif self._is_deepseek_model():
+            payload["thinking"] = {"type": "enabled" if self.thinking else "disabled"}
 
         return payload
 

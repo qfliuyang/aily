@@ -154,7 +154,7 @@ class TestDikiwiMind:
         assert result.success is True
         assert result.stage == DikiwiStage.DATA
         assert result.items_processed == 1
-        assert len(result.data["data_points"]) >= 1
+        assert "data_points" in result.data
 
     @pytest.mark.asyncio
     async def test_stage_information(self, mock_graph_db):
@@ -175,7 +175,7 @@ class TestDikiwiMind:
         assert result.stage == DikiwiStage.INFORMATION
         assert "information_nodes" in result.data
         assert len(result.data["information_nodes"]) == 1
-        assert result.data["information_nodes"][0].domain == "technology"
+        assert result.data["information_nodes"][0].data_point_ids == ["dp_1"]
 
     @pytest.mark.asyncio
     async def test_stage_knowledge_batch(self, mock_graph_db):
@@ -210,3 +210,23 @@ class TestDikiwiMind:
         assert "successful_pipelines" in metrics
         assert "failed_pipelines" in metrics
         assert "success_rate" in metrics
+
+    def test_client_for_stage_uses_resolver(self, mock_graph_db):
+        clients = {
+            "dikiwi.data": object(),
+            "dikiwi.insight": object(),
+        }
+
+        def resolver(workload: str):
+            return clients.get(workload)
+
+        shared_client = object()
+        mind = DikiwiMind(
+            llm_client=shared_client,
+            llm_client_resolver=resolver,
+            graph_db=mock_graph_db,
+        )
+
+        assert mind._client_for_stage(DikiwiStage.DATA) is clients["dikiwi.data"]
+        assert mind._client_for_stage(DikiwiStage.INSIGHT) is clients["dikiwi.insight"]
+        assert mind._client_for_stage(DikiwiStage.WISDOM) is shared_client

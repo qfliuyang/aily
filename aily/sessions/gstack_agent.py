@@ -168,6 +168,7 @@ class GStackAgent:
     def __init__(
         self,
         llm_client: Any,
+        guru_llm_client: Any | None = None,
         tool_executor: Callable | None = None,
         obsidian_writer: Any | None = None,
         graph_db: Any | None = None,
@@ -175,6 +176,7 @@ class GStackAgent:
         guru_timeout_seconds: float = 120.0,
     ) -> None:
         self.llm_client = llm_client
+        self.guru_llm_client = guru_llm_client or llm_client
         self.tool_executor = tool_executor
         self.obsidian_writer = obsidian_writer
         self.graph_db = graph_db
@@ -194,6 +196,7 @@ class GStackAgent:
     async def _chat_json(
         self,
         *,
+        llm_client: Any | None = None,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         timeout_seconds: float | None = None,
@@ -201,7 +204,7 @@ class GStackAgent:
         """Bound LLM calls so GStack sessions degrade instead of hanging forever."""
         timeout = self.request_timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         return await asyncio.wait_for(
-            self.llm_client.chat_json(
+            (llm_client or self.llm_client).chat_json(
                 messages=messages,
                 temperature=temperature,
             ),
@@ -579,6 +582,7 @@ Return JSON:
 
         try:
             return await self._chat_json(
+                llm_client=self.guru_llm_client,
                 messages=[
                     {
                         "role": "system",

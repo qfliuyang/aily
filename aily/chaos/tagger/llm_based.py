@@ -6,12 +6,12 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from aily.llm.kimi_client import KimiClient
+from aily.config import SETTINGS
+from aily.llm.provider_routes import PrimaryLLMRoute
 
 if TYPE_CHECKING:
     from aily.chaos.config import ChaosConfig
     from aily.chaos.types import ExtractedContentMultimodal
-    from aily.llm.llm_router import LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class LLMBasedTagger:
 
     def __init__(self, config: "ChaosConfig") -> None:
         self.config = config
-        self._client: "LLMRouter | None" = None
+        self._client = None
 
     async def tag(self, content: "ExtractedContentMultimodal") -> list[str]:
         """Generate tags using LLM analysis.
@@ -72,36 +72,19 @@ Respond with a JSON array of tags only:
         return prompt
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call LLM for tag generation using the Kimi Open Platform."""
-        import os
-        import aiohttp
-
-        api_key = (
-            os.getenv("KIMI_API_KEY")
-            or os.getenv("MOONSHOT_API_KEY")
-            or os.getenv("LLM_API_KEY", "")
-        )
-        if not api_key:
-            raise ValueError("No API key found")
-
-        url = KimiClient.CHAT_COMPLETIONS_URL
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": "kimi-k2.5",
-            "messages": [
-                {"role": "system", "content": "You are a content tagging assistant. Generate relevant, concise tags for knowledge management."},
+        """Call the configured workload model for semantic tag generation."""
+        if self._client is None:
+            self._client = PrimaryLLMRoute.from_settings(SETTINGS, workload="chaos.tagger")
+        return await self._client.chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a content tagging assistant. Generate relevant, concise tags for knowledge management.",
+                },
                 {"role": "user", "content": prompt},
             ],
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                result = await response.json()
-                return result["choices"][0]["message"]["content"]
+            temperature=0.2,
+        )
 
     def _parse_response(self, response: str) -> list[str]:
         """Parse LLM response into tags."""

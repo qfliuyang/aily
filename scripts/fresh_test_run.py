@@ -129,13 +129,8 @@ async def run_test(max_items: int = 5) -> dict:
     reset_chaos_queue()
 
     # Setup DIKIWI mind
-    api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY") or SETTINGS.kimi_api_key or SETTINGS.llm_api_key
-    llm_client = PrimaryLLMRoute.route_kimi(
-        api_key=api_key,
-        model=SETTINGS.kimi_model,
-        max_concurrency=SETTINGS.llm_max_concurrency,
-        min_interval_seconds=SETTINGS.llm_min_interval_seconds,
-    )
+    llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+    llm_client = llm_resolver("dikiwi")
 
     graph_db = GraphDB(db_path=GRAPH_DB_PATH)
     await graph_db.initialize()
@@ -145,6 +140,7 @@ async def run_test(max_items: int = 5) -> dict:
     dikiwi_mind = DikiwiMind(
         graph_db=graph_db,
         llm_client=llm_client,
+        llm_client_resolver=llm_resolver,
         dikiwi_obsidian_writer=obsidian_writer,
     )
 

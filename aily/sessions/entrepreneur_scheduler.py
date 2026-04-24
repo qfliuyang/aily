@@ -58,6 +58,8 @@ class EntrepreneurScheduler(BaseMindScheduler):
         self,
         llm_client: Any,
         graph_db: Any,
+        gstack_llm_client: Any | None = None,
+        guru_llm_client: Any | None = None,
         innovation_scheduler: Any | None = None,
         obsidian_writer: Any | None = None,
         feishu_pusher: Any | None = None,
@@ -90,7 +92,8 @@ class EntrepreneurScheduler(BaseMindScheduler):
 
         # Initialize GStack Agent - actually takes actions
         self.gstack_agent = GStackAgent(
-            llm_client=llm_client,
+            llm_client=gstack_llm_client or llm_client,
+            guru_llm_client=guru_llm_client,
             tool_executor=tool_executor,
             obsidian_writer=obsidian_writer,
             graph_db=graph_db,

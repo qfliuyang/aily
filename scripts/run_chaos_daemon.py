@@ -153,13 +153,8 @@ class ChaosDaemon:
         from aily.sessions.dikiwi_mind import DikiwiMind
         from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
-        api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY") or SETTINGS.kimi_api_key or SETTINGS.llm_api_key
-        llm_client = PrimaryLLMRoute.route_kimi(
-            api_key=api_key,
-            model=SETTINGS.kimi_model,
-            max_concurrency=SETTINGS.llm_max_concurrency,
-            min_interval_seconds=SETTINGS.llm_min_interval_seconds,
-        )
+        llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+        llm_client = llm_resolver("dikiwi")
 
         graph_db = GraphDB(db_path=SETTINGS.graph_db_path)
         await graph_db.initialize()
@@ -168,6 +163,7 @@ class ChaosDaemon:
         dikiwi_mind = DikiwiMind(
             graph_db=graph_db,
             llm_client=llm_client,
+            llm_client_resolver=llm_resolver,
             dikiwi_obsidian_writer=obsidian_writer,
         )
 

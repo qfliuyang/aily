@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from aily.gating.drainage import RainDrop
 
 from aily.llm.llm_router import LLMRouter, LLMConfig
+from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.processing.markdownize import MarkdownizeProcessor
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
@@ -303,6 +304,7 @@ class DikiwiMind:
         model: str = "kimi-k2.5",
         dikiwi_obsidian_writer: DikiwiObsidianWriter | None = None,
         llm_client: Any | None = None,
+        llm_client_resolver: Any | None = None,
         reactor_scheduler: Any | None = None,
         entrepreneur_scheduler: Any | None = None,
         queue_db: Any | None = None,
@@ -326,6 +328,7 @@ class DikiwiMind:
             self.llm_client = llm_client
         else:
             self.llm_client = LLMRouter.standard_kimi(api_key=kimi_api_key, model=model)
+        self.llm_client_resolver = llm_client_resolver
 
         self.graph_db = graph_db
         self.enabled = enabled
@@ -343,6 +346,16 @@ class DikiwiMind:
         self._failed_pipelines = 0
         self._conversation_memories: dict[str, ConversationMemory] = {}
         self._llm_budgets: dict[str, LLMUsageBudget] = {}
+
+    def _client_for_workload(self, workload: str) -> Any:
+        if self.llm_client_resolver is None:
+            return self.llm_client
+        client = self.llm_client_resolver(workload)
+        return client or self.llm_client
+
+    def _client_for_stage(self, stage: DikiwiStage | str) -> Any:
+        stage_name = stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).strip().lower()
+        return self._client_for_workload(f"dikiwi.{stage_name}")
 
     def _get_or_create_memory(self, pipeline_id: str) -> ConversationMemory:
         """Get or create conversation memory for a pipeline."""
@@ -405,7 +418,7 @@ class DikiwiMind:
             drop=drop,
             memory=memory,
             budget=self._llm_budgets[pipeline_id],
-            llm_client=self.llm_client,
+            llm_client=self._client_for_stage(DikiwiStage.DATA),
             graph_db=self.graph_db,
             obsidian_writer=self.obsidian_writer,
             dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
@@ -425,6 +438,7 @@ class DikiwiMind:
         async def _run(ctx: Any) -> StageResult:
             async with semaphore:
                 try:
+                    ctx.llm_client = self._client_for_stage(stage)
                     result = await agent.execute(ctx)
                 except Exception as exc:
                     logger.exception("[DIKIWI] Batch stage %s failed for %s", stage.name, ctx.pipeline_id)
@@ -581,7 +595,7 @@ class DikiwiMind:
                 drop=drop,
                 memory=memory,
                 budget=self._llm_budgets[pipeline_id],
-                llm_client=self.llm_client,
+                llm_client=self._client_for_stage(DikiwiStage.DATA),
                 graph_db=self.graph_db,
                 obsidian_writer=self.obsidian_writer,
                 dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
@@ -592,6 +606,7 @@ class DikiwiMind:
             orchestrator = DikiwiOrchestrator(
                 llm_client=self.llm_client,
                 graph_db=self.graph_db,
+                llm_client_resolver=self._client_for_stage,
                 config=PipelineConfig(
                     require_cvo_for_impact=True,
                     cvo_ttl_hours=0,  # Non-blocking: auto-approve immediately

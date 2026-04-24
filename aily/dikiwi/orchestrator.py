@@ -102,11 +102,13 @@ class DikiwiOrchestrator:
         graph_db: GraphDB,
         event_bus: EventBus | None = None,
         config: PipelineConfig | None = None,
+        llm_client_resolver: Callable[[DikiwiStage], Any] | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.graph_db = graph_db
         self.event_bus = event_bus or InMemoryEventBus()
         self.config = config or PipelineConfig()
+        self.llm_client_resolver = llm_client_resolver
 
         # State management
         self.state_machine = StageStateMachine(
@@ -190,6 +192,8 @@ class DikiwiOrchestrator:
         agent = self.agent_registry.get(DikiwiStage.DATA)
         if agent:
             try:
+                if self.llm_client_resolver is not None:
+                    agent_ctx.llm_client = self.llm_client_resolver(DikiwiStage.DATA)
                 result = await agent.execute(agent_ctx)
                 agent_ctx.stage_results.append(result)
                 if not result.success:
@@ -500,6 +504,8 @@ class DikiwiOrchestrator:
             ctx = self._agent_contexts.get(pipeline.pipeline_id)
             if ctx:
                 try:
+                    if self.llm_client_resolver is not None:
+                        ctx.llm_client = self.llm_client_resolver(to_stage)
                     result = await agent.execute(ctx)
                     ctx.stage_results.append(result)
                     if not result.success:

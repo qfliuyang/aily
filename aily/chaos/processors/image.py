@@ -1,4 +1,4 @@
-"""Image processor using Kimi K2.5 for visual understanding."""
+"""Image processor using the configured multimodal provider for visual understanding."""
 
 from __future__ import annotations
 
@@ -13,16 +13,18 @@ from PIL import Image
 
 from aily.chaos.processors.base import ContentProcessor
 from aily.chaos.types import ExtractedContentMultimodal, VisualElement
-from aily.llm.kimi_client import KimiClient
+from aily.config import SETTINGS
+from aily.llm.provider_routes import PrimaryLLMRoute, ResolvedLLMRoute
 
 logger = logging.getLogger(__name__)
 
 
 class ImageProcessor(ContentProcessor):
-    """Process images using Kimi for visual analysis."""
+    """Process images using the configured provider for visual analysis."""
 
-    VISION_API_URL = KimiClient.CHAT_COMPLETIONS_URL
-    VISION_MODEL = "kimi-k2.5"
+    def __init__(self, config, llm_client=None) -> None:
+        super().__init__(config, llm_client)
+        self._vision_route: ResolvedLLMRoute | None = None
 
     async def process(self, file_path: Path) -> ExtractedContentMultimodal | None:
         """Process image file."""
@@ -65,11 +67,13 @@ class ImageProcessor(ContentProcessor):
                 source_type="image",
                 source_path=file_path,
                 visual_elements=[visual_element],
-                processing_method="kimi-k2.5-vision",
+                processing_method=f"{self._resolve_vision_route().provider}:{self._resolve_vision_route().model}:vision",
                 metadata={
                     "format": file_path.suffix.lower(),
                     "has_ocr": ocr_text is not None,
                     "has_analysis": analysis is not None,
+                    "vision_provider": self._resolve_vision_route().provider,
+                    "vision_model": self._resolve_vision_route().model,
                 },
             )
 
@@ -100,21 +104,19 @@ class ImageProcessor(ContentProcessor):
         return base64_str
 
     async def _analyze_with_vision(self, base64_image: str) -> dict | None:
-        """Analyze image using Kimi multimodal chat completions."""
-        api_key = KimiClient.resolve_api_key(
-            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
-        )
-        if not api_key or not self.config.image.visual_analysis:
+        """Analyze image using the configured multimodal chat completions route."""
+        route = self._resolve_vision_route()
+        if not route.api_key or not self.config.image.visual_analysis:
             return None
 
         try:
             headers = {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {route.api_key}",
                 "Content-Type": "application/json",
             }
 
             payload = {
-                "model": self.VISION_MODEL,
+                "model": route.model,
                 "messages": [
                     {
                         "role": "user",
@@ -137,7 +139,7 @@ class ImageProcessor(ContentProcessor):
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.VISION_API_URL,
+                    self._chat_completions_url(route),
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -160,22 +162,20 @@ class ImageProcessor(ContentProcessor):
             return None
 
     async def _extract_text_with_ocr(self, base64_image: str) -> str | None:
-        """Extract text from image using Kimi multimodal understanding."""
-        api_key = KimiClient.resolve_api_key(
-            os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
-        )
-        if not api_key:
+        """Extract text from image using the configured multimodal route."""
+        route = self._resolve_vision_route()
+        if not route.api_key:
             return None
 
         try:
             headers = {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {route.api_key}",
                 "Content-Type": "application/json",
             }
 
             # Use vision model to extract text
             payload = {
-                "model": self.VISION_MODEL,
+                "model": route.model,
                 "messages": [
                     {
                         "role": "user",
@@ -198,7 +198,7 @@ class ImageProcessor(ContentProcessor):
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.VISION_API_URL,
+                    self._chat_completions_url(route),
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -218,6 +218,15 @@ class ImageProcessor(ContentProcessor):
         except Exception as e:
             logger.warning("OCR extraction failed: %s", e)
             return None
+
+    def _resolve_vision_route(self) -> ResolvedLLMRoute:
+        if self._vision_route is None:
+            self._vision_route = PrimaryLLMRoute.resolve_route(SETTINGS, workload="chaos.vision")
+        return self._vision_route
+
+    @staticmethod
+    def _chat_completions_url(route: ResolvedLLMRoute) -> str:
+        return f"{route.base_url.rstrip('/')}/chat/completions"
 
     def can_process(self, file_path: Path) -> bool:
         """Check if file is an image."""

@@ -22,7 +22,8 @@ from aily.chaos.types import (
     ProcessingStatus,
 )
 from aily.chaos.watcher import FileWatcher
-from aily.llm.llm_router import LLMRouter
+from aily.config import SETTINGS
+from aily.llm.provider_routes import PrimaryLLMRoute
 
 logger = logging.getLogger(__name__)
 
@@ -46,31 +47,11 @@ class ChaosProcessor:
         self.vault_path = Path(vault_path) if vault_path else None
         self.watcher = FileWatcher(self.config)
         self.tagger = IntelligentTagger(self.config)
-        # Use Kimi as the default remote model for chaos processing.
-        self.llm_client = LLMRouter.standard_kimi(
-            api_key=self._get_api_key(),
-            model="kimi-k2.5",
-        )
+        self.llm_client = PrimaryLLMRoute.from_settings(SETTINGS, workload="chaos")
         self._running = False
         self._worker_task: asyncio.Task | None = None
         self._active_jobs: dict[str, ProcessingJob] = {}
         self._job_callback: Callable[[ProcessingJob], None] | None = None
-
-    def _get_api_key(self) -> str:
-        """Get API key from environment."""
-        import os
-
-        api_key = (
-            os.getenv("KIMI_API_KEY")
-            or os.getenv("MOONSHOT_API_KEY")
-            or os.getenv("LLM_API_KEY")
-            or os.getenv("CODING_PLAN_API_KEY")
-        )
-        if not api_key:
-            raise ValueError(
-                "No API key found. Set KIMI_API_KEY, MOONSHOT_API_KEY, or LLM_API_KEY."
-            )
-        return api_key
 
     def on_job_completed(
         self, callback: Callable[[ProcessingJob], None]

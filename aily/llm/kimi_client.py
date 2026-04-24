@@ -1,7 +1,7 @@
 """Kimi LLM Client - Moonshot API integration for DIKIWI.
 
 Uses the OpenAI-compatible Kimi Open Platform at https://api.moonshot.cn/v1.
-Recommended model: kimi-k2.5
+Recommended model: kimi-k2.6
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class KimiClient(LLMClient):
         result = await client.chat_json(messages=[...])
     """
 
-    DEFAULT_MODEL = "kimi-k2.5"
+    DEFAULT_MODEL = "kimi-k2.6"
     BASE_URL = "https://api.moonshot.cn/v1"
     CHAT_COMPLETIONS_URL = f"{BASE_URL}/chat/completions"
 
@@ -56,10 +56,10 @@ class KimiClient(LLMClient):
 
         Args:
             api_key: Kimi API key (from https://platform.kimi.com)
-            model: Model name (recommended: kimi-k2.5)
+            model: Model name (recommended: kimi-k2.6)
             timeout: Request timeout in seconds (higher for long contexts)
             max_retries: Number of retries on failure
-            thinking: Enable thinking mode for kimi-k2.5 (default False for batch speed)
+            thinking: Enable thinking mode for kimi-k2.x models (default False for batch speed)
         """
         super().__init__(
             base_url=self.BASE_URL,

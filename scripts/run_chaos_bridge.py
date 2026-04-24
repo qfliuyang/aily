@@ -63,11 +63,8 @@ async def process_single_file(json_file: Path, vault_path: Path) -> dict:
     )
 
     # Setup LLM
-    api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY") or SETTINGS.kimi_api_key or SETTINGS.llm_api_key
-    llm_client = PrimaryLLMRoute.route_kimi(
-        api_key=api_key,
-        model=SETTINGS.kimi_model,
-    )
+    llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+    llm_client = llm_resolver("dikiwi")
 
     # Setup GraphDB (use temp to avoid lock issues)
     graph_db = GraphDB(db_path=vault_path / ".aily" / f"chaos_bridge_{datetime.now():%Y%m%d}.db")
@@ -86,6 +83,7 @@ async def process_single_file(json_file: Path, vault_path: Path) -> dict:
         dikiwi_mind = DikiwiMind(
             graph_db=graph_db,
             llm_client=llm_client,
+            llm_client_resolver=llm_resolver,
             dikiwi_obsidian_writer=obsidian_writer,
             browser_manager=browser_manager,
         )

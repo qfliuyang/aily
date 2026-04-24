@@ -459,13 +459,8 @@ async def run_chaos_to_zettelkasten(
     from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
     # Setup
-    os.environ.setdefault("KIMI_API_KEY", SETTINGS.kimi_api_key or SETTINGS.llm_api_key or "")
-    llm_client = PrimaryLLMRoute.route_kimi(
-        api_key=os.environ["KIMI_API_KEY"],
-        model=SETTINGS.kimi_model,
-        max_concurrency=SETTINGS.llm_max_concurrency,
-        min_interval_seconds=SETTINGS.llm_min_interval_seconds,
-    )
+    llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+    llm_client = llm_resolver("dikiwi")
 
     # Initialize GraphDB
     from aily.graph.db import GraphDB
@@ -485,6 +480,7 @@ async def run_chaos_to_zettelkasten(
         dikiwi_mind = DikiwiMind(
             graph_db=graph_db,
             llm_client=llm_client,
+            llm_client_resolver=llm_resolver,
             dikiwi_obsidian_writer=obsidian_writer,
             browser_manager=browser_manager,
         )

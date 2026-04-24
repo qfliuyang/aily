@@ -153,6 +153,24 @@ class TestEntrepreneurScheduler:
         assert hypothesis["economic_buyer"] == "VP of Silicon Engineering"
         assert hypothesis["proof_artifact"] == "Benchmark delta on historical ECO runs"
 
+    def test_init_accepts_dedicated_gstack_and_guru_clients(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        gstack_client = MagicMock()
+        guru_client = MagicMock()
+
+        scheduler = EntrepreneurScheduler(
+            llm_client=mock_llm_client,
+            gstack_llm_client=gstack_client,
+            guru_llm_client=guru_client,
+            graph_db=mock_graph_db,
+        )
+
+        assert scheduler.gstack_agent.llm_client is gstack_client
+        assert scheduler.gstack_agent.guru_llm_client is guru_client
+
     @pytest.mark.asyncio
     async def test_run_session_passes_structured_context_to_gstack_panel(
         self,

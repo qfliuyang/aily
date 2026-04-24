@@ -44,12 +44,12 @@ class LLMConfig:
     # Standard API settings
     standard_api_key: str = ""
     standard_base_url: str = "https://api.moonshot.cn/v1"
-    standard_model: str = "kimi-k2.5"
+    standard_model: str = "kimi-k2.6"
 
     # Coding Plan settings
     coding_plan_api_key: str = ""
     coding_plan_provider: str = "ark"  # ark, bailian, zhipu
-    coding_plan_model: str = "kimi-k2.5"
+    coding_plan_model: str = "kimi-k2.6"
     coding_plan_base_url: str = ""
 
     # Routing preferences
@@ -102,7 +102,7 @@ class LLMRouter:
     @staticmethod
     def standard_kimi(
         api_key: str,
-        model: str = "kimi-k2.5",
+        model: str = "kimi-k2.6",
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
@@ -130,7 +130,7 @@ class LLMRouter:
     @staticmethod
     def coding_plan_ark(
         api_key: str,
-        model: str = "kimi-k2.5",
+        model: str = "kimi-k2.6",
     ) -> CodingPlanClient:
         """Create ByteDance Ark Coding Plan client.
 
@@ -190,7 +190,7 @@ class LLMRouter:
     @staticmethod
     def standard_zhipu(
         api_key: str,
-        model: str = "glm-4-flash",
+        model: str = "glm-5.1",
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
     ) -> KimiClient:
@@ -212,6 +212,26 @@ class LLMRouter:
             model=model,
             timeout=120.0,
             max_retries=2,
+            max_concurrency=max_concurrency,
+            min_interval_seconds=min_interval_seconds,
+        )
+
+    @staticmethod
+    def standard_deepseek(
+        api_key: str,
+        model: str = "deepseek-v4-pro",
+        thinking: bool = False,
+        max_concurrency: int = 1,
+        min_interval_seconds: float = 0.0,
+    ) -> LLMClient:
+        """Create standard DeepSeek client (OpenAI-compatible API)."""
+        return LLMClient(
+            base_url="https://api.deepseek.com",
+            api_key=api_key,
+            model=model,
+            timeout=300.0,
+            max_retries=2,
+            thinking=thinking,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,
         )

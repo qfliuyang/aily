@@ -61,7 +61,8 @@ writer = ObsidianWriter(
 )
 worker: JobWorker | None = None
 scheduler: PassiveCaptureScheduler | None = None
-llm_client = PrimaryLLMRoute.from_settings(SETTINGS)
+llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
+llm_client = llm_resolver("default")
 digest_scheduler: DailyDigestScheduler | None = None
 learning_loop: LearningLoop | None = None
 claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
@@ -523,7 +524,8 @@ async def lifespan(app: FastAPI):
 
         # DIKIWI Mind - continuous knowledge processing
         dikiwi_mind = DikiwiMind(
-            llm_client=llm_client,
+            llm_client=llm_resolver("dikiwi"),
+            llm_client_resolver=llm_resolver,
             graph_db=graph_db,
             enabled=SETTINGS.minds.dikiwi_enabled,
             obsidian_writer=writer,
@@ -600,7 +602,7 @@ async def lifespan(app: FastAPI):
             max_proposals_per_session=SETTINGS.minds.proposal_max_per_session,
         )
         innovation_scheduler = ReactorScheduler(
-            llm_client=llm_client,
+            llm_client=llm_resolver("reactor"),
             graph_db=graph_db,
             obsidian_writer=writer,
             feishu_pusher=pusher,
@@ -616,7 +618,7 @@ async def lifespan(app: FastAPI):
 
         # Entrepreneur Mind - 9am daily GStack analysis with agentic execution
         entrepreneur_scheduler = EntrepreneurScheduler(
-            llm_client=llm_client,
+            llm_client=llm_resolver("entrepreneur"),
             graph_db=graph_db,
             innovation_scheduler=innovation_scheduler,
             obsidian_writer=writer,
@@ -628,6 +630,8 @@ async def lifespan(app: FastAPI):
             circuit_breaker_threshold=SETTINGS.minds.circuit_breaker_threshold,
             enabled=SETTINGS.minds.entrepreneur_enabled,
             tool_executor=_tool_executor,
+            gstack_llm_client=llm_resolver("gstack"),
+            guru_llm_client=llm_resolver("guru"),
         )
         if SETTINGS.minds.entrepreneur_enabled:
             entrepreneur_scheduler.start()
