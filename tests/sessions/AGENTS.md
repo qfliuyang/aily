@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-18 | Updated: 2026-04-18 -->
+<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
 
 # sessions
 
@@ -21,6 +21,8 @@ Tests for the Three-Mind schedulers and session management. Covers DikiwiMind, I
 | `test_reactor_scheduler.py` | Reactor/MAC loop scheduler tests |
 | `test_models.py` | Session data model tests |
 | `test_base.py` | Base session test utilities |
+| `test_dikiwi_batch_mode.py` | Batch mode DIKIWI pipeline tests |
+| `test_dikiwi_data_information.py` | DATA → INFORMATION stage tests |
 
 ## For AI Agents
 

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-18 | Updated: 2026-04-18 -->
+<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
 
 # writer
 
@@ -11,18 +11,17 @@ Tests for the Obsidian writer layer. Validates note formatting, frontmatter gene
 
 | File | Description |
 |------|-------------|
-| *(tests within sessions/)* | Writer tests are co-located with session tests |
+| `test_dikiwi_obsidian.py` | DikiwiObsidianWriter tests — note formatting, frontmatter, vault writes |
 
 ## For AI Agents
 
 ### Working In This Directory
-- Writer tests verify Obsidian Local REST API integration
+- Writer tests verify Obsidian note formatting and vault write operations
 - Frontmatter YAML formatting is tested for all DIKIWI levels
 - Link resolution tests ensure `[[WikiLinks]]` point to valid notes
 
 ### Testing Requirements
-- Run with: `pytest tests/writer/ -xvs` (if tests are moved here)
-- Currently, writer tests may be in `tests/sessions/`
+- Run with: `pytest tests/writer/ -xvs`
 
 ## Dependencies
 

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-18 | Updated: 2026-04-18 -->
+<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
 
 # dikiwi
 
@@ -18,6 +18,8 @@ Unit and integration tests for the DIKIWI pipeline and agents. Covers all 6 stag
 | `test_memorials.py` | Persistent memory storage tests |
 | `test_skills.py` | Skill registry and built-in skill tests |
 | `test_residual_agent.py` | Residual/MAC loop agent tests |
+| `test_network_synthesis.py` | Network/graph-triggered synthesis tests |
+| `test_graph_synthesis_agents.py` | Graph-driven synthesis agent tests |
 | `conftest.py` | Shared fixtures for DIKIWI tests |
 
 ## For AI Agents

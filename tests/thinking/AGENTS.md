@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-18 | Updated: 2026-04-18 -->
+<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
 
 # thinking
 
@@ -11,7 +11,11 @@ Tests for the innovation thinking frameworks. Covers the 11 structured framework
 
 | File | Description |
 |------|-------------|
-| `__init__.py` | Package marker (tests imported from framework modules) |
+| `test_frameworks.py` | Individual framework analyzer tests (TRIZ, SCAMPER, etc.) |
+| `test_integration.py` | Thinking-to-DIKIWI integration tests |
+| `test_models.py` | KnowledgePayload, FrameworkInsight model tests |
+| `test_orchestrator.py` | ThinkingOrchestrator pipeline tests |
+| `test_synthesis.py` | Synthesis engine cross-framework tests |
 
 ## For AI Agents
 

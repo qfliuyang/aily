@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-18 | Updated: 2026-04-18 -->
+<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
 
 # thinking
 
@@ -19,14 +19,14 @@ Innovation framework engine. Provides 11 structured thinking frameworks (TRIZ, F
 
 | Directory | Purpose |
 |-----------|---------|
-| `frameworks/` | Individual framework implementations — 11 strategies |
-| `integration/` | GraphDB, LLM, queue, output integration layers |
-| `synthesis/` | `SynthesisEngine` — combines framework outputs into final report |
+| `frameworks/` | Individual framework implementations — 11 strategies (see `frameworks/AGENTS.md`) |
+| `integration/` | GraphDB, LLM, queue, output integration layers (see `integration/AGENTS.md`) |
+| `synthesis/` | `SynthesisEngine` — combines framework outputs into final report (see `synthesis/AGENTS.md`) |
 
 ## For AI Agents
 
 ### Working In This Directory
-- New frameworks: extend `BaseFramework` in `frameworks/base.py`
+- New frameworks: extend `FrameworkAnalyzer` in `frameworks/base.py`
 - Each framework implements `analyze(payload) -> FrameworkInsight`
 - `ThinkingOrchestrator` runs all frameworks in parallel
 - Synthesis engine scores and ranks insights by confidence
