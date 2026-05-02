@@ -348,6 +348,49 @@ class ChaosDikiwiBridge:
             metadata=metadata,
         )
 
+    async def process_incremental(
+        self,
+        new_markdown_paths: list[Path],
+    ) -> dict[str, Any]:
+        """Process newly arrived markdown files through the incremental DIKIWI pipeline.
+
+        Only processes new content — existing notes are preserved. Higher stages
+        (INSIGHT/WISDOM/IMPACT) only regenerate for affected graph neighborhoods.
+
+        Args:
+            new_markdown_paths: List of markdown file paths in 00-Chaos
+
+        Returns:
+            Incremental pipeline result summary
+        """
+        if not new_markdown_paths:
+            return {"processed": 0, "new_info_nodes": 0, "affected_subgraphs": 0}
+
+        from aily.dikiwi.incremental_orchestrator import IncrementalResult
+
+        result: IncrementalResult | None = None
+        try:
+            result = await self.dikiwi_mind.process_input_incremental(new_markdown_paths)
+        except Exception as exc:
+            logger.exception("[Bridge] Incremental pipeline failed: %s", exc)
+            return {"error": str(exc), "processed": 0}
+
+        return {
+            "new_files": result.new_files,
+            "new_info_nodes": result.new_info_nodes,
+            "affected_subgraphs": result.affected_subgraphs,
+            "stale_insights": result.stale_insights,
+            "stale_wisdom": result.stale_wisdom,
+            "stale_impacts": result.stale_impacts,
+            "regenerated_insights": result.regenerated_insights,
+            "regenerated_wisdom": result.regenerated_wisdom,
+            "regenerated_impacts": result.regenerated_impacts,
+            "skipped_insights": result.skipped_insights,
+            "skipped_wisdom": result.skipped_wisdom,
+            "skipped_impacts": result.skipped_impacts,
+            "elapsed_seconds": result.elapsed_seconds,
+        }
+
     async def process_batch(
         self,
         date_folder: str | None = None,

@@ -16,3 +16,8 @@ test-artifacts/
 .omc/
 .DS_Store
 *.png
+output/
+logs/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

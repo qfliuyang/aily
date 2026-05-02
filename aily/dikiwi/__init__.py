@@ -52,6 +52,10 @@ from aily.dikiwi.orchestrator import (
     PipelineConfig,
     ProcessingPipeline,
 )
+from aily.dikiwi.incremental_orchestrator import (
+    IncrementalOrchestrator,
+    IncrementalResult,
+)
 from aily.dikiwi.skills import (
     Skill,
     SkillContext,
@@ -89,6 +93,9 @@ __all__ = [
     "DikiwiOrchestrator",
     "PipelineConfig",
     "ProcessingPipeline",
+    # Incremental orchestrator
+    "IncrementalOrchestrator",
+    "IncrementalResult",
     # Stages
     "DikiwiStage",
     "StageContext",

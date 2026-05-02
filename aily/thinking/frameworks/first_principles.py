@@ -232,7 +232,7 @@ Format as JSON:
                 content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.75,
+                confidence=float(response.get("novelty", 0.75)),
                 metadata={
                     "fundamental_truth": fundamental['fundamental_truth'],
                     "challenged_assumption": fundamental['assumption'],
@@ -294,7 +294,7 @@ Format as JSON:
                 content=response.get("synthesis", ""),
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.8,
+                confidence=0.8,  # Synthesis — qualitative scoring
                 metadata={
                     "framework": "First Principles",
                     "is_synthesis": True,

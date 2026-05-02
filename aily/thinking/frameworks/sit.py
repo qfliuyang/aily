@@ -163,7 +163,7 @@ Format as JSON:
                 content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.75,
+                confidence=float(response.get("novelty", 0.75)),
                 metadata={
                     "sit_operator": operator_key,
                     "target_user": response.get("target_user", ""),

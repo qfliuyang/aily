@@ -55,43 +55,71 @@ All three are wired up and started in `aily/main.py`'s `lifespan()` context mana
 
 ### LLM routing
 
-`aily/llm/provider_routes.py` → `PrimaryLLMRoute.from_settings()` builds the app-wide `LLMClient`. Default provider is **Kimi (kimi-k2.5)**. The `LLMRouter` in `aily/llm/llm_router.py` handles rate limiting (configurable via `llm_max_concurrency` / `llm_min_interval_seconds`).
+`aily/llm/provider_routes.py` → `PrimaryLLMRoute.from_settings()` builds the app-wide `LLMClient`. Supports **4 providers** with workload-aware routing:
+
+| Provider | Model | API URL | Mode |
+|----------|-------|---------|------|
+| **Kimi** (default) | `kimi-k2.6` | `api.moonshot.cn/v1` | Per-token (standard) |
+| **Zhipu** | `glm-5.1` | `open.bigmodel.cn/api/paas/v4` | Per-token (standard) |
+| **DeepSeek** | `deepseek-v4-pro` | `api.deepseek.com` | Per-token (standard) |
+| **ByteDance Ark** | `kimi-k2.6` | Coding Plan | Fixed monthly |
+
+Workload-aware routing via `llm_workload_routes_json` setting. Thinking mode is **disabled by default** for batch speed (was causing 90s latency with 28% timeout rate). Timeout: 300s. Required env vars: `KIMI_API_KEY`, `ZHIPU_API_KEY`, `DEEPSEEK_API_KEY`.
 
 ### Output
 
-All notes go to **Obsidian** via its Local REST API (`aily/writer/obsidian.py`). The DIKIWI vault layout is:
-- `00-Chaos/` — Raw input transcripts
-- `01-Data/` — Unclassified raw content chunks
+All notes go to **Obsidian** via filesystem writes (`aily/writer/dikiwi_obsidian.py`). Higher-stage notes (insight, wisdom, impact) include `grounded_in` frontmatter for dependency tracking, enabling incremental staleness detection. Vault layout:
+- `00-Chaos/` + `00-Chaos/images/` — Raw transcripts and extracted images
+- `01-Data/` — Unclassified data points
 - `02-Information/` — Classified information nodes
-- `03-Knowledge/` — Connected knowledge relationships
+- `03-Knowledge/` — Knowledge relationships
 - `04-Insight/` — Pattern insights
 - `05-Wisdom/` — Synthesized wisdom zettels
 - `06-Impact/` — Action items
 - `07-Proposal/` — Innovation proposals
 - `08-Entrepreneurship/` — Business evaluations
-- `99-MOC/` — Maps of Content and indexes
+- `99-MOC/` — Maps of Content
+
+### Incremental processing (NEW)
+
+`aily/dikiwi/incremental_orchestrator.py` — Graph-driven delta pipeline. When new files arrive:
+1. DATA + INFORMATION run on new content only
+2. `NetworkSynthesisSelector` detects changed graph neighborhoods via GraphDB
+3. `ObsidianCLI.search_by_frontmatter("grounded_in", ...)` finds stale higher-stage notes
+4. Only affected insight/wisdom/impact notes regenerate
+
+Entry points:
+- `DikiwiMind.process_input_incremental(files)` — programmatic API
+- `scripts/aily_ingest.py --chaos-dir <dir>` — CLI (one-shot)
+- `scripts/aily_ingest.py --watch --chaos-dir <dir>` — daemon mode
+- `scripts/aily_ingest.py --force ...` — bypass graph threshold, full pipeline
 
 ### Key subsystems at a glance
 
 | Path | Purpose |
 |------|---------|
-| `aily/graph/db.py` | SQLite-backed knowledge graph (bidirectional links) |
+| `aily/graph/db.py` | SQLite-backed knowledge graph (nodes, edges, properties, occurrences) |
+| `aily/dikiwi/` | DIKIWI runtime — 6 event-driven agents + incremental orchestrator |
+| `aily/dikiwi/incremental_orchestrator.py` | Graph-driven incremental pipeline (NEW) |
+| `aily/dikiwi/network_synthesis.py` | Subgraph change detection for incremental triggering |
+| `aily/dikiwi/agents/obsidian_cli.py` | Filesystem vault reader — frontmatter search, backlinks, tags |
 | `aily/parser/` + `aily/parser/registry.py` | URL parsers (Kimi, Monica, arXiv, GitHub, YouTube) |
 | `aily/processing/router.py` | Universal file type router (PDF, image, docx…) |
 | `aily/scheduler/jobs.py` | APScheduler wrappers for digest, passive capture, Claude session capture |
-| `aily/capture/claude_code.py` | Captures Claude Code session JSONL files into Obsidian |
-| `aily/thinking/` | Extended thinking config for complex LLM calls |
-| `aily/dikiwi/` | Primary DIKIWI runtime — event-driven agents (Data, Information, Knowledge, Insight, Wisdom, Impact, plus Hanlin vault analyst) |
+| `aily/thinking/` | 11 innovation frameworks (TRIZ, SCAMPER, Blue Ocean, etc.) |
 | `aily/gating/` | Hydrological gating subsystem — **experimental, not the active runtime** |
+| `scripts/benchmark_providers.py` | Multi-provider benchmark (Kimi / Zhipu / DeepSeek) |
+| `scripts/prep_chaos.py` | Pre-extract PDFs for consistent benchmark inputs |
 
 ### Required env vars
 
 ```
-KIMI_API_KEY           # Kimi / Moonshot AI (primary LLM)
-OBSIDIAN_VAULT_PATH    # absolute path to Obsidian vault
-OBSIDIAN_REST_API_KEY  # Obsidian Local REST API plugin key
-FEISHU_APP_ID          # Feishu bot credentials
+KIMI_API_KEY            # Kimi / Moonshot AI (primary LLM)
+ZHIPU_API_KEY           # Zhipu / BigModel (secondary)
+DEEPSEEK_API_KEY        # DeepSeek (tertiary)
+OBSIDIAN_VAULT_PATH     # absolute path to Obsidian vault
+FEISHU_APP_ID           # Feishu bot credentials
 FEISHU_APP_SECRET
 ```
 
-Optional: `TAVILY_API_KEY` (web search), `BROWSER_USE_API_KEY`, `WHISPER_API_KEY` (voice), `AILY_INNOVATION_TIME`, `AILY_ENTREPRENEUR_TIME`.
+Optional: `TAVILY_API_KEY`, `BROWSER_USE_API_KEY`, `WHISPER_API_KEY`, `AILY_INNOVATION_TIME`, `AILY_ENTREPRENEUR_TIME`.

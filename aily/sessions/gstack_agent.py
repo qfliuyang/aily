@@ -599,12 +599,13 @@ Return JSON:
         except Exception as e:
             logger.error("[GStack Guru] Appendix generation failed: %s", e)
             return {
-                "executive_take": "Guru appendix generation failed.",
+                "executive_take": "[FAILED] Guru appendix generation failed — data below is placeholder, not analysis.",
                 "decision_posture": "validate_then_build",
                 "fact_base": [],
                 "business_plan": {},
                 "development_plan": {},
                 "briefing_notes": {},
+                "generation_error": str(e),
             }
 
     async def _run_action(

@@ -1,30 +1,32 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
+<!-- Generated: 2026-04-26 | Updated: 2026-04-26 -->
 
 # llm
 
 ## Purpose
 
-LLM abstraction layer. Provides a unified `LLMClient` interface, provider-specific routing (Kimi, Zhipu), rate limiting via `LLMRouter`, and a centralized prompt registry. All LLM calls in the application go through this layer.
+LLM abstraction layer. Provides a unified `LLMClient` interface, 4-provider routing (Kimi, Zhipu, DeepSeek, ByteDance Ark) with workload-aware dispatch, rate limiting via `LLMRouter`, and a centralized prompt registry. Thinking mode is disabled by default for batch speed. Timeout: 300s.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `client.py` | `LLMClient` — unified async interface, usage tracking |
-| `llm_router.py` | `LLMRouter` — rate limiting, provider-specific builders |
-| `provider_routes.py` | `PrimaryLLMRoute` — app-wide client builder from SETTINGS |
+| `client.py` | `LLMClient` — unified async interface, retry logic, usage tracking |
+| `llm_router.py` | `LLMRouter` — rate limiting, provider-specific builders, `for_task()` auto-select |
+| `provider_routes.py` | `PrimaryLLMRoute` — workload-aware routing, `resolve_route()`, 4 providers |
 | `prompt_registry.py` | `DikiwiPromptRegistry` — centralized prompt templates |
-| `kimi_client.py` | `KimiClient` — Kimi/Moonshot-specific helpers (chat_json, classify) |
-| `coding_plan_client.py` | Coding plan LLM client with multi-provider support |
+| `kimi_client.py` | `KimiClient` — Kimi/Moonshot-specific helpers (chat_json, classify, synthesize) |
+| `coding_plan_client.py` | Coding plan LLM client with multi-provider support (Ark, Bailian, Zhipu) |
 | `conversation_logger.py` | LLM call logging for debugging |
 
 ## For AI Agents
 
 ### Working In This Directory
-- New providers: add a `route_*` method to `PrimaryLLMRoute` and `LLMRouter`
+- New providers: add a `route_*` method to `PrimaryLLMRoute`, add to `LLMRouter`, add a `ProviderRoute`
 - Prompts: add to `DikiwiPromptRegistry` as static methods
 - Rate limits: `max_concurrency` and `min_interval_seconds` in SETTINGS
+- `thinking=False` is the default — only enable for complex reasoning stages
+- Workload routing: configure `llm_workload_routes_json` for per-stage provider overrides
 - Never call provider APIs directly from outside this package
 
 ### Testing Requirements

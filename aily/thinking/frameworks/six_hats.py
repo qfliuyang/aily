@@ -154,13 +154,13 @@ Format as JSON:
                     content=response.get("innovation_description", response.get("perspective", "")),
                     proposal_type=ProposalType.INNOVATION,
                     status=ProposalStatus.PROPOSED,
-                    confidence=0.7,
+                    confidence=float(response.get("novelty", 0.7)),
                     metadata={
                         "hat": hat_key,
                         "perspective": hat['focus'],
                         "framework": "Six Thinking Hats",
                         "key_insights": response.get("key_insights", []),
-                        "novelty": 0.8,  # Green hat = high novelty
+                        "novelty": float(response.get("novelty", 0.8)),
                     },
                 )
 
@@ -186,7 +186,7 @@ Format as JSON:
 Focus areas: {', '.join(focus)}
 
 Other hat perspectives:
-{chr(10).join(f"- {p[:200]}..." for p in perspectives[:5])}
+{chr(10).join(f"- {p[:200]}..." for p in perspectives)}
 
 Green Hat innovations: {len(green_proposals)}
 
@@ -209,12 +209,14 @@ Format as JSON:
                 {"role": "user", "content": prompt},
             ])
 
+            llm_priority = response.get("priority", "medium")
+            synth_confidence = 0.9 if llm_priority == "high" else 0.8
             return Proposal(
                 title=f"[Blue Hat - Synthesis] {response.get('title', 'Strategic Direction')}",
                 content=response.get("description", ""),
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.8,
+                confidence=synth_confidence,
                 metadata={
                     "hat": "blue",
                     "perspective": "Process & Synthesis",

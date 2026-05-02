@@ -173,12 +173,13 @@ Format as JSON:
                 f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
             ]).strip()
 
+            llm_confidence = float(response.get("novelty", 0.75))
             return Proposal(
                 title=f"[Blue Ocean - {action_key.title()}] {response.get('title', 'Untitled')}",
                 content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.75,
+                confidence=llm_confidence,
                 metadata={
                     "blue_ocean_action": action_key,
                     "framework": "Blue Ocean Strategy",
@@ -245,12 +246,13 @@ Format as JSON:
                 f"Proof artifact: {response.get('proof_artifact', 'unknown')}",
             ]).strip()
 
+            llm_confidence = float(response.get("novelty", 0.7))
             return Proposal(
                 title=f"[Six Paths - {path_info['path']}] {response.get('title', 'Untitled')}",
                 content=content,
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.7,
+                confidence=llm_confidence,
                 metadata={
                     "six_paths": path_info['path'],
                     "framework": "Blue Ocean Strategy",
@@ -307,7 +309,7 @@ Format as JSON:
                 content=response.get("synthesis", ""),
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.8,
+                confidence=0.8,  # Synthesis is qualitative — fixed confidence is appropriate
                 metadata={
                     "framework": "Blue Ocean Strategy",
                     "is_synthesis": True,

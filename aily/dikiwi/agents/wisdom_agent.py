@@ -58,6 +58,8 @@ class WisdomAgent(DikiwiAgent):
                 title_map[z.title.lower()] = zid
                 # Also index by slugified title for robust matching
                 slug = "".join(c for c in z.title.lower() if c.isalnum())
+                if slug in title_map:
+                    slug = f"{slug}_{z.id[:6]}"
                 title_map[slug] = zid
 
             # Pre-register all zettel titles so cross-links use full filenames

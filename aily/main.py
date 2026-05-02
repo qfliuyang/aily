@@ -4,8 +4,9 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile
 import uvicorn
 
 from aily.config import SETTINGS
@@ -45,6 +46,10 @@ from aily.sessions.reactor_scheduler import ReactorScheduler
 from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
+from aily.gating.drainage import RainDrop, RainType, StreamType
+from aily.processing.router import ProcessingRouter
+from aily.ui.events import emit_ui_event, ui_event_hub
+from aily.ui.router import create_ui_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -67,6 +72,8 @@ digest_scheduler: DailyDigestScheduler | None = None
 learning_loop: LearningLoop | None = None
 claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 ws_client = None
+browser_manager_instance = None
+ui_upload_tasks: dict[str, asyncio.Task[Any]] = {}
 
 # Three-Mind System schedulers
 dikiwi_mind: DikiwiMind | None = None
@@ -94,6 +101,13 @@ async def _enqueue_url(url: str, open_id: str = "") -> None:
 
 
 async def _dispatch_job(job: dict) -> None:
+    await emit_ui_event(
+        "worker_status_changed",
+        worker="queue_worker",
+        state="processing",
+        job_id=job.get("id"),
+        job_type=job.get("type"),
+    )
     if job["type"] == "url_fetch":
         await _process_url_job(job)
     elif job["type"] == "daily_digest":
@@ -114,6 +128,13 @@ async def _dispatch_job(job: dict) -> None:
         await _process_entrepreneur_job(job)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
+    await emit_ui_event(
+        "worker_status_changed",
+        worker="queue_worker",
+        state="idle",
+        job_id=job.get("id"),
+        job_type=job.get("type"),
+    )
 
 
 async def _process_reactor_job(job: dict) -> None:
@@ -135,7 +156,19 @@ async def _process_entrepreneur_job(job: dict) -> None:
     if entrepreneur_scheduler is None:
         logger.warning("Entrepreneur scheduler not available, skipping job %s", job.get("id"))
         return
+    await emit_ui_event(
+        "proposal_review_started",
+        job_id=job.get("id"),
+        pipeline_id=job.get("payload", {}).get("pipeline_id"),
+        provider=getattr(entrepreneur_scheduler.llm_client, "_provider_name", lambda: "unknown")(),
+        model=getattr(entrepreneur_scheduler.llm_client, "model", ""),
+    )
     await entrepreneur_scheduler._run_session_wrapper()
+    await emit_ui_event(
+        "proposal_review_completed",
+        job_id=job.get("id"),
+        pipeline_id=job.get("payload", {}).get("pipeline_id"),
+    )
     logger.info("Entrepreneur evaluation completed for job %s", job.get("id"))
 
 
@@ -444,6 +477,141 @@ async def _enqueue_claude_session(file_path: Path) -> None:
     logger.info("Enqueued Claude session capture: %s", file_path)
 
 
+async def _process_ui_upload(upload_id: str, filename: str, content_type: str, data: bytes) -> None:
+    await emit_ui_event(
+        "source_ingest_started",
+        upload_id=upload_id,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(data),
+    )
+    try:
+        router = ProcessingRouter(browser_manager=browser_manager_instance)
+        extracted = await router.process(data, filename=filename, http_content_type=content_type)
+        await emit_ui_event(
+            "chaos_note_created",
+            upload_id=upload_id,
+            filename=filename,
+            source_type=extracted.source_type,
+            title=extracted.title or Path(filename).stem,
+            text_length=len(extracted.text or ""),
+        )
+
+        if not dikiwi_mind:
+            raise RuntimeError("DIKIWI Mind is not initialized")
+
+        title = extracted.title or Path(filename).stem
+        content = extracted.text or ""
+        if title:
+            content = f"# {title}\n\n{content}".strip()
+
+        drop = RainDrop(
+            id="",
+            rain_type=RainType.DOCUMENT,
+            content=content,
+            raw_bytes=data,
+            source="web_upload",
+            source_id=upload_id,
+            stream_type=StreamType.EXTRACT_ANALYZE,
+            metadata={
+                "ui_upload_id": upload_id,
+                "filename": filename,
+                "content_type": content_type,
+                "source_type": extracted.source_type,
+                **(extracted.metadata or {}),
+            },
+        )
+        result = await dikiwi_mind.process_input(drop)
+        await emit_ui_event(
+            "source_ingest_completed",
+            upload_id=upload_id,
+            filename=filename,
+            pipeline_id=result.pipeline_id,
+            final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+            stage_count=len(result.stage_results),
+        )
+    except Exception as exc:
+        logger.exception("UI upload processing failed for %s", filename)
+        await emit_ui_event(
+            "pipeline_failed",
+            upload_id=upload_id,
+            source_id=upload_id,
+            error=str(exc),
+        )
+    finally:
+        ui_upload_tasks.pop(upload_id, None)
+
+
+async def _handle_ui_upload(file: UploadFile, upload_id: str) -> dict[str, Any]:
+    data = await file.read()
+    filename = file.filename or f"upload-{upload_id}"
+    content_type = file.content_type or "application/octet-stream"
+    task = asyncio.create_task(_process_ui_upload(upload_id, filename, content_type, data))
+    ui_upload_tasks[upload_id] = task
+    return {
+        "upload_id": upload_id,
+        "filename": filename,
+        "content_type": content_type,
+        "size_bytes": len(data),
+        "status": "accepted",
+    }
+
+
+async def _ui_status_provider() -> dict[str, Any]:
+    queue_counts = await db.get_job_counts()
+    graph_counts = {}
+    for node_type in [
+        "data",
+        "information",
+        "knowledge",
+        "insight",
+        "wisdom",
+        "impact",
+        "proposal",
+        "business",
+    ]:
+        try:
+            graph_counts[node_type] = await graph_db.count_nodes_by_type(node_type)
+        except Exception:
+            graph_counts[node_type] = 0
+
+    worker_running = bool(worker and worker._task and not worker._task.done())
+    return {
+        "queue": queue_counts,
+        "graph": graph_counts,
+        "active_pipelines": ui_event_hub.active_pipeline_ids(),
+        "active_uploads": sorted(ui_upload_tasks.keys()),
+        "daemons": {
+            "queue_worker": worker_running,
+            "passive_capture_scheduler": scheduler is not None,
+            "daily_digest_scheduler": digest_scheduler is not None,
+            "claude_capture_scheduler": claude_capture_scheduler is not None,
+            "feishu_ws_client": ws_client is not None,
+        },
+        "minds": {
+            "dikiwi": dikiwi_mind is not None,
+            "reactor": innovation_scheduler is not None,
+            "entrepreneur": entrepreneur_scheduler is not None,
+        },
+    }
+
+
+async def _ui_graph_provider() -> dict[str, Any]:
+    return await graph_db.get_graph_snapshot()
+
+
+async def _ui_pipeline_provider(pipeline_id: str) -> dict[str, Any] | None:
+    events = ui_event_hub.pipeline_trace(pipeline_id)
+    if not events:
+        return None
+    last = events[-1]
+    return {
+        "pipeline_id": pipeline_id,
+        "status": last.get("type"),
+        "events": events,
+    }
+
+
 async def _tool_executor(action: str, **kwargs) -> dict:
     """Execute tools for GStack Agent - actually runs tests, checks, etc."""
     import subprocess
@@ -500,6 +668,7 @@ async def _tool_executor(action: str, **kwargs) -> dict:
 async def lifespan(app: FastAPI):
     global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
     global dikiwi_mind, innovation_scheduler, entrepreneur_scheduler
+    global browser_manager_instance
     await db.initialize()
     await graph_db.initialize()
 
@@ -511,6 +680,7 @@ async def lifespan(app: FastAPI):
         await browser_manager.start()
     except Exception:
         logger.warning("Browser manager failed to start, continuing without JS rendering support")
+    browser_manager_instance = browser_manager
 
     # Initialize Three-Mind System FIRST (needed for WebSocket routing)
     try:
@@ -678,6 +848,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(webhook.router)
+app.include_router(
+    create_ui_router(
+        upload_handler=_handle_ui_upload,
+        status_provider=_ui_status_provider,
+        graph_provider=_ui_graph_provider,
+        pipeline_provider=_ui_pipeline_provider,
+    )
+)
 
 
 if __name__ == "__main__":

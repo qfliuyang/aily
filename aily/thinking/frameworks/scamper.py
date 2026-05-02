@@ -128,12 +128,13 @@ Format as JSON:
                 {"role": "user", "content": prompt},
             ])
 
+            llm_confidence = float(response.get("novelty", 0.7))
             return Proposal(
                 title=f"[{letter}] {response.get('title', 'Untitled')}",
                 content=response.get("description", ""),
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.7,
+                confidence=llm_confidence,
                 metadata={
                     "scamper_action": letter,
                     "impact": response.get("impact", "medium"),

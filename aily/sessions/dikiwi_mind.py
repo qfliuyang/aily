@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,6 +32,8 @@ from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.processing.markdownize import MarkdownizeProcessor
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
+from aily.ui.events import emit_ui_event
+from aily.ui.telemetry import ui_telemetry_scope
 from aily.config import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -439,7 +442,22 @@ class DikiwiMind:
             async with semaphore:
                 try:
                     ctx.llm_client = self._client_for_stage(stage)
-                    result = await agent.execute(ctx)
+                    await emit_ui_event(
+                        "stage_started",
+                        pipeline_id=ctx.pipeline_id,
+                        correlation_id=ctx.correlation_id,
+                        stage=stage.name,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        provider=getattr(ctx.llm_client, "_provider_name", lambda: "unknown")(),
+                        model=getattr(ctx.llm_client, "model", ""),
+                    )
+                    with ui_telemetry_scope(
+                        pipeline_id=ctx.pipeline_id,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        stage=stage.name,
+                        workload=f"dikiwi.{stage.name.lower()}",
+                    ):
+                        result = await agent.execute(ctx)
                 except Exception as exc:
                     logger.exception("[DIKIWI] Batch stage %s failed for %s", stage.name, ctx.pipeline_id)
                     result = StageResult(
@@ -448,6 +466,16 @@ class DikiwiMind:
                         error_message=str(exc),
                     )
                 ctx.stage_results.append(result)
+                await emit_ui_event(
+                    "stage_completed" if result.success else "stage_failed",
+                    pipeline_id=ctx.pipeline_id,
+                    correlation_id=ctx.correlation_id,
+                    stage=stage.name,
+                    upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                    success=result.success,
+                    data_keys=sorted(list(result.data.keys())) if isinstance(result.data, dict) else [],
+                    error=result.error_message or "",
+                )
                 return result
 
         return await asyncio.gather(*[_run(ctx) for ctx in contexts])
@@ -847,6 +875,16 @@ class DikiwiMind:
             ctx = self._build_agent_context(drop, pipeline_id)
             contexts.append(ctx)
             results.append(DikiwiResult(input_id=drop.id, pipeline_id=pipeline_id))
+            await emit_ui_event(
+                "pipeline_started",
+                pipeline_id=pipeline_id,
+                correlation_id=pipeline_id,
+                source_id=drop.id,
+                source=drop.source,
+                upload_id=drop.metadata.get("ui_upload_id"),
+                filename=drop.metadata.get("filename"),
+                batch=True,
+            )
 
         try:
             stage_contexts = list(contexts)
@@ -898,6 +936,14 @@ class DikiwiMind:
                     incremental_ratio * 100.0,
                     threshold * 100.0,
                 )
+            await emit_ui_event(
+                "threshold_crossed" if higher_order_triggered else "threshold_not_reached",
+                stage=DikiwiStage.KNOWLEDGE.name,
+                incremental_ratio=incremental_ratio,
+                incremental_threshold=threshold,
+                higher_order_triggered=higher_order_triggered,
+                pipeline_ids=[ctx.pipeline_id for ctx in contexts],
+            )
 
             higher_order_contexts = [
                 ctx
@@ -928,8 +974,22 @@ class DikiwiMind:
                 result.completed_at = completed_at
                 if result.stage_results and all(stage_result.success for stage_result in result.stage_results):
                     self._successful_pipelines += 1
+                    await emit_ui_event(
+                        "pipeline_completed",
+                        pipeline_id=ctx.pipeline_id,
+                        correlation_id=ctx.correlation_id,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        batch=True,
+                    )
                 else:
                     self._failed_pipelines += 1
+                    await emit_ui_event(
+                        "pipeline_failed",
+                        pipeline_id=ctx.pipeline_id,
+                        correlation_id=ctx.correlation_id,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        batch=True,
+                    )
 
             return DikiwiBatchRun(
                 results=results,
@@ -943,6 +1003,79 @@ class DikiwiMind:
             for ctx in contexts:
                 self._cleanup_memory(ctx.pipeline_id)
                 self._llm_budgets.pop(ctx.pipeline_id, None)
+
+    async def process_input_incremental(
+        self,
+        new_file_paths: list[Path],
+        *,
+        force: bool = False,
+    ) -> "IncrementalResult":
+        """Process new files through graph-driven incremental DIKIWI pipeline.
+
+        Only processes new content through DATA/INFORMATION stages, then uses
+        NetworkSynthesisSelector to detect changed graph neighborhoods. Higher
+        stages (INSIGHT/WISDOM/IMPACT) only regenerate for stale notes.
+
+        Args:
+            new_file_paths: Markdown files to process
+            force: If True, bypass graph threshold and always run higher stages
+
+        Args:
+            new_file_paths: List of markdown file paths in 00-Chaos to process
+
+        Returns:
+            IncrementalResult with counts of new nodes, affected subgraphs,
+            stale notes, and regenerated output.
+        """
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.incremental_orchestrator import IncrementalOrchestrator, IncrementalResult
+        from aily.gating.drainage import RainDrop, RainType, StreamType
+
+        if not self.enabled:
+            return IncrementalResult(new_files=0, new_data_points=0, new_info_nodes=0,
+                                     affected_subgraphs=0, stale_insights=0, stale_wisdom=0,
+                                     stale_impacts=0, regenerated_insights=0, regenerated_wisdom=0,
+                                     regenerated_impacts=0, skipped_insights=0, skipped_wisdom=0,
+                                     skipped_impacts=0, elapsed_seconds=0, error="DIKIWI Mind disabled")
+
+        vault_path = self.dikiwi_obsidian_writer.vault_path if self.dikiwi_obsidian_writer else Path(".")
+        orchestrator = IncrementalOrchestrator(vault_path=vault_path)
+
+        self._total_inputs += 1
+        pipeline_id = f"dikiwi_incr_{int(time.time())}"
+        memory = self._get_or_create_memory(pipeline_id)
+        self._llm_budgets[pipeline_id] = LLMUsageBudget(
+            max_calls=SETTINGS.dikiwi_max_llm_calls_per_source,
+            stage_round_limit=SETTINGS.dikiwi_stage_round_limit,
+        )
+
+        drop = RainDrop(
+            id="",
+            rain_type=RainType.DOCUMENT,
+            content="",
+            source="incremental_ingest",
+            source_id=str(new_file_paths[0]) if new_file_paths else "unknown",
+            stream_type=StreamType.EXTRACT_ANALYZE,
+        )
+
+        ctx = AgentContext(
+            pipeline_id=pipeline_id,
+            correlation_id=pipeline_id,
+            drop=drop,
+            memory=memory,
+            budget=self._llm_budgets[pipeline_id],
+            llm_client=self.llm_client,
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+
+        try:
+            return await orchestrator.ingest(new_file_paths, ctx, force=force)
+        finally:
+            self._cleanup_memory(pipeline_id)
+            self._llm_budgets.pop(pipeline_id, None)
 
     _LONG_DOC_THRESHOLD = 5000   # chars: below this, single-pass extraction
     _CHUNK_SIZE = 4000            # chars per chunk for long documents

@@ -71,7 +71,7 @@ class BiomimicryAnalyzer:
         challenge_type = await self._classify_challenge(focus, recent_insights)
 
         # Step 2: Find biological analogs
-        biological_models = await self._find_nature_solutions(challenge_type)
+        biological_models = await self._find_nature_solutions(challenge_type, ", ".join(focus))
 
         # Step 3: Generate innovations for each level and strategy
         for level_key, level_desc in BIOMIMICRY_LEVELS.items():
@@ -122,9 +122,31 @@ class BiomimicryAnalyzer:
         else:
             return "general"
 
-    async def _find_nature_solutions(self, challenge_type: str) -> list[str]:
-        """Find biological models for the challenge type."""
-        return BIOLOGICAL_ANALOGS.get(challenge_type, BIOLOGICAL_ANALOGS["structural"])
+    async def _find_nature_solutions(self, challenge_type: str, focus: str) -> list[str]:
+        """Find biological models for the challenge domain using LLM."""
+        prompt = f"""Suggest relevant biological models for biomimetic innovation.
+
+Challenge domain: {challenge_type}
+Focus areas: {focus}
+
+What biological organisms, systems, or processes in nature are most relevant for inspiring solutions in this domain?
+Return 4-6 specific biological models as a JSON array of strings.
+Focus on well-documented organisms with clear functional principles."""
+
+        try:
+            response = await self.llm_client.chat_json([
+                {"role": "system", "content": "You are a biomimicry expert. Suggest biological models relevant to the challenge domain."},
+                {"role": "user", "content": prompt},
+            ])
+            if isinstance(response, list):
+                return [str(item) for item in response[:6] if item]
+            elif isinstance(response, dict) and "models" in response:
+                return [str(item) for item in response["models"][:6] if item]
+            # Fallback to hardcoded analogs
+            return BIOLOGICAL_ANALOGS.get(challenge_type, BIOLOGICAL_ANALOGS["structural"])
+        except Exception as e:
+            logger.warning(f"Failed to find nature solutions via LLM: {e}")
+            return BIOLOGICAL_ANALOGS.get(challenge_type, BIOLOGICAL_ANALOGS["structural"])
 
     async def _generate_biomimetic_innovation(
         self,
@@ -182,7 +204,7 @@ Format as JSON:
                 content=response.get("description", ""),
                 proposal_type=ProposalType.INNOVATION,
                 status=ProposalStatus.PROPOSED,
-                confidence=0.7,
+                confidence=float(response.get("novelty", 0.7)),
                 metadata={
                     "biomimicry_level": level_key,
                     "strategy": strategy_info['strategy'],

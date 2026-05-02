@@ -56,6 +56,23 @@ class PrimaryLLMRoute:
         mode="standard",
     )
 
+    # Default workload → provider mapping. JSON overrides from
+    # llm_workload_routes_json take precedence over these defaults.
+    # Stage 01-02 (DATA, INFORMATION): Kimi — fast, cheap extraction
+    # Stage 03-08 (KNOWLEDGE → Entrepreneur): DeepSeek — strong reasoning
+    # Zhipu: standby, activate via llm_workload_routes_json override
+    DEFAULT_WORKLOAD_ROUTES: dict[str, dict[str, str]] = {
+        "dikiwi.DATA": {"provider": "kimi"},
+        "dikiwi.INFORMATION": {"provider": "kimi"},
+        "dikiwi.KNOWLEDGE": {"provider": "deepseek"},
+        "dikiwi.INSIGHT": {"provider": "deepseek"},
+        "dikiwi.WISDOM": {"provider": "deepseek"},
+        "dikiwi.IMPACT": {"provider": "deepseek"},
+        "dikiwi.RESIDUAL": {"provider": "deepseek"},
+        "reactor": {"provider": "deepseek"},
+        "entrepreneur": {"provider": "deepseek"},
+    }
+
     @classmethod
     def route_zhipu(
         cls,
@@ -176,7 +193,16 @@ class PrimaryLLMRoute:
     ) -> ResolvedLLMRoute:
         provider = str(getattr(settings, "llm_provider", "kimi")).strip().lower()
         default_route = cls._default_route_for_provider(provider)
-        overrides = cls._load_workload_overrides(settings)
+        # Merge defaults with JSON overrides (JSON takes precedence)
+        merged_overrides: dict[str, dict[str, Any]] = {
+            k: dict(v) for k, v in cls.DEFAULT_WORKLOAD_ROUTES.items()
+        }
+        json_overrides = cls._load_workload_overrides(settings)
+        for k, v in json_overrides.items():
+            if k in merged_overrides:
+                merged_overrides[k].update(v)
+            else:
+                merged_overrides[k] = dict(v)
 
         resolved_provider = provider
         resolved_model = (
@@ -191,7 +217,7 @@ class PrimaryLLMRoute:
 
         applied_override: dict[str, Any] = {}
         for candidate in reversed(cls._workload_candidates(workload)):
-            override = overrides.get(candidate)
+            override = merged_overrides.get(candidate)
             if not override:
                 continue
             applied_override.update(override)

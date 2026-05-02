@@ -50,7 +50,7 @@ class MockGraphDB:
     """Mock GraphDB for testing."""
 
     def __init__(self):
-        self.execute_query = AsyncMock(return_value=[])
+        self.get_recent_nodes = AsyncMock(return_value=[])
 
 
 @pytest.fixture
@@ -370,9 +370,9 @@ class TestContextBuilding:
     @pytest.mark.asyncio
     async def test_build_context_with_keywords(self, mock_llm, mock_graph_db):
         """Context building queries for keywords."""
-        mock_graph_db.execute_query.return_value = [
-            {"node_id": "n1", "label": "analysis"},
-            {"node_id": "n2", "label": "test"},
+        mock_graph_db.get_recent_nodes.return_value = [
+            {"id": "n1", "type": "concept", "label": "analysis", "source": "test", "created_at": ""},
+            {"id": "n2", "type": "concept", "label": "test", "source": "test", "created_at": ""},
         ]
 
         orchestrator = ThinkingOrchestrator(
@@ -384,13 +384,13 @@ class TestContextBuilding:
         enriched = await orchestrator._build_context(payload)
 
         assert len(enriched.context_nodes) > 0
-        mock_graph_db.execute_query.assert_called()
+        mock_graph_db.get_recent_nodes.assert_called()
 
     @pytest.mark.asyncio
     async def test_build_context_with_url(self, mock_llm, mock_graph_db):
         """Context building queries for source URL."""
-        mock_graph_db.execute_query.return_value = [
-            {"node_id": "n3"},
+        mock_graph_db.get_recent_nodes.return_value = [
+            {"id": "n3", "type": "url", "label": "https://example.com/article", "source": "test", "created_at": ""},
         ]
 
         orchestrator = ThinkingOrchestrator(
@@ -409,7 +409,7 @@ class TestContextBuilding:
     @pytest.mark.asyncio
     async def test_build_context_handles_errors(self, mock_llm, mock_graph_db):
         """Context building continues on GraphDB errors."""
-        mock_graph_db.execute_query.side_effect = Exception("DB error")
+        mock_graph_db.get_recent_nodes.side_effect = Exception("DB error")
 
         orchestrator = ThinkingOrchestrator(
             llm_client=mock_llm,

@@ -124,6 +124,8 @@ class DikiwiObsidianWriter:
         "insight": "04-Insight",
         "wisdom": "05-Wisdom",
         "impact": "06-Impact",
+        "proposal": "07-Proposal",
+        "entrepreneurship": "08-Entrepreneurship",
     }
 
     def __init__(
@@ -1117,9 +1119,11 @@ LIMIT 10
         title = self._title_short(description, f"{insight_type.title()} Insight")
 
         from_knowledge = [self._make_link(k) for k in knowledge_note_ids if k]
+        grounded_in = [self._make_link(r) for r in related_nodes if r]
         fm: dict[str, Any] = {
             "type": "insight",
             "from_knowledge": from_knowledge,
+            "grounded_in": grounded_in,
             "insight_type": insight_type,
             "confidence": round(confidence, 2),
             "tags": _dedupe_preserve_order(["insight", insight_type]),
@@ -1214,7 +1218,8 @@ LIMIT 10
                             break
                 if matched_id:
                     body_lines.append(f"- {self._make_link(matched_id, link)}")
-                # Skip unresolved conceptual links to avoid broken wiki-links in the vault
+                else:
+                    logger.warning("Unresolved wikilink: %s in note %s", link, title)
             body_lines.append("")
         if concept_section:
             body_lines += [concept_section, ""]
@@ -1254,9 +1259,11 @@ LIMIT 10
         title = self._title_short(description, "Action Item")
 
         based_on = [self._make_link(wid) for wid in wisdom_note_ids if wid]
+        grounded_in = based_on  # impact notes are grounded in the wisdom notes they depend on
         fm: dict[str, Any] = {
             "type": "impact",
             "based_on": based_on,
+            "grounded_in": grounded_in,
             "impact_type": impact_type,
             "priority": priority,
             "effort": effort,

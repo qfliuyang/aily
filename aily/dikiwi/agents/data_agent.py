@@ -377,8 +377,8 @@ class DataAgent(DikiwiAgent):
                             confidence=result.get("confidence", 0.5),
                         )
                     ]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[DIKIWI] Fallback extraction failed for %s: %s", source, exc)
         return [
             DataPoint(
                 id=f"dp_{uuid.uuid4().hex[:8]}",

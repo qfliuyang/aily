@@ -60,8 +60,8 @@ class ObsidianCLI:
                     import yaml
                     fm = yaml.safe_load(parts[1]) or {}
                     return (fm, parts[2].strip())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to parse YAML frontmatter: %s", exc)
         return ({}, content)
 
     @staticmethod
@@ -171,6 +171,42 @@ class ObsidianCLI:
                 logger.debug("[ObsidianCLI] Failed to scan tags in %s: %s", md_path, exc)
 
         return sorted(tags)
+
+    def search_by_frontmatter(self, key: str, value: str) -> list[dict[str, Any]]:
+        """Find all notes where frontmatter[key] contains value.
+
+        For list values (e.g. grounded_in), checks if value is in any item.
+        For scalar values, does exact or substring match.
+
+        Returns list of {path, frontmatter, dikiwi_id, stage} dicts.
+        Used for staleness detection: find higher-stage notes that depend
+        on a changed information node.
+        """
+        files = self._all_markdown_files()
+        results: list[dict[str, Any]] = []
+        for md_path in files:
+            try:
+                content = md_path.read_text(encoding="utf-8")
+                fm, _ = self._parse_frontmatter(content)
+                fm_value = fm.get(key)
+                if fm_value is None:
+                    continue
+                matched = False
+                if isinstance(fm_value, list):
+                    if any(value in str(item) for item in fm_value):
+                        matched = True
+                elif value in str(fm_value):
+                    matched = True
+                if matched:
+                    results.append({
+                        "path": str(md_path),
+                        "frontmatter": fm,
+                        "dikiwi_id": fm.get("dikiwi_id", ""),
+                        "stage": fm.get("dikiwi_level", fm.get("type", "")),
+                    })
+            except Exception as exc:
+                logger.debug("[ObsidianCLI] Failed to read %s during frontmatter search: %s", md_path, exc)
+        return results
 
     def get_backlinks(self, path: str) -> list[str]:
         """Get backlink paths for a given note by scanning all markdown files."""

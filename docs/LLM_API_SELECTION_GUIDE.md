@@ -2,27 +2,17 @@
 
 ## Overview
 
-Aily now treats each provider as an explicit route.
+Aily supports **4 providers** with workload-aware routing. Current production default is **Kimi (kimi-k2.6)**.
 
-Current production route:
+**Standard API (per-token):**
+1. **`kimi`**: `api.moonshot.cn/v1` — primary, kimi-k2.6
+2. **`zhipu`**: `open.bigmodel.cn/api/paas/v4` — glm-5.1
+3. **`deepseek`**: `api.deepseek.com` — deepseek-v4-pro
 
-1. **`zhipu`**: BigModel standard chat route at `https://open.bigmodel.cn/api/paas/v4`
+**Coding Plan (fixed monthly):**
+4. **ByteDance Ark**, Aliyun Bailian, Zhipu coding endpoints
 
-Optional secondary family:
-
-2. **Coding Plan** (fixed monthly): ByteDance Ark, Aliyun Bailian, Zhipu coding endpoints
-
-If Aily supports another platform later, that platform should get its own dedicated route in code first. We should not hide providers behind a vague generic base URL.
-
-## Current Lock
-
-The live app is currently locked to **Zhipu BigModel** through:
-
-- [`aily/llm/provider_routes.py`](/Users/luzi/code/aily/aily/llm/provider_routes.py)
-- [`aily/config.py`](/Users/luzi/code/aily/aily/config.py)
-- [`aily/main.py`](/Users/luzi/code/aily/aily/main.py)
-
-That makes provenance explicit: when DIKIWI or the app-wide `llm_client` runs, it is using the Zhipu route unless we deliberately add and select another named provider route.
+Provider routes defined in [`aily/llm/provider_routes.py`](/Users/luzi/code/aily/aily/llm/provider_routes.py). Workload-aware routing via `llm_workload_routes_json` setting. Thinking mode is **disabled by default** for batch speed. Timeout: 300s.
 
 ## BigModel Standard API
 

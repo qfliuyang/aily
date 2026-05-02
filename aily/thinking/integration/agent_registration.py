@@ -13,7 +13,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from aily.agents.registry import AgentRegistry
+    from aily.agent.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 

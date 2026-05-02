@@ -328,9 +328,7 @@ class InformationAgent(DikiwiAgent):
             await ctx.graph_db.set_node_property(node.id, "source_evidence", node.source_evidence)
             await ctx.graph_db.set_node_property(node.id, "source_paths", source_paths)
             await ctx.graph_db.set_node_property(node.id, "pipeline_id", ctx.pipeline_id)
-        except AttributeError:
-            # Older tests use AsyncMock GraphDBs without property APIs.
-            pass
+        except AttributeError: pass  # Property write unavailable on test GraphDB mocks
         for tag in node.tags:
             await ctx.graph_db.insert_node(
                 node_id=f"tag_{tag}", node_type="tag", label=tag, source="dikiwi"
@@ -350,8 +348,7 @@ class InformationAgent(DikiwiAgent):
                 node_id=node.id,
                 raw_log_id=raw_log_id,
             )
-        except AttributeError:
-            pass
+        except AttributeError: pass  # Property write unavailable on test GraphDB mocks
 
     @staticmethod
     def _clean_domain(domain: str) -> str:

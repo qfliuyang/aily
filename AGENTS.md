@@ -1,10 +1,10 @@
-<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
+<!-- Generated: 2026-04-26 | Updated: 2026-04-26 -->
 
 # aily
 
 ## Purpose
 
-Aily is a **Three-Mind knowledge system** built as a FastAPI app with a background job queue. It continuously processes incoming messages, files, and URLs through a DIKIWI 6-stage LLM pipeline (Data → Information → Knowledge → Insight → Wisdom → Impact), writes Zettelkasten notes to an Obsidian vault, and runs innovation/business evaluation loops.
+Aily is a **Three-Mind knowledge system** built as a FastAPI app with a background job queue. It continuously processes incoming messages, files, and URLs through a DIKIWI 6-stage LLM pipeline (Data → Information → Knowledge → Insight → Wisdom → Impact), writes Zettelkasten notes to an Obsidian vault, and runs innovation/business evaluation loops. Supports three execution modes: single-document, batched, and graph-driven incremental processing.
 
 ## Key Files
 

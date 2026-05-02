@@ -1,26 +1,28 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-19 | Updated: 2026-04-19 -->
+<!-- Generated: 2026-04-26 | Updated: 2026-04-26 -->
 
 # dikiwi
 
 ## Purpose
 
-The DIKIWI (Data → Information → Knowledge → Insight → Wisdom → Impact) pipeline. This is the core knowledge processing engine: 6 event-driven stage agents that transform raw content into structured Zettelkasten notes, with a post-pipeline MAC loop (Multiply-Accumulate) that runs innovation frameworks and synthesizes proposals.
+The DIKIWI (Data → Information → Knowledge → Insight → Wisdom → Impact) pipeline. Core knowledge processing engine: 6 event-driven stage agents transform raw content into structured Zettelkasten notes. Supports three execution modes: single-document, batched, and graph-driven incremental.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `orchestrator.py` | `DikiwiOrchestrator` — manages pipeline state, stage transitions, CVO gating |
-| `stages.py` | `DikiwiStage` enum, stage transition logic, TTL/CVO review |
+| `orchestrator.py` | `DikiwiOrchestrator` — manages pipeline state, stage transitions, Menxia/CVO gating |
+| `incremental_orchestrator.py` | `IncrementalOrchestrator` — graph-driven delta pipeline for daily ingestion |
+| `network_synthesis.py` | `NetworkSynthesisSelector` — detects changed graph neighborhoods via tag queries |
+| `stages.py` | `DikiwiStage` enum, stage transition logic, permission matrix |
 
 ## Subdirectories
 
 | Directory | Purpose |
 |-----------|---------|
-| `agents/` | Stage agents — Data, Information, Knowledge, Insight, Wisdom, Impact, Residual, Hanlin (see `agents/AGENTS.md`) |
+| `agents/` | Stage agents — Data, Information, Knowledge, Insight, Wisdom, Impact, Residual (see `agents/AGENTS.md`) |
 | `events/` | Event bus — `StageCompletedEvent`, `DropCompletedEvent` |
-| `gates/` | CVO (Chief Vision Officer) gating, Menxia review system |
+| `gates/` | Menxia (quality gate) and CVO (approval gate) — now actively called, not dead code |
 | `memorials/` | Persistent memory models and storage |
 | `skills/` | DIKIWI skill system — builtin pattern detection, synthesis, tagging |
 
@@ -32,6 +34,8 @@ The DIKIWI (Data → Information → Knowledge → Insight → Wisdom → Impact
 - The orchestrator handles promotion logic; agents don't call each other directly
 - `AgentContext` carries budget, drop, LLM client, and obsidian writer
 - Budget enforcement: `ctx.budget.reserve()` before LLM calls
+- **Incremental mode**: `IncrementalOrchestrator.ingest()` uses `NetworkSynthesisSelector` + `ObsidianCLI.search_by_frontmatter()` for staleness detection
+- Higher-stage notes (insight, wisdom, impact) include `grounded_in` frontmatter for dependency tracking
 
 ### Testing Requirements
 - `tests/dikiwi/` covers stage logic and agent behavior

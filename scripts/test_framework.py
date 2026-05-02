@@ -131,8 +131,11 @@ def clean_generated_vault(vault_path: Path, graph_db_path: Path | None = None) -
     graph_reset = False
     graph_db_path = graph_db_path or (vault_path / ".aily" / "graph.db")
     if graph_db_path.exists():
-        graph_db_path.unlink()
-        graph_reset = True
+        try:
+            graph_db_path.unlink()
+            graph_reset = True
+        except PermissionError:
+            logger.warning("Cannot unlink %s — may be locked by another process", graph_db_path)
 
     return {
         "removed_md": removed_md,
@@ -550,7 +553,7 @@ async def scenario_full_pipeline(
         clean_generated_vault(vault_path)
 
     with llm_trace_logging(llm_log):
-        runtime = await build_runtime(vault_path=vault_path, enable_business=False)
+        runtime = await build_runtime(vault_path=vault_path, enable_business=True)
         try:
             pdf_dir = CHAOS_FOLDER / "pdf"
             pdf_files = sorted(pdf_dir.glob("*.pdf"))
@@ -576,6 +579,15 @@ async def scenario_full_pipeline(
                         f"# {extracted.title or pdf_path.stem}\n\n{extracted.get_full_text()}",
                         encoding="utf-8",
                     )
+                    # Copy MinerU images to vault so markdown references resolve
+                    mineru_out = extracted.metadata.get("mineru_output_dir", "")
+                    src_images = Path(mineru_out) / "images" if mineru_out else None
+                    if src_images and src_images.is_dir():
+                        dest_images = transcript_dir / "images"
+                        dest_images.mkdir(parents=True, exist_ok=True)
+                        for img in src_images.iterdir():
+                            if img.is_file() and not (dest_images / img.name).exists():
+                                shutil.copy2(img, dest_images / img.name)
                 return pdf_path, extracted, round(time.monotonic() - doc_start, 2)
 
             extracted_results = await asyncio.gather(*[_extract_one(pdf_path) for pdf_path in pdf_files])

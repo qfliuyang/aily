@@ -271,6 +271,7 @@ class ReactorScheduler(BaseMindScheduler):
             )
         except Exception as e:
             logger.error(f"Method {method.value} failed: {e}")
+            await self.circuit_breaker.record_failure()
             return MethodResult(
                 method=method,
                 proposals=[],
@@ -295,8 +296,25 @@ class ReactorScheduler(BaseMindScheduler):
                 deduped[key] = proposal
 
         proposals = list(deduped.values())
-        proposals.sort(key=lambda x: x.confidence, reverse=True)
-        return proposals
+
+        # Filter by nozzle config
+        filtered: list[Proposal] = []
+        for p in proposals:
+            if p.confidence < self.nozzle_config.min_confidence:
+                continue
+            # Only filter by novelty when the value is meaningfully set
+            raw_novelty = p.metadata.get("novelty")
+            if raw_novelty is None:
+                raw_novelty = p.innovation_score
+            if raw_novelty and raw_novelty < self.nozzle_config.min_novelty_score:
+                continue
+            filtered.append(p)
+
+        filtered.sort(key=lambda x: x.confidence, reverse=True)
+
+        # Apply max proposals per session limit
+        max_proposals = self.nozzle_config.max_proposals_per_session
+        return filtered[:max_proposals]
 
     async def _run_triz_method(self, context: dict[str, Any]) -> MethodResult:
         """Adapt the legacy TRIZ analyzer into Reactor proposals."""
@@ -581,7 +599,20 @@ Return JSON:
             if isinstance(result, dict):
                 return result
         except Exception as e:
-            logger.warning(f"[Reactor] Proposal scoring failed: {e}")
+            logger.warning(f"[Reactor] Proposal scoring failed (attempt 1): {e}")
+            try:
+                await asyncio.sleep(1.0)
+                result = await chat_json(
+                    llm_client=self.llm_client,
+                    stage="reactor_score",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    budget=budget,
+                )
+                if isinstance(result, dict):
+                    return result
+            except Exception as retry_e:
+                logger.warning(f"[Reactor] Proposal scoring failed on retry: {retry_e}")
         return {
             "novelty": 0.0,
             "feasibility": 0.0,
@@ -643,11 +674,11 @@ Return JSON:
         """Gather context from GraphDB for innovation analysis."""
         context = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "focus_areas": ["eda", "ai", "semiconductor", "software"],
+            "focus_areas": ["eda", "ai", "semiconductor", "software"],  # fallback
             "recent_insights": [],
         }
 
-        # Try to get recent insights from GraphDB
+        # Try to get recent insights and dynamic focus areas from GraphDB
         try:
             if self.graph_db:
                 # Get recent nodes as insights
@@ -656,6 +687,14 @@ Return JSON:
                     {"label": n.get("label", ""), "type": n.get("type", "")}
                     for n in nodes
                 ]
+                # Build dynamic focus areas from recent node types (deduplicated, preserving order)
+                recent_types: list[str] = []
+                for n in nodes:
+                    node_type = n.get("type", "")
+                    if node_type and node_type not in recent_types:
+                        recent_types.append(node_type)
+                if recent_types:
+                    context["focus_areas"] = recent_types
         except Exception as e:
             logger.debug(f"Could not gather GraphDB context: {e}")
 

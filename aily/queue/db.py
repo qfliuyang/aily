@@ -254,3 +254,19 @@ class QueueDB:
             "original_markdown": row["original_markdown"],
             "created_at": row["created_at"],
         }
+
+    async def get_job_counts(self) -> dict[str, int]:
+        self._check_db()
+        cursor = await self._db.execute(
+            """
+            SELECT status, COUNT(*)
+            FROM jobs
+            GROUP BY status
+            """
+        )
+        rows = await cursor.fetchall()
+        counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+        for status, count in rows:
+            counts[str(status)] = int(count)
+        counts["total"] = sum(counts.values())
+        return counts

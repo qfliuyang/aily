@@ -336,42 +336,26 @@ class ThinkingOrchestrator:
 
             context_nodes: list[str] = []
 
-            # Batched query: Get related nodes for all keywords in one query
+            # Use get_recent_nodes() and filter by keyword matching in Python
             if keywords:
-                # Build placeholder query for batched lookup
-                # This avoids N+1 query problem
-                placeholders = ",".join(["?"] * len(keywords))
-                query = f"""
-                    SELECT DISTINCT node_id, label
-                    FROM nodes
-                    WHERE label IN ({placeholders})
-                    OR label LIKE ?
-                    LIMIT 20
-                """
-                # Add pattern match for partial matches
-                params = keywords + [f"%{payload.content[:20]}%"]
-
                 try:
-                    rows = await self.graph_db.execute_query(query, params)
-                    context_nodes = [row["node_id"] for row in rows]
+                    recent_nodes = await self.graph_db.get_recent_nodes(limit=100)
+                    keyword_set = set(kw.lower() for kw in keywords)
+                    for node in recent_nodes:
+                        label = (node.get("label") or "").lower()
+                        if any(kw in label for kw in keyword_set):
+                            context_nodes.append(node["id"])
                 except Exception as e:
                     logger.warning("GraphDB keyword query failed: %s", e)
 
-            # If we have a source URL, look for related nodes
+            # If we have a source URL, look for related nodes via get_recent_nodes()
             if payload.source_url:
                 try:
-                    url_query = """
-                        SELECT DISTINCT node_id
-                        FROM nodes n
-                        JOIN occurrences o ON n.id = o.node_id
-                        JOIN raw_logs r ON o.raw_log_id = r.id
-                        WHERE r.source_url = ?
-                        LIMIT 10
-                    """
-                    url_rows = await self.graph_db.execute_query(
-                        url_query, (payload.source_url,)
-                    )
-                    context_nodes.extend([row["node_id"] for row in url_rows])
+                    recent_nodes = await self.graph_db.get_recent_nodes(limit=100)
+                    for node in recent_nodes:
+                        label = (node.get("label") or "").lower()
+                        if payload.source_url.lower() in label:
+                            context_nodes.append(node["id"])
                 except Exception as e:
                     logger.warning("GraphDB URL query failed: %s", e)
 

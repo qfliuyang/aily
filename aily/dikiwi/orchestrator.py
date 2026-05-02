@@ -26,7 +26,7 @@ from aily.dikiwi.events import (
     ImpactGeneratedEvent,
     GateDecisionEvent,
 )
-from aily.dikiwi.gates import CVOGate, MenxiaGate
+from aily.dikiwi.gates import CVOGate, MenxiaGate, ReviewDecisionType
 from aily.dikiwi.stages import (
     DikiwiStage,
     StageContext,
@@ -34,6 +34,8 @@ from aily.dikiwi.stages import (
     StageStateMachine,
     can_transition,
 )
+from aily.ui.events import emit_ui_event
+from aily.ui.telemetry import ui_telemetry_scope
 
 if TYPE_CHECKING:
     from aily.dikiwi.agents.base import DikiwiAgent
@@ -73,6 +75,7 @@ class ProcessingPipeline:
 
     def __post_init__(self) -> None:
         self._completion_event: asyncio.Event = asyncio.Event()
+        self._inflight_tasks: list[asyncio.Task] = []
 
 
 class DikiwiOrchestrator:
@@ -187,6 +190,15 @@ class DikiwiOrchestrator:
             pipeline.pipeline_id,
             agent_ctx.drop.id,
         )
+        await emit_ui_event(
+            "pipeline_started",
+            pipeline_id=pipeline.pipeline_id,
+            correlation_id=pipeline.correlation_id,
+            source_id=agent_ctx.drop.id,
+            source=agent_ctx.drop.source,
+            upload_id=agent_ctx.drop.metadata.get("ui_upload_id"),
+            filename=agent_ctx.drop.metadata.get("filename"),
+        )
 
         # Execute DATA agent first, then emit stage completed to trigger downstream
         agent = self.agent_registry.get(DikiwiStage.DATA)
@@ -194,8 +206,33 @@ class DikiwiOrchestrator:
             try:
                 if self.llm_client_resolver is not None:
                     agent_ctx.llm_client = self.llm_client_resolver(DikiwiStage.DATA)
-                result = await agent.execute(agent_ctx)
+                await emit_ui_event(
+                    "stage_started",
+                    pipeline_id=pipeline.pipeline_id,
+                    correlation_id=pipeline.correlation_id,
+                    stage=DikiwiStage.DATA.name,
+                    upload_id=agent_ctx.drop.metadata.get("ui_upload_id"),
+                    provider=getattr(agent_ctx.llm_client, "_provider_name", lambda: "unknown")(),
+                    model=getattr(agent_ctx.llm_client, "model", ""),
+                )
+                with ui_telemetry_scope(
+                    pipeline_id=pipeline.pipeline_id,
+                    upload_id=agent_ctx.drop.metadata.get("ui_upload_id"),
+                    stage=DikiwiStage.DATA.name,
+                    workload=f"dikiwi.{DikiwiStage.DATA.name.lower()}",
+                ):
+                    result = await agent.execute(agent_ctx)
                 agent_ctx.stage_results.append(result)
+                await emit_ui_event(
+                    "stage_completed" if result.success else "stage_failed",
+                    pipeline_id=pipeline.pipeline_id,
+                    correlation_id=pipeline.correlation_id,
+                    stage=DikiwiStage.DATA.name,
+                    upload_id=agent_ctx.drop.metadata.get("ui_upload_id"),
+                    success=result.success,
+                    data_keys=sorted(list(result.data.keys())) if isinstance(result.data, dict) else [],
+                    error=result.error_message or "",
+                )
                 if not result.success:
                     await self._fail_pipeline(pipeline, result.error_message or "DATA stage failed")
                     return pipeline
@@ -217,6 +254,9 @@ class DikiwiOrchestrator:
             await asyncio.wait_for(pipeline._completion_event.wait(), timeout=300.0)
         except asyncio.TimeoutError:
             logger.error("[DIKIWI] Pipeline %s timed out waiting for completion", pipeline.pipeline_id)
+            for task in pipeline._inflight_tasks:
+                if not task.done():
+                    task.cancel()
             await self._fail_pipeline(pipeline, "Pipeline completion timeout")
 
         return pipeline
@@ -395,17 +435,59 @@ class DikiwiOrchestrator:
             pipeline.pipeline_id,
         )
 
-        # Automated review - auto-approve
-        await self.event_bus.publish(
-            GateDecisionEvent(
-                correlation_id=pipeline.correlation_id,
-                gate_name="menxia",
-                decision="approve",
-                content_ids=event.output_content_ids,
-                requires_human=False,
-                reasoning="Automated menxia review passed",
+        # Build review content from INFORMATION stage result
+        ctx = self._agent_contexts.get(pipeline.pipeline_id)
+        info_result = None
+        if ctx:
+            info_result = next(
+                (
+                    result
+                    for result in reversed(ctx.stage_results)
+                    if getattr(result.stage, "name", None) == DikiwiStage.INFORMATION.name
+                ),
+                None,
             )
-        )
+
+        if info_result and info_result.data:
+            info_nodes = info_result.data.get("information_nodes", [])
+            content_parts: list[str] = []
+            for node in info_nodes[:10]:
+                node_content = getattr(node, "content", str(node))
+                node_domain = getattr(node, "domain", "general")
+                content_parts.append(f"[{node_domain}] {node_content}")
+            content = "\n".join(content_parts) if content_parts else pipeline.context.content_id
+            metadata = {
+                "tags": info_result.data.get("keywords", []),
+                "classification": info_result.data.get("domain", "general"),
+            }
+        else:
+            content = pipeline.context.content_id
+            metadata = {}
+
+        decision = await self.menxia_gate.review(content, metadata)
+
+        if decision.decision in (ReviewDecisionType.APPROVE, ReviewDecisionType.MODIFY):
+            await self.event_bus.publish(
+                GateDecisionEvent(
+                    correlation_id=pipeline.correlation_id,
+                    gate_name="menxia",
+                    decision="approve",
+                    content_ids=event.output_content_ids,
+                    requires_human=False,
+                    reasoning=decision.reason,
+                )
+            )
+        else:
+            await self.event_bus.publish(
+                GateDecisionEvent(
+                    correlation_id=pipeline.correlation_id,
+                    gate_name="menxia",
+                    decision="reject",
+                    content_ids=event.output_content_ids,
+                    requires_human=False,
+                    reasoning=decision.reason,
+                )
+            )
 
     async def _schedule_cvo_review(
         self,
@@ -416,6 +498,33 @@ class DikiwiOrchestrator:
         logger.info(
             "[DIKIWI] Scheduling CVO review for pipeline %s",
             pipeline.pipeline_id,
+        )
+
+        # Build wisdom summary from WISDOM stage result
+        ctx = self._agent_contexts.get(pipeline.pipeline_id)
+        wisdom_summary = ""
+        if ctx:
+            wisdom_result = next(
+                (
+                    result
+                    for result in reversed(ctx.stage_results)
+                    if getattr(result.stage, "name", None) == DikiwiStage.WISDOM.name
+                ),
+                None,
+            )
+            if wisdom_result and wisdom_result.data:
+                zettels = wisdom_result.data.get("zettels", [])
+                wisdom_summary = "; ".join(
+                    getattr(z, "title", str(z))[:100] for z in zettels[:5]
+                )
+
+        approval_id = f"cvo_{pipeline.pipeline_id}"
+        await self.cvo_gate.request_approval(
+            approval_id=approval_id,
+            content_id=pipeline.context.content_id,
+            content_preview=pipeline.context.source or "",
+            wisdom_summary=wisdom_summary,
+            impact_proposal={},
         )
 
         if self.config.require_cvo_for_impact:
@@ -432,16 +541,22 @@ class DikiwiOrchestrator:
 
             # Start TTL timer
             asyncio.create_task(
-                self._cvo_ttl_timer(pipeline, event.output_content_ids)
+                self._cvo_ttl_timer(pipeline, event.output_content_ids, approval_id)
             )
         else:
-            # Auto-approve
+            # Auto-approve via CVO gate
+            self.cvo_gate.approve(
+                approval_id,
+                approved_by="system",
+                reasoning="Auto-approved",
+            )
             await self._promote_to_stage(pipeline, DikiwiStage.IMPACT)
 
     async def _cvo_ttl_timer(
         self,
         pipeline: ProcessingPipeline,
         content_ids: list[str],
+        approval_id: str,
     ) -> None:
         """Auto-approve CVO gate after TTL expires."""
         await asyncio.sleep(self.config.cvo_ttl_hours * 3600)
@@ -451,6 +566,11 @@ class DikiwiOrchestrator:
             logger.info(
                 "[DIKIWI] CVO TTL expired for pipeline %s, auto-approving",
                 pipeline.pipeline_id,
+            )
+            self.cvo_gate.approve(
+                approval_id,
+                approved_by="system",
+                reasoning=f"Auto-approved after TTL ({self.config.cvo_ttl_hours}h)",
             )
             await self.event_bus.publish(
                 GateDecisionEvent(
@@ -503,18 +623,60 @@ class DikiwiOrchestrator:
         if agent:
             ctx = self._agent_contexts.get(pipeline.pipeline_id)
             if ctx:
-                try:
+                async def _execute_agent() -> bool:
                     if self.llm_client_resolver is not None:
                         ctx.llm_client = self.llm_client_resolver(to_stage)
-                    result = await agent.execute(ctx)
+                    await emit_ui_event(
+                        "stage_started",
+                        pipeline_id=pipeline.pipeline_id,
+                        correlation_id=pipeline.correlation_id,
+                        stage=to_stage.name,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        provider=getattr(ctx.llm_client, "_provider_name", lambda: "unknown")(),
+                        model=getattr(ctx.llm_client, "model", ""),
+                    )
+                    with ui_telemetry_scope(
+                        pipeline_id=pipeline.pipeline_id,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        stage=to_stage.name,
+                        workload=f"dikiwi.{to_stage.name.lower()}",
+                    ):
+                        result = await agent.execute(ctx)
                     ctx.stage_results.append(result)
+                    await emit_ui_event(
+                        "stage_completed" if result.success else "stage_failed",
+                        pipeline_id=pipeline.pipeline_id,
+                        correlation_id=pipeline.correlation_id,
+                        stage=to_stage.name,
+                        upload_id=ctx.drop.metadata.get("ui_upload_id"),
+                        success=result.success,
+                        data_keys=sorted(list(result.data.keys())) if isinstance(result.data, dict) else [],
+                        error=result.error_message or "",
+                    )
                     if not result.success:
                         await self._fail_pipeline(pipeline, result.error_message or f"{to_stage.name} stage failed")
+                        return False
+                    return True
+
+                task: asyncio.Task = asyncio.create_task(_execute_agent())
+                pipeline._inflight_tasks.append(task)
+                try:
+                    success = await task
+                    if not success:
                         return
+                except asyncio.CancelledError:
+                    logger.warning(
+                        "[DIKIWI] Agent task for %s cancelled in pipeline %s",
+                        to_stage.name, pipeline.pipeline_id,
+                    )
+                    return
                 except Exception as exc:
                     logger.exception("[DIKIWI] Agent execution failed for %s", to_stage.name)
                     await self._fail_pipeline(pipeline, str(exc))
                     return
+                finally:
+                    if task in pipeline._inflight_tasks:
+                        pipeline._inflight_tasks.remove(task)
             else:
                 logger.warning("[DIKIWI] No agent context found for pipeline %s", pipeline.pipeline_id)
 
@@ -539,6 +701,14 @@ class DikiwiOrchestrator:
             pipeline.pipeline_id,
             (pipeline.completed_at - pipeline.started_at).total_seconds(),
         )
+        ctx = self._agent_contexts.get(pipeline.pipeline_id)
+        await emit_ui_event(
+            "pipeline_completed",
+            pipeline_id=pipeline.pipeline_id,
+            correlation_id=pipeline.correlation_id,
+            upload_id=ctx.drop.metadata.get("ui_upload_id") if ctx else None,
+            duration_ms=round((pipeline.completed_at - pipeline.started_at).total_seconds() * 1000, 2),
+        )
 
     async def _fail_pipeline(self, pipeline: ProcessingPipeline, reason: str) -> None:
         """Mark pipeline as failed."""
@@ -551,6 +721,14 @@ class DikiwiOrchestrator:
             "[DIKIWI] Pipeline %s failed: %s",
             pipeline.pipeline_id,
             reason,
+        )
+        ctx = self._agent_contexts.get(pipeline.pipeline_id)
+        await emit_ui_event(
+            "pipeline_failed",
+            pipeline_id=pipeline.pipeline_id,
+            correlation_id=pipeline.correlation_id,
+            upload_id=ctx.drop.metadata.get("ui_upload_id") if ctx else None,
+            error=reason,
         )
 
     def _get_pipeline_by_correlation(self, correlation_id: str) -> ProcessingPipeline | None:

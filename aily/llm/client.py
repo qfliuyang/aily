@@ -5,8 +5,12 @@ import json
 import logging
 import time
 from typing import Any, Optional
+from uuid import uuid4
 
 import httpx
+
+from aily.ui.events import emit_ui_event
+from aily.ui.telemetry import get_ui_telemetry_context
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +75,15 @@ class LLMClient:
 
         return payload
 
+    def _provider_name(self) -> str:
+        if "moonshot" in self.base_url or self.model.startswith("kimi-"):
+            return "kimi"
+        if "bigmodel" in self.base_url or self.model.startswith("glm-"):
+            return "zhipu"
+        if "deepseek" in self.base_url or self.model.startswith("deepseek-"):
+            return "deepseek"
+        return "unknown"
+
     async def _wait_for_rate_window(self) -> None:
         """Ensure request starts are spaced out to avoid bursty imports."""
         if self.min_interval_seconds <= 0:
@@ -130,20 +143,64 @@ class LLMClient:
             "Content-Type": "application/json",
         }
         payload = self._build_payload(messages, temperature, response_format)
+        context = get_ui_telemetry_context()
+        request_id = str(uuid4())
+        started = time.monotonic()
+        await emit_ui_event(
+            "llm_request_started",
+            request_id=request_id,
+            provider=self._provider_name(),
+            model=self.model,
+            base_url=self.base_url,
+            message_count=len(messages),
+            pipeline_id=context.get("pipeline_id"),
+            upload_id=context.get("upload_id"),
+            stage=context.get("stage"),
+            workload=context.get("workload"),
+        )
 
-        async with self._semaphore:
-            await self._wait_for_rate_window()
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+        try:
+            async with self._semaphore:
+                await self._wait_for_rate_window()
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+        except Exception as exc:
+            await emit_ui_event(
+                "llm_request_failed",
+                request_id=request_id,
+                provider=self._provider_name(),
+                model=self.model,
+                pipeline_id=context.get("pipeline_id"),
+                upload_id=context.get("upload_id"),
+                stage=context.get("stage"),
+                workload=context.get("workload"),
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                error=str(exc),
+                error_type=exc.__class__.__name__,
+            )
+            raise
 
         choices = data.get("choices", [])
         if not choices:
+            await emit_ui_event(
+                "llm_request_failed",
+                request_id=request_id,
+                provider=self._provider_name(),
+                model=self.model,
+                pipeline_id=context.get("pipeline_id"),
+                upload_id=context.get("upload_id"),
+                stage=context.get("stage"),
+                workload=context.get("workload"),
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                error="Empty response from LLM",
+                error_type="LLMError",
+            )
             raise LLMError("Empty response from LLM")
         content = choices[0].get("message", {}).get("content", "")
         usage = data.get("usage", {})
@@ -151,6 +208,20 @@ class LLMClient:
         self.usage_stats["completion_tokens"] += usage.get("completion_tokens", 0)
         self.usage_stats["total_tokens"] += usage.get("total_tokens", 0)
         self.usage_stats["calls"] += 1
+        await emit_ui_event(
+            "llm_request_completed",
+            request_id=request_id,
+            provider=self._provider_name(),
+            model=self.model,
+            pipeline_id=context.get("pipeline_id"),
+            upload_id=context.get("upload_id"),
+            stage=context.get("stage"),
+            workload=context.get("workload"),
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+        )
         return content.strip()
 
     def get_usage_stats(self) -> dict[str, int]:

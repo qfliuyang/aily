@@ -258,6 +258,55 @@ class GraphDB:
             for row in rows
         ]
 
+    async def get_graph_snapshot(
+        self,
+        *,
+        limit_nodes: int = 2000,
+        limit_edges: int = 5000,
+    ) -> dict[str, list[dict]]:
+        node_rows = await self._fetchall(
+            """
+            SELECT id, type, label, source, created_at
+            FROM nodes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit_nodes,),
+        )
+        edge_rows = await self._fetchall(
+            """
+            SELECT id, source_node_id, target_node_id, relation_type, weight, source, created_at
+            FROM edges
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit_edges,),
+        )
+        return {
+            "nodes": [
+                {
+                    "id": row[0],
+                    "type": row[1],
+                    "label": row[2],
+                    "source": row[3],
+                    "created_at": row[4],
+                }
+                for row in node_rows
+            ],
+            "edges": [
+                {
+                    "id": row[0],
+                    "source_node_id": row[1],
+                    "target_node_id": row[2],
+                    "relation_type": row[3],
+                    "weight": row[4],
+                    "source": row[5],
+                    "created_at": row[6],
+                }
+                for row in edge_rows
+            ],
+        }
+
     async def get_recent_nodes(self, limit: int = 20) -> list[dict]:
         rows = await self._fetchall(
             """
