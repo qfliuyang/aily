@@ -106,6 +106,8 @@ class LLMRouter:
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
+        timeout: float = 120.0,
+        max_retries: int = 0,
     ) -> KimiClient:
         """Create standard Kimi API client.
 
@@ -120,8 +122,8 @@ class LLMRouter:
         return KimiClient(
             api_key=api_key,
             model=model,
-            timeout=300.0,
-            max_retries=2,
+            timeout=timeout,
+            max_retries=max_retries,
             thinking=thinking,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,
@@ -193,6 +195,8 @@ class LLMRouter:
         model: str = "glm-5.1",
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
+        timeout: float = 120.0,
+        max_retries: int = 0,
     ) -> KimiClient:
         """Create standard Zhipu AI client (OpenAI-compatible API).
 
@@ -210,8 +214,8 @@ class LLMRouter:
             base_url="https://open.bigmodel.cn/api/paas/v4",
             api_key=api_key,
             model=model,
-            timeout=120.0,
-            max_retries=2,
+            timeout=timeout,
+            max_retries=max_retries,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,
         )
@@ -223,14 +227,16 @@ class LLMRouter:
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
+        timeout: float = 120.0,
+        max_retries: int = 0,
     ) -> LLMClient:
         """Create standard DeepSeek client (OpenAI-compatible API)."""
         return LLMClient(
             base_url="https://api.deepseek.com",
             api_key=api_key,
             model=model,
-            timeout=300.0,
-            max_retries=2,
+            timeout=timeout,
+            max_retries=max_retries,
             thinking=thinking,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,

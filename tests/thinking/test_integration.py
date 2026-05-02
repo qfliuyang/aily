@@ -418,7 +418,7 @@ class TestAgentRegistrationIntegration:
     async def test_register_all_agents(self):
         """All thinking agents are registered."""
         registry = MagicMock()
-        registry.register = AsyncMock()
+        registry.register = MagicMock()
 
         await register_thinking_agents(registry)
 

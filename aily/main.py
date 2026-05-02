@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, UploadFile
+from fastapi import Request
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from aily.config import SETTINGS
@@ -48,14 +54,22 @@ from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.processing.router import ProcessingRouter
+from aily.source_store import SourceStore
 from aily.ui.events import emit_ui_event, ui_event_hub
 from aily.ui.router import create_ui_router
+from aily.verify.run_registry import RunRegistry
+from aily.security.audit import AuditLogger
+from aily.security.backup import create_backup, restore_backup
+from aily.security.rate_limit import FixedWindowRateLimiter
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+FRONTEND_DIST_PATH = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+HAS_MULTIPART = importlib.util.find_spec("python_multipart") is not None
 
 db = QueueDB(SETTINGS.queue_db_path)
 graph_db = GraphDB(SETTINGS.graph_db_path)
+source_store = SourceStore(SETTINGS.source_store_db_path, SETTINGS.source_object_dir)
 fetcher = BrowserFetcher()
 pusher = FeishuPusher(SETTINGS.feishu_app_id, SETTINGS.feishu_app_secret)
 writer = ObsidianWriter(
@@ -74,6 +88,12 @@ claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 ws_client = None
 browser_manager_instance = None
 ui_upload_tasks: dict[str, asyncio.Task[Any]] = {}
+ui_upload_semaphore = asyncio.Semaphore(max(1, SETTINGS.ui_upload_concurrency))
+ui_rate_limiter = FixedWindowRateLimiter(
+    max_requests=max(1, SETTINGS.ui_rate_limit_requests),
+    window_seconds=max(1.0, SETTINGS.ui_rate_limit_window_seconds),
+) if SETTINGS.hosted_mode else None
+audit_logger = AuditLogger(SETTINGS.resolved_audit_log_path)
 
 # Three-Mind System schedulers
 dikiwi_mind: DikiwiMind | None = None
@@ -477,83 +497,369 @@ async def _enqueue_claude_session(file_path: Path) -> None:
     logger.info("Enqueued Claude session capture: %s", file_path)
 
 
-async def _process_ui_upload(upload_id: str, filename: str, content_type: str, data: bytes) -> None:
+async def _process_ui_upload(
+    upload_id: str,
+    source_id: str,
+    filename: str,
+    content_type: str,
+    data: bytes,
+) -> None:
     await emit_ui_event(
         "source_ingest_started",
         upload_id=upload_id,
+        source_id=source_id,
         filename=filename,
         content_type=content_type,
         size_bytes=len(data),
     )
     try:
-        router = ProcessingRouter(browser_manager=browser_manager_instance)
-        extracted = await router.process(data, filename=filename, http_content_type=content_type)
+        async with ui_upload_semaphore:
+            await source_store.update_status(source_id, "extracting")
+            router = ProcessingRouter(browser_manager=browser_manager_instance)
+            extracted = await router.process(data, filename=filename, http_content_type=content_type)
+            await source_store.update_status(
+                source_id,
+                "extracted",
+                {
+                    "source_type": extracted.source_type,
+                    "extracted_chars": len(extracted.text or ""),
+                },
+            )
+            await emit_ui_event(
+                "chaos_note_created",
+                upload_id=upload_id,
+                source_id=source_id,
+                filename=filename,
+                source_type=extracted.source_type,
+                title=extracted.title or Path(filename).stem,
+                text_length=len(extracted.text or ""),
+            )
+
+            if not dikiwi_mind:
+                raise RuntimeError("DIKIWI Mind is not initialized")
+
+            title = extracted.title or Path(filename).stem
+            content = extracted.text or ""
+            if title:
+                content = f"# {title}\n\n{content}".strip()
+
+            drop = RainDrop(
+                id="",
+                rain_type=RainType.DOCUMENT,
+                content=content,
+                raw_bytes=data,
+                source="web_upload",
+                source_id=source_id,
+                stream_type=StreamType.EXTRACT_ANALYZE,
+                metadata={
+                    "ui_upload_id": upload_id,
+                    "source_id": source_id,
+                    "filename": filename,
+                    "content_type": content_type,
+                    "source_type": extracted.source_type,
+                    **(extracted.metadata or {}),
+                },
+            )
+            await source_store.update_status(source_id, "processing")
+            result = await dikiwi_mind.process_input(drop)
+            await source_store.update_status(
+                source_id,
+                "completed",
+                {
+                    "pipeline_id": result.pipeline_id,
+                    "final_stage": result.final_stage_reached.name if result.final_stage_reached else "",
+                },
+            )
+            await emit_ui_event(
+                "source_ingest_completed",
+                upload_id=upload_id,
+                source_id=source_id,
+                filename=filename,
+                pipeline_id=result.pipeline_id,
+                final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+                stage_count=len(result.stage_results),
+            )
+    except asyncio.CancelledError:
         await emit_ui_event(
-            "chaos_note_created",
+            "upload_cancelled",
             upload_id=upload_id,
+            source_id=source_id,
             filename=filename,
-            source_type=extracted.source_type,
-            title=extracted.title or Path(filename).stem,
-            text_length=len(extracted.text or ""),
         )
-
-        if not dikiwi_mind:
-            raise RuntimeError("DIKIWI Mind is not initialized")
-
-        title = extracted.title or Path(filename).stem
-        content = extracted.text or ""
-        if title:
-            content = f"# {title}\n\n{content}".strip()
-
-        drop = RainDrop(
-            id="",
-            rain_type=RainType.DOCUMENT,
-            content=content,
-            raw_bytes=data,
-            source="web_upload",
-            source_id=upload_id,
-            stream_type=StreamType.EXTRACT_ANALYZE,
-            metadata={
-                "ui_upload_id": upload_id,
-                "filename": filename,
-                "content_type": content_type,
-                "source_type": extracted.source_type,
-                **(extracted.metadata or {}),
-            },
-        )
-        result = await dikiwi_mind.process_input(drop)
-        await emit_ui_event(
-            "source_ingest_completed",
-            upload_id=upload_id,
-            filename=filename,
-            pipeline_id=result.pipeline_id,
-            final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
-            stage_count=len(result.stage_results),
-        )
+        await source_store.update_status(source_id, "cancelled")
+        raise
     except Exception as exc:
         logger.exception("UI upload processing failed for %s", filename)
         await emit_ui_event(
             "pipeline_failed",
             upload_id=upload_id,
-            source_id=upload_id,
+            source_id=source_id,
             error=str(exc),
         )
+        await source_store.update_status(source_id, "failed", {"error": str(exc)})
     finally:
         ui_upload_tasks.pop(upload_id, None)
 
 
+async def _read_upload_bytes(file: UploadFile, max_bytes: int) -> bytes:
+    chunk_size = 1024 * 1024
+    total = 0
+    buffer = bytearray()
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds max upload size of {max_bytes} bytes",
+            )
+        buffer.extend(chunk)
+
+    await file.seek(0)
+    return bytes(buffer)
+
+
 async def _handle_ui_upload(file: UploadFile, upload_id: str) -> dict[str, Any]:
-    data = await file.read()
+    if len(ui_upload_tasks) >= SETTINGS.ui_max_active_uploads:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many active uploads; limit is {SETTINGS.ui_max_active_uploads}",
+        )
+
+    data = await _read_upload_bytes(file, SETTINGS.max_file_size)
     filename = file.filename or f"upload-{upload_id}"
     content_type = file.content_type or "application/octet-stream"
-    task = asyncio.create_task(_process_ui_upload(upload_id, filename, content_type, data))
-    ui_upload_tasks[upload_id] = task
+    source_record = await source_store.store_upload(
+        upload_id=upload_id,
+        filename=filename,
+        content_type=content_type,
+        data=data,
+        metadata={"intake": "studio_upload"},
+    )
+    await emit_ui_event(
+        "source_stored",
+        upload_id=upload_id,
+        source_id=source_record["source_id"],
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(data),
+        duplicate=source_record["duplicate"],
+        sha256=source_record["sha256"],
+    )
+    if not source_record["duplicate"]:
+        task = asyncio.create_task(
+            _process_ui_upload(upload_id, source_record["source_id"], filename, content_type, data)
+        )
+        ui_upload_tasks[upload_id] = task
     return {
         "upload_id": upload_id,
+        "source_id": source_record["source_id"],
         "filename": filename,
         "content_type": content_type,
         "size_bytes": len(data),
-        "status": "accepted",
+        "sha256": source_record["sha256"],
+        "duplicate": source_record["duplicate"],
+        "status": "duplicate" if source_record["duplicate"] else "accepted",
+    }
+
+
+async def _handle_ui_upload_batch(files: list[tuple[UploadFile, str]], batch_id: str) -> dict[str, Any]:
+    if len(ui_upload_tasks) >= SETTINGS.ui_max_active_uploads:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many active uploads; limit is {SETTINGS.ui_max_active_uploads}",
+        )
+    if not dikiwi_mind:
+        raise HTTPException(status_code=503, detail="DIKIWI Mind is not initialized")
+
+    accepted: list[dict[str, Any]] = []
+    stored_items: list[dict[str, Any]] = []
+    for file, upload_id in files:
+        data = await _read_upload_bytes(file, SETTINGS.max_file_size)
+        filename = file.filename or f"upload-{upload_id}"
+        content_type = file.content_type or "application/octet-stream"
+        await emit_ui_event(
+            "source_uploaded",
+            batch_id=batch_id,
+            upload_id=upload_id,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(data),
+        )
+        source_record = await source_store.store_upload(
+            upload_id=upload_id,
+            filename=filename,
+            content_type=content_type,
+            data=data,
+            metadata={"intake": "studio_upload", "batch_id": batch_id},
+        )
+        await emit_ui_event(
+            "source_stored",
+            batch_id=batch_id,
+            upload_id=upload_id,
+            source_id=source_record["source_id"],
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(data),
+            duplicate=source_record["duplicate"],
+            sha256=source_record["sha256"],
+        )
+        item = {
+            "upload_id": upload_id,
+            "source_id": source_record["source_id"],
+            "filename": filename,
+            "content_type": content_type,
+            "size_bytes": len(data),
+            "sha256": source_record["sha256"],
+            "duplicate": source_record["duplicate"],
+            "status": "duplicate" if source_record["duplicate"] else "accepted",
+            "data": data,
+        }
+        stored_items.append(item)
+        accepted.append({key: value for key, value in item.items() if key != "data"})
+
+    task = asyncio.create_task(_process_ui_upload_batch(batch_id, stored_items))
+    ui_upload_tasks[batch_id] = task
+    return {"batch_id": batch_id, "uploads": accepted, "status": "accepted"}
+
+
+async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -> None:
+    process_items = [item for item in items if not item["duplicate"]]
+    try:
+        if not process_items:
+            await emit_ui_event("upload_batch_completed", batch_id=batch_id, processed=0, duplicates=len(items))
+            return
+
+        router = ProcessingRouter(browser_manager=browser_manager_instance)
+        drops: list[RainDrop] = []
+        item_by_source: dict[str, dict[str, Any]] = {}
+
+        await emit_ui_event(
+            "batch_chaos_started",
+            batch_id=batch_id,
+            source_count=len(process_items),
+        )
+        for item in process_items:
+            await source_store.update_status(item["source_id"], "extracting")
+            extracted = await router.process(
+                item["data"],
+                filename=item["filename"],
+                http_content_type=item["content_type"],
+            )
+            await source_store.update_status(
+                item["source_id"],
+                "extracted",
+                {
+                    "source_type": extracted.source_type,
+                    "extracted_chars": len(extracted.text or ""),
+                    "batch_id": batch_id,
+                },
+            )
+            await emit_ui_event(
+                "chaos_note_created",
+                batch_id=batch_id,
+                upload_id=item["upload_id"],
+                source_id=item["source_id"],
+                filename=item["filename"],
+                source_type=extracted.source_type,
+                title=extracted.title or Path(item["filename"]).stem,
+                text_length=len(extracted.text or ""),
+            )
+
+            title = extracted.title or Path(item["filename"]).stem
+            content = extracted.text or ""
+            if title:
+                content = f"# {title}\n\n{content}".strip()
+
+            drop = RainDrop(
+                id="",
+                rain_type=RainType.DOCUMENT,
+                content=content,
+                raw_bytes=item["data"],
+                source="web_upload_batch",
+                source_id=item["source_id"],
+                stream_type=StreamType.EXTRACT_ANALYZE,
+                metadata={
+                    "ui_upload_id": item["upload_id"],
+                    "batch_id": batch_id,
+                    "source_id": item["source_id"],
+                    "filename": item["filename"],
+                    "content_type": item["content_type"],
+                    "source_type": extracted.source_type,
+                    **(extracted.metadata or {}),
+                },
+            )
+            drops.append(drop)
+            item_by_source[item["source_id"]] = item
+
+        await emit_ui_event(
+            "batch_chaos_completed",
+            batch_id=batch_id,
+            source_count=len(drops),
+        )
+        for item in process_items:
+            await source_store.update_status(item["source_id"], "processing", {"batch_id": batch_id})
+
+        batch = await dikiwi_mind.process_inputs_batched(drops)
+        for drop, result in zip(drops, batch.results):
+            item = item_by_source.get(drop.source_id)
+            if item is None:
+                continue
+            final_stage = result.final_stage_reached.name if result.final_stage_reached else ""
+            failed_stage = next((stage for stage in result.stage_results if not stage.success), None)
+            if failed_stage is None:
+                await source_store.update_status(
+                    item["source_id"],
+                    "completed",
+                    {
+                        "batch_id": batch_id,
+                        "pipeline_id": result.pipeline_id,
+                        "final_stage": final_stage,
+                    },
+                )
+            else:
+                await source_store.update_status(
+                    item["source_id"],
+                    "failed",
+                    {
+                        "batch_id": batch_id,
+                        "pipeline_id": result.pipeline_id,
+                        "error": failed_stage.error_message or f"{failed_stage.stage.name} failed",
+                    },
+                )
+
+        await emit_ui_event(
+            "upload_batch_completed",
+            batch_id=batch_id,
+            processed=len(process_items),
+            duplicates=len(items) - len(process_items),
+            incremental_ratio=batch.incremental_ratio,
+            incremental_threshold=batch.incremental_threshold,
+            higher_order_triggered=batch.higher_order_triggered,
+            pipeline_ids=[result.pipeline_id for result in batch.results],
+        )
+    except asyncio.CancelledError:
+        await emit_ui_event("upload_batch_cancelled", batch_id=batch_id, source_count=len(process_items))
+        for item in process_items:
+            await source_store.update_status(item["source_id"], "cancelled", {"batch_id": batch_id})
+        raise
+    except Exception as exc:
+        logger.exception("UI upload batch processing failed for %s", batch_id)
+        await emit_ui_event("pipeline_failed", batch_id=batch_id, error=str(exc))
+        for item in process_items:
+            await source_store.update_status(item["source_id"], "failed", {"batch_id": batch_id, "error": str(exc)})
+    finally:
+        ui_upload_tasks.pop(batch_id, None)
+
+
+async def _handle_ui_url(url: str) -> dict[str, Any]:
+    source = await source_store.store_url(url=url, metadata={"intake": "studio_url"})
+    return {
+        **source,
+        "status": "duplicate" if source["duplicate"] else "accepted",
     }
 
 
@@ -610,6 +916,130 @@ async def _ui_pipeline_provider(pipeline_id: str) -> dict[str, Any] | None:
         "status": last.get("type"),
         "events": events,
     }
+
+
+async def _ui_sources_provider(limit: int, offset: int) -> dict[str, Any]:
+    return await source_store.list_sources(limit=limit, offset=offset)
+
+
+async def _ui_source_detail_provider(source_id: str) -> dict[str, Any] | None:
+    return await source_store.get_source(source_id)
+
+
+def _studio_vault_path() -> Path:
+    return Path(SETTINGS.obsidian_vault_path or SETTINGS.dikiwi_vault_path).expanduser()
+
+
+def _read_vault_notes(stage_dir: str, limit: int) -> dict[str, Any]:
+    safe_limit = min(max(1, limit), 200)
+    directory = _studio_vault_path() / stage_dir
+    if not directory.exists():
+        return {"stage": stage_dir, "total": 0, "items": []}
+    files = sorted(directory.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    items: list[dict[str, Any]] = []
+    for path in files[:safe_limit]:
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            content = ""
+        title = path.stem
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                title = stripped[2:].strip() or title
+                break
+        items.append(
+            {
+                "title": title,
+                "note_path": str(path),
+                "relative_path": str(path.relative_to(_studio_vault_path())),
+                "size_bytes": path.stat().st_size,
+                "updated_at": path.stat().st_mtime,
+                "preview": content[:1200],
+            }
+        )
+    return {"stage": stage_dir, "total": len(files), "items": items}
+
+
+async def _ui_proposals_provider(limit: int) -> dict[str, Any]:
+    payload = await asyncio.to_thread(_read_vault_notes, "07-Proposal", limit)
+    try:
+        graph_count = await graph_db.count_nodes_by_type("reactor_proposal")
+    except Exception:
+        graph_count = 0
+    payload["graph_reactor_proposal_count"] = graph_count
+    return payload
+
+
+async def _ui_entrepreneurship_provider(limit: int) -> dict[str, Any]:
+    payload = await asyncio.to_thread(_read_vault_notes, "08-Entrepreneurship", limit)
+    try:
+        business_count = await graph_db.count_nodes_by_type("business")
+    except Exception:
+        business_count = 0
+    payload["graph_business_count"] = business_count
+    return payload
+
+
+async def _ui_control_handler(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if action in {"cancel_upload", "cancel_batch"}:
+        target_id = str(payload.get("upload_id") or payload.get("batch_id") or "").strip()
+        if not target_id:
+            raise HTTPException(status_code=400, detail="upload_id or batch_id is required")
+        task = ui_upload_tasks.get(target_id)
+        if task is None:
+            return {"action": action, "target_id": target_id, "cancelled": False, "reason": "not_active"}
+        task.cancel()
+        await emit_ui_event("upload_cancel_requested", upload_id=target_id)
+        return {"action": action, "target_id": target_id, "cancelled": True}
+
+    if action == "cancel_all_uploads":
+        target_ids = sorted(ui_upload_tasks)
+        for task in list(ui_upload_tasks.values()):
+            task.cancel()
+        await emit_ui_event("uploads_cancel_requested", upload_ids=target_ids, count=len(target_ids))
+        return {"action": action, "cancelled": len(target_ids), "upload_ids": target_ids}
+
+    if action == "retry_failed_sources":
+        listing = await source_store.list_sources(limit=500, offset=0)
+        failed = [source for source in listing.get("sources", []) if source.get("status") == "failed"]
+        for source in failed:
+            await source_store.update_status(source["source_id"], "stored", {"retry_requested": True})
+        await emit_ui_event(
+            "retry_failed_sources_requested",
+            source_ids=[source["source_id"] for source in failed],
+            count=len(failed),
+        )
+        return {
+            "action": action,
+            "retry_requested": len(failed),
+            "source_ids": [source["source_id"] for source in failed],
+        }
+
+    if action == "create_backup":
+        backup_path_raw = str(payload.get("backup_path") or "").strip()
+        backup_path = Path(backup_path_raw).expanduser() if backup_path_raw else SETTINGS.aily_data_dir / "backups" / "aily-backup.zip"
+        manifest = await asyncio.to_thread(
+            create_backup,
+            vault_path=_studio_vault_path(),
+            graph_db_path=SETTINGS.graph_db_path,
+            source_store_db_path=SETTINGS.source_store_db_path,
+            source_object_dir=SETTINGS.source_object_dir,
+            output_path=backup_path,
+        )
+        await audit_logger.log("backup_created", backup_path=str(backup_path), manifest=manifest.to_dict())
+        return {"action": action, "backup_path": str(backup_path), "manifest": manifest.to_dict()}
+
+    if action == "restore_backup_dry_run":
+        backup_path = Path(str(payload.get("backup_path") or "")).expanduser()
+        if not backup_path.exists():
+            raise HTTPException(status_code=400, detail="backup_path does not exist")
+        restore_dir = SETTINGS.aily_data_dir / "restore-dry-run"
+        restored = await asyncio.to_thread(restore_backup, backup_path=backup_path, restore_dir=restore_dir)
+        await audit_logger.log("backup_restore_dry_run", backup_path=str(backup_path), restore_dir=str(restore_dir))
+        return {"action": action, **restored}
+
+    raise HTTPException(status_code=400, detail=f"Unsupported control action: {action}")
 
 
 async def _tool_executor(action: str, **kwargs) -> dict:
@@ -671,6 +1101,11 @@ async def lifespan(app: FastAPI):
     global browser_manager_instance
     await db.initialize()
     await graph_db.initialize()
+    await source_store.initialize()
+    ui_event_hub.configure_persistence(SETTINGS.ui_event_log_path)
+    loaded_ui_events = await ui_event_hub.load_persisted(limit=SETTINGS.ui_event_trace_limit)
+    if loaded_ui_events:
+        logger.info("Loaded %d persisted UI events", loaded_ui_events)
 
     # Initialize browser manager for JS-rendered pages (Monica, etc.)
     browser_manager = None
@@ -781,6 +1216,7 @@ async def lifespan(app: FastAPI):
             circuit_breaker_threshold=SETTINGS.minds.circuit_breaker_threshold,
             enabled=SETTINGS.minds.innovation_enabled,
             nozzle_config=nozzle_config,
+            method_timeout_seconds=SETTINGS.reactor_method_timeout_seconds,
         )
         if SETTINGS.minds.innovation_enabled:
             innovation_scheduler.start()
@@ -837,6 +1273,7 @@ async def lifespan(app: FastAPI):
         entrepreneur_scheduler.stop()
     if worker:
         await worker.stop()
+    await source_store.close()
     await fetcher.stop()
     if browser_manager:
         try:
@@ -847,15 +1284,99 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def hosted_mode_guard(request: Request, call_next):
+    if SETTINGS.hosted_mode and (request.url.path == "/" or request.url.path.startswith("/assets/")):
+        token = SETTINGS.ui_auth_token
+        bearer = request.headers.get("authorization", "")
+        explicit_token = request.headers.get("x-aily-token", "")
+        if not token or (bearer != f"Bearer {token}" and explicit_token != token):
+            await audit_logger.log(
+                "hosted_static_rejected",
+                path=request.url.path,
+                client=request.client.host if request.client else "unknown",
+            )
+            return JSONResponse({"detail": "Aily hosted mode authentication required"}, status_code=401)
+    response = await call_next(request)
+    if request.url.path.startswith("/api/ui"):
+        await audit_logger.log(
+            "ui_request",
+            path=request.url.path,
+            method=request.method,
+            status_code=response.status_code,
+            client=request.client.host if request.client else "unknown",
+        )
+    return response
+
+
+@app.get("/health", include_in_schema=False)
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "hosted_mode": SETTINGS.hosted_mode}
+
+
+@app.get("/ready", include_in_schema=False)
+async def ready() -> dict[str, Any]:
+    return {
+        "status": "ready",
+        "graph_db_configured": bool(SETTINGS.graph_db_path),
+        "source_store_configured": bool(SETTINGS.source_store_db_path),
+        "vault_configured": bool(SETTINGS.obsidian_vault_path or SETTINGS.dikiwi_vault_path),
+        "studio_auth_required": SETTINGS.hosted_mode or SETTINGS.ui_auth_enabled,
+    }
+
 app.include_router(webhook.router)
 app.include_router(
     create_ui_router(
         upload_handler=_handle_ui_upload,
+        batch_upload_handler=_handle_ui_upload_batch,
+        url_handler=_handle_ui_url,
         status_provider=_ui_status_provider,
         graph_provider=_ui_graph_provider,
         pipeline_provider=_ui_pipeline_provider,
+        source_provider=_ui_sources_provider,
+        source_detail_provider=_ui_source_detail_provider,
+        proposal_provider=_ui_proposals_provider,
+        entrepreneurship_provider=_ui_entrepreneurship_provider,
+        control_handler=_ui_control_handler,
+        run_registry=RunRegistry(SETTINGS.evidence_runs_dir),
+        enable_uploads=HAS_MULTIPART,
+        max_files_per_request=SETTINGS.ui_max_upload_files,
+        max_upload_bytes=SETTINGS.max_file_size,
+        auth_token=SETTINGS.ui_auth_token if (SETTINGS.ui_auth_enabled or SETTINGS.hosted_mode) else "",
+        rate_limiter=ui_rate_limiter,
     )
 )
+
+
+def _configure_frontend_static(fastapi_app: FastAPI, dist_path: Path = FRONTEND_DIST_PATH) -> None:
+    """Serve the built Aily Studio frontend when `frontend/dist` exists."""
+    index_path = dist_path / "index.html"
+    if not index_path.exists():
+        logger.info("Aily Studio frontend build not found at %s; skipping static mount", dist_path)
+        return
+
+    assets_path = dist_path / "assets"
+    if assets_path.exists():
+        fastapi_app.mount("/assets", StaticFiles(directory=assets_path), name="aily_studio_assets")
+
+    @fastapi_app.get("/", include_in_schema=False)
+    async def _frontend_index() -> FileResponse:
+        return FileResponse(index_path)
+
+    @fastapi_app.get("/{full_path:path}", include_in_schema=False)
+    async def _frontend_spa_fallback(full_path: str) -> FileResponse:
+        if full_path.startswith(("api/", "webhook")):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = (dist_path / full_path).resolve()
+        dist_root = dist_path.resolve()
+        if candidate.is_file() and (candidate == dist_root or dist_root in candidate.parents):
+            return FileResponse(candidate)
+        return FileResponse(index_path)
+
+
+_configure_frontend_static(app)
 
 
 if __name__ == "__main__":

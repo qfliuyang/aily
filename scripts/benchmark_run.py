@@ -4,7 +4,6 @@
 Usage:
   python scripts/benchmark_run.py <provider> <vault_path>
   python scripts/benchmark_run.py kimi /Users/luzi/code/aily/test-vault-kimi
-  python scripts/benchmark_run.py zhipu /Users/luzi/code/aily/test-vault-zhipu
   python scripts/benchmark_run.py deepseek /Users/luzi/code/aily/test-vault-deepseek
 """
 
@@ -35,11 +34,6 @@ PROVIDERS = {
         "model": SETTINGS.kimi_model or "kimi-k2.6",
         "api_key": SETTINGS.kimi_api_key,
     },
-    "zhipu": {
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": getattr(SETTINGS, "zhipu_model", "") or "glm-5.1",
-        "api_key": getattr(SETTINGS, "zhipu_api_key", ""),
-    },
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "model": getattr(SETTINGS, "deepseek_model", "") or "deepseek-v4-pro",
@@ -64,7 +58,7 @@ def build_client(provider: str) -> LLMClient:
 
 async def main():
     if len(sys.argv) < 3:
-        print(f"Usage: python {sys.argv[0]} <kimi|zhipu|deepseek> <vault_path>")
+        print(f"Usage: python {sys.argv[0]} <kimi|deepseek> <vault_path>")
         sys.exit(1)
 
     provider = sys.argv[1]

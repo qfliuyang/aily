@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 
 type ViewMode = "theater" | "graph" | "judgment" | "operations";
 
@@ -48,6 +49,62 @@ type GraphEdge = {
 type GraphSnapshot = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+};
+
+type RunSummary = {
+  run_id: string;
+  scenario?: string;
+  completed_at?: string;
+  exit_code?: number;
+  source_count: number;
+  mocked: boolean;
+  fake_components: string[];
+  real_llm: boolean;
+  failures_count: number;
+  ui_event_count: number;
+  graph_edge_count_after: number;
+  vault_counts_after: Record<string, number>;
+  business_skipped_reason?: string;
+};
+
+type RunListResponse = {
+  root_dir: string;
+  total: number;
+  runs: RunSummary[];
+};
+
+type SourceSummary = {
+  source_id: string;
+  kind: string;
+  filename?: string;
+  normalized_source: string;
+  content_type?: string;
+  size_bytes: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type SourceListResponse = {
+  total: number;
+  sources: SourceSummary[];
+};
+
+type VaultNote = {
+  title: string;
+  note_path: string;
+  relative_path: string;
+  size_bytes: number;
+  updated_at: number;
+  preview: string;
+};
+
+type VaultNoteListResponse = {
+  stage: string;
+  total: number;
+  items: VaultNote[];
+  graph_reactor_proposal_count?: number;
+  graph_business_count?: number;
 };
 
 type PipelineTrack = {
@@ -131,15 +188,27 @@ const STAGE_LABELS: Record<StageName, string> = {
 };
 
 const STAGE_NARRATIVE: Record<StageName, string> = {
-  CHAOS: "Raw material swirls before structure appears.",
-  DATA: "Chaos compresses into isolated datapoints.",
-  INFORMATION: "Datapoints are classified, tagged, and clustered.",
-  KNOWLEDGE: "Meaningful edges form across clusters.",
-  INSIGHT: "Local pathways light up and reveal opportunities.",
-  WISDOM: "Long arcs connect distant regions of the graph.",
-  IMPACT: "Central innovation nuclei form and pull the network inward.",
-  PROPOSAL: "Impact condenses into venture hypotheses.",
-  ENTREPRENEUR: "Ideas face market and execution reality.",
+  CHAOS: "Unsorted fragments arrive with no hierarchy: files, links, media, screenshots, and noise.",
+  DATA: "The raw stream is split into accountable datapoints: one claim, observation, figure, or artifact at a time.",
+  INFORMATION: "Datapoints gain tags and clusters, turning isolated facts into searchable context.",
+  KNOWLEDGE: "Clusters connect into a graph, exposing relationships that were not visible inside any single source.",
+  INSIGHT: "A short meaningful path lights up: this is the first usable pattern, tension, or opportunity.",
+  WISDOM: "Long arcs connect distant regions, forcing tradeoffs, constraints, and second-order consequences into view.",
+  IMPACT: "A high-gravity center appears: many paths point at one innovation nucleus with practical leverage.",
+  PROPOSAL: "Impact becomes multiple venture hypotheses, not one premature answer.",
+  ENTREPRENEUR: "Guru judgment turns each accepted or denied idea into a business and technical development brief.",
+};
+
+const STAGE_AXIOMS: Record<StageName, string> = {
+  CHAOS: "fragments",
+  DATA: "atomic evidence",
+  INFORMATION: "classified signals",
+  KNOWLEDGE: "linked context",
+  INSIGHT: "short path",
+  WISDOM: "long arc",
+  IMPACT: "gravity center",
+  PROPOSAL: "option set",
+  ENTREPRENEUR: "CEO/CTO brief",
 };
 
 const emptyStatus: StudioStatus = {
@@ -152,13 +221,33 @@ const emptyStatus: StudioStatus = {
 };
 
 const emptyGraph: GraphSnapshot = { nodes: [], edges: [] };
+const emptyRuns: RunListResponse = { root_dir: "", total: 0, runs: [] };
+const emptySources: SourceListResponse = { total: 0, sources: [] };
+const emptyVaultNotes: VaultNoteListResponse = { stage: "", total: 0, items: [] };
+
+function responseError(response: Response, fallback: string): Promise<Error> {
+  return response
+    .text()
+    .then((body) => new Error(body || fallback))
+    .catch(() => new Error(fallback));
+}
 
 function App() {
   const [events, setEvents] = useState<StudioEvent[]>([]);
   const [status, setStatus] = useState<StudioStatus>(emptyStatus);
   const [graph, setGraph] = useState<GraphSnapshot>(emptyGraph);
+  const [runs, setRuns] = useState<RunListResponse>(emptyRuns);
+  const [sources, setSources] = useState<SourceListResponse>(emptySources);
+  const [proposals, setProposals] = useState<VaultNoteListResponse>(emptyVaultNotes);
+  const [entrepreneurship, setEntrepreneurship] = useState<VaultNoteListResponse>(emptyVaultNotes);
+  const [mode, setMode] = useState<"live" | "replay">("live");
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const [submittingUrl, setSubmittingUrl] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
   const [view, setView] = useState<ViewMode>("theater");
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [nodeTypeFilter, setNodeTypeFilter] = useState<string>("all");
@@ -167,47 +256,144 @@ function App() {
   useEffect(() => {
     void refreshStatus();
     void refreshGraph();
+    void refreshRuns();
+    void refreshSources();
+    void refreshJudgmentArtifacts();
 
     const interval = window.setInterval(() => {
       void refreshStatus();
       void refreshGraph();
+      void refreshRuns();
+      void refreshSources();
+      void refreshJudgmentArtifacts();
     }, 5000);
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${protocol}://${window.location.hostname}:8000/api/ui/events`);
-    ws.onmessage = (message) => {
-      const event = JSON.parse(message.data) as StudioEvent;
-      setEvents((current) => [...current.slice(-499), event]);
-      if (!selectedPipelineId && event.pipeline_id) {
-        setSelectedPipelineId(event.pipeline_id);
-      }
-      void refreshStatus();
-      if (
-        event.type === "stage_completed" ||
-        event.type === "pipeline_completed" ||
-        event.type === "threshold_crossed" ||
-        event.type === "chaos_note_created"
-      ) {
-        void refreshGraph();
-      }
+    let ws: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let cancelled = false;
+
+    const connect = () => {
+      ws = new WebSocket(`${protocol}://${window.location.host}/api/ui/events`);
+      ws.onopen = () => {
+        setWsConnected(true);
+        setStreamError(null);
+      };
+      ws.onmessage = (message) => {
+        const event = JSON.parse(message.data) as StudioEvent;
+        setEvents((current) => [...current.slice(-499), event]);
+        if (event.pipeline_id) {
+          setSelectedPipelineId((current) => current ?? event.pipeline_id ?? null);
+        }
+        void refreshStatus();
+        if (
+          event.type === "stage_completed" ||
+          event.type === "pipeline_completed" ||
+          event.type === "proposal_review_completed" ||
+          event.type === "threshold_crossed" ||
+          event.type === "chaos_note_created"
+        ) {
+          void refreshGraph();
+          void refreshJudgmentArtifacts();
+        }
+      };
+      ws.onerror = () => {
+        setStreamError("Live event stream encountered an error.");
+      };
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (cancelled) return;
+        setStreamError("Live event stream disconnected.");
+        reconnectTimer = window.setTimeout(connect, 1500);
+      };
     };
+
+    connect();
 
     return () => {
+      cancelled = true;
       window.clearInterval(interval);
-      ws.close();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+      }
+      ws?.close();
     };
-  }, [selectedPipelineId]);
+  }, []);
 
   async function refreshStatus() {
-    const response = await fetch("/api/ui/status");
-    const payload = (await response.json()) as StudioStatus;
-    setStatus(payload);
+    try {
+      const response = await fetch("/api/ui/status");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch studio status.");
+      }
+      const payload = (await response.json()) as StudioStatus;
+      setStatus(payload);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch studio status.");
+    }
   }
 
   async function refreshGraph() {
-    const response = await fetch("/api/ui/graph");
-    const payload = (await response.json()) as GraphSnapshot;
-    setGraph(payload);
+    try {
+      const response = await fetch("/api/ui/graph");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch graph snapshot.");
+      }
+      const payload = (await response.json()) as GraphSnapshot;
+      setGraph(payload);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch graph snapshot.");
+    }
+  }
+
+  async function refreshRuns() {
+    try {
+      const response = await fetch("/api/ui/runs?limit=8");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch evidence runs.");
+      }
+      const payload = (await response.json()) as RunListResponse;
+      setRuns(payload);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch evidence runs.");
+    }
+  }
+
+  async function refreshSources() {
+    try {
+      const response = await fetch("/api/ui/sources?limit=8");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch source store.");
+      }
+      const payload = (await response.json()) as SourceListResponse;
+      setSources(payload);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch source store.");
+    }
+  }
+
+  async function refreshJudgmentArtifacts() {
+    try {
+      const [proposalResponse, entrepreneurshipResponse] = await Promise.all([
+        fetch("/api/ui/proposals?limit=12"),
+        fetch("/api/ui/entrepreneurship?limit=12"),
+      ]);
+      if (!proposalResponse.ok) {
+        throw await responseError(proposalResponse, "Failed to fetch proposals.");
+      }
+      if (!entrepreneurshipResponse.ok) {
+        throw await responseError(entrepreneurshipResponse, "Failed to fetch entrepreneurship notes.");
+      }
+      setProposals((await proposalResponse.json()) as VaultNoteListResponse);
+      setEntrepreneurship((await entrepreneurshipResponse.json()) as VaultNoteListResponse);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch judgment artifacts.");
+    }
   }
 
   async function uploadFiles(files: FileList | File[]) {
@@ -219,9 +405,74 @@ function App() {
     }
     setUploading(true);
     try {
-      await fetch("/api/ui/uploads", { method: "POST", body: form });
+      const response = await fetch("/api/ui/uploads", { method: "POST", body: form });
+      if (!response.ok) {
+        throw await responseError(response, "Upload failed.");
+      }
+      setApiError(null);
+      await refreshStatus();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Upload failed.");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function submitUrl(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const url = urlInput.trim();
+    if (!url) return;
+    setSubmittingUrl(true);
+    try {
+      const response = await fetch("/api/ui/sources/urls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!response.ok) {
+        throw await responseError(response, "URL intake failed.");
+      }
+      setUrlInput("");
+      setApiError(null);
+      await refreshSources();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "URL intake failed.");
+    } finally {
+      setSubmittingUrl(false);
+    }
+  }
+
+  async function sendControl(action: string, payload: Record<string, unknown> = {}) {
+    try {
+      const response = await fetch("/api/ui/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...payload }),
+      });
+      if (!response.ok) {
+        throw await responseError(response, "Control action failed.");
+      }
+      setApiError(null);
+      await refreshStatus();
+      await refreshSources();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Control action failed.");
+    }
+  }
+
+  async function loadRunReplay(runId: string) {
+    try {
+      const response = await fetch(`/api/ui/events/query?run_id=${encodeURIComponent(runId)}&limit=500`);
+      if (!response.ok) {
+        throw await responseError(response, "Failed to load run replay.");
+      }
+      const payload = (await response.json()) as { events: StudioEvent[] };
+      setEvents(payload.events);
+      setMode("replay");
+      setSelectedPipelineId(payload.events.find((event) => event.pipeline_id)?.pipeline_id ?? null);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to load run replay.");
     }
   }
 
@@ -236,7 +487,7 @@ function App() {
     if (!selectedPipelineId) {
       return events.slice(-24).reverse();
     }
-    const scoped = events.filter((event) => event.pipeline_id === selectedPipelineId);
+    const scoped = events.filter((event) => event.pipeline_id === selectedPipelineId || !event.pipeline_id);
     return scoped.slice(-24).reverse();
   }, [events, selectedPipelineId]);
 
@@ -290,8 +541,18 @@ function App() {
           <Metric label="Queue" value={String(status.queue.total ?? 0)} />
           <Metric label="Active Pipelines" value={String(status.active_pipelines.length)} />
           <Metric label="Active Uploads" value={String(status.active_uploads.length)} />
+          <Metric label="Sources" value={String(sources.total)} />
+          <Metric label="Evidence Runs" value={String(runs.total)} />
+          <Metric label="Event Stream" value={mode === "replay" ? "replay" : wsConnected ? "live" : "down"} />
         </div>
       </header>
+
+      {(streamError || apiError) && (
+        <section className="alert-banner" role="alert">
+          <strong>Studio warning</strong>
+          <span>{streamError ?? apiError}</span>
+        </section>
+      )}
 
       <nav className="view-nav" aria-label="Studio views">
         {VIEWS.map((item) => (
@@ -341,6 +602,18 @@ function App() {
                 />
                 {uploading ? "Uploading..." : "Choose files"}
               </label>
+              <form className="url-intake" onSubmit={submitUrl}>
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(event) => setUrlInput(event.target.value)}
+                  placeholder="https://example.com/research"
+                  aria-label="Submit URL to Aily"
+                />
+                <button type="submit" disabled={submittingUrl || !urlInput.trim()}>
+                  {submittingUrl ? "Saving..." : "Send link"}
+                </button>
+              </form>
             </div>
           </section>
 
@@ -356,7 +629,12 @@ function App() {
             </div>
           </Panel>
 
-          <Panel title="Pipeline Queue" subtitle="Tracked cognition runs">
+                <Panel title="Pipeline Queue" subtitle="Tracked cognition runs">
+            {mode === "replay" && (
+              <button type="button" className="control-button" onClick={() => setMode("live")}>
+                Return to live stream
+              </button>
+            )}
             <div className="track-list compact">
               {pipelineTracks.slice(0, 8).map((track) => (
                 <button
@@ -467,8 +745,39 @@ function App() {
                   <p className="eyebrow">Judgment Room</p>
                   <h2>Proposal and Entrepreneur Motion</h2>
                 </div>
+                <button type="button" className="control-button" onClick={() => void refreshJudgmentArtifacts()}>
+                  Refresh vault artifacts
+                </button>
               </div>
               <div className="judgment-grid">
+                {proposals.items.map((note) => (
+                  <article key={note.note_path} className="judgment-card state-warming">
+                    <div className="judgment-head">
+                      <span className="pill">proposal note</span>
+                      <span>{new Date(note.updated_at * 1000).toLocaleTimeString()}</span>
+                    </div>
+                    <h3>{note.title}</h3>
+                    <p>{note.preview}</p>
+                    <div className="judgment-meta">
+                      <span className="mono">{note.relative_path}</span>
+                      <span>{formatBytes(note.size_bytes)}</span>
+                    </div>
+                  </article>
+                ))}
+                {entrepreneurship.items.map((note) => (
+                  <article key={note.note_path} className="judgment-card state-completed">
+                    <div className="judgment-head">
+                      <span className="pill">entrepreneur note</span>
+                      <span>{new Date(note.updated_at * 1000).toLocaleTimeString()}</span>
+                    </div>
+                    <h3>{note.title}</h3>
+                    <p>{note.preview}</p>
+                    <div className="judgment-meta">
+                      <span className="mono">{note.relative_path}</span>
+                      <span>{formatBytes(note.size_bytes)}</span>
+                    </div>
+                  </article>
+                ))}
                 {judgmentSignals.map((signal) => (
                   <article key={signal.id} className={`judgment-card state-${signal.state}`}>
                     <div className="judgment-head">
@@ -484,10 +793,9 @@ function App() {
                     </div>
                   </article>
                 ))}
-                {!judgmentSignals.length && (
+                {!judgmentSignals.length && !proposals.items.length && !entrepreneurship.items.length && (
                   <p className="empty-state">
-                    No proposal review signals yet. Once Reactor and Entrepreneur events deepen,
-                    this room will populate automatically.
+                    No proposal or entrepreneur artifacts found. Cards here are loaded from vault/API artifacts, not demo data.
                   </p>
                 )}
               </div>
@@ -502,6 +810,16 @@ function App() {
                   <h2>Runtime State</h2>
                 </div>
               </div>
+              <Panel title="Control Desk" subtitle="Admin actions">
+                <div className="control-row">
+                  <button type="button" className="control-button" onClick={() => void sendControl("retry_failed_sources")}>
+                    Retry failed sources
+                  </button>
+                  <button type="button" className="control-button danger" onClick={() => void sendControl("cancel_all_uploads")}>
+                    Cancel active uploads
+                  </button>
+                </div>
+              </Panel>
               <div className="studio-grid operations-grid">
                 <Panel title="Daemon Status" subtitle="Runtime health">
                   <KeyValueMap items={status.daemons} boolean />
@@ -514,6 +832,62 @@ function App() {
                 </Panel>
                 <Panel title="Graph Counts" subtitle="Persistent knowledge">
                   <KeyValueMap items={status.graph} />
+                </Panel>
+                <Panel title="Source Store" subtitle="Durable intake records">
+                  <div className="source-list">
+                    {sources.sources.map((source) => (
+                      <article key={source.source_id} className={`source-card state-${source.status}`}>
+                        <div className="run-head">
+                          <strong>{source.filename ?? source.normalized_source}</strong>
+                          <span className="pill">{source.status}</span>
+                        </div>
+                        <p className="mono">{source.source_id}</p>
+                        <div className="run-meta">
+                          <span>{source.kind}</span>
+                          <span>{source.content_type ?? "unknown type"}</span>
+                          <span>{formatBytes(source.size_bytes)}</span>
+                        </div>
+                        <time>{new Date(source.updated_at).toLocaleString()}</time>
+                      </article>
+                    ))}
+                    {!sources.sources.length && (
+                      <p className="empty-state">No source records found yet.</p>
+                    )}
+                  </div>
+                </Panel>
+                <Panel title="Evidence Runs" subtitle={runs.root_dir || "logs/runs"}>
+                  <div className="run-list">
+                    {runs.runs.map((run) => (
+                      <article key={run.run_id} className={`run-card ${run.exit_code === 0 ? "ok" : "bad"}`}>
+                        <div className="run-head">
+                          <strong>{run.scenario ?? "unknown scenario"}</strong>
+                          <span className="pill">{run.exit_code === 0 ? "passed" : `exit ${run.exit_code ?? "?"}`}</span>
+                        </div>
+                        <p className="mono">{run.run_id}</p>
+                        <div className="run-meta">
+                          <span>{run.source_count} sources</span>
+                          <span>{run.ui_event_count} events</span>
+                          <span>{run.graph_edge_count_after} edges</span>
+                          <span>{run.real_llm ? "real LLM" : "no LLM proof"}</span>
+                        </div>
+                        {run.mocked || run.fake_components.length > 0 ? (
+                          <p className="error-text">Not acceptance proof: mocked or fake components declared.</p>
+                        ) : null}
+                        {run.business_skipped_reason ? (
+                          <p className="muted-copy">Business skipped: {run.business_skipped_reason}</p>
+                        ) : null}
+                        {run.completed_at ? (
+                          <time>{new Date(run.completed_at).toLocaleString()}</time>
+                        ) : null}
+                        <button type="button" className="control-button" onClick={() => void loadRunReplay(run.run_id)}>
+                          Replay run events
+                        </button>
+                      </article>
+                    ))}
+                    {!runs.runs.length && (
+                      <p className="empty-state">No evidence runs found yet.</p>
+                    )}
+                  </div>
                 </Panel>
               </div>
             </section>
@@ -602,17 +976,9 @@ function ThinkingStageCanvas(props: { track: PipelineTrack | null }) {
           const active = stage === track.currentStage;
           return (
             <div key={stage} className="stage-column">
-              <div className={`stage-core ${completed ? "completed" : ""} ${active ? "active" : ""}`}>
-                {stage === "CHAOS" && <div className="chaos-cloud" />}
-                {stage !== "CHAOS" && stage !== "PROPOSAL" && stage !== "ENTREPRENEUR" && (
-                  <div className={`node-swarm stage-${stage.toLowerCase()}`}>
-                    {Array.from({ length: Math.max(3, Math.min(index + 2, 7)) }).map((_, particle) => (
-                      <span key={particle} className="mini-node" />
-                    ))}
-                  </div>
-                )}
-                {stage === "PROPOSAL" && <div className="proposal-stack" />}
-                {stage === "ENTREPRENEUR" && <div className="verdict-gate" />}
+              <div className={`stage-core stage-${stage.toLowerCase()} ${completed ? "completed" : ""} ${active ? "active" : ""}`}>
+                <StageGlyph stage={stage} active={active} />
+                <span className="stage-axiom">{STAGE_AXIOMS[stage]}</span>
               </div>
               <span className="stage-label">{STAGE_LABELS[stage]}</span>
             </div>
@@ -627,6 +993,97 @@ function ThinkingStageCanvas(props: { track: PipelineTrack | null }) {
         </div>
       </div>
       <div className="traveler" style={{ left: `${(currentStageIndex / (STAGES.length - 1)) * 100}%` }} />
+    </div>
+  );
+}
+
+function StageGlyph(props: { stage: StageName; active: boolean }) {
+  const { stage, active } = props;
+  const glyphClass = `stage-glyph glyph-${stage.toLowerCase()} ${active ? "active" : ""}`;
+  if (stage === "CHAOS") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        {Array.from({ length: 12 }).map((_, index) => (
+          <span key={index} className={`fragment fragment-${index + 1}`} />
+        ))}
+      </div>
+    );
+  }
+  if (stage === "DATA") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        {Array.from({ length: 8 }).map((_, index) => (
+          <span key={index} className="data-dot" />
+        ))}
+      </div>
+    );
+  }
+  if (stage === "INFORMATION") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        {["EDA", "cost", "risk", "flow", "proof", "market"].map((tag) => (
+          <span key={tag} className="tag-chip">{tag}</span>
+        ))}
+      </div>
+    );
+  }
+  if (stage === "KNOWLEDGE") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        <svg viewBox="0 0 120 120">
+          <path d="M25 74 L52 36 L88 48 L98 86 L60 94 Z" />
+          {[["25", "74"], ["52", "36"], ["88", "48"], ["98", "86"], ["60", "94"]].map(([cx, cy]) => (
+            <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="6" />
+          ))}
+        </svg>
+      </div>
+    );
+  }
+  if (stage === "INSIGHT") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        <span className="path-node start" />
+        <span className="path-line" />
+        <span className="path-node end" />
+      </div>
+    );
+  }
+  if (stage === "WISDOM") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        <svg viewBox="0 0 140 110">
+          <path d="M18 78 C42 10, 92 102, 122 28" />
+          <path d="M26 88 C62 44, 82 62, 114 18" />
+          <circle cx="18" cy="78" r="5" />
+          <circle cx="122" cy="28" r="7" />
+        </svg>
+      </div>
+    );
+  }
+  if (stage === "IMPACT") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        <span className="impact-core" />
+        {Array.from({ length: 6 }).map((_, index) => (
+          <span key={index} className={`orbit orbit-${index + 1}`} />
+        ))}
+      </div>
+    );
+  }
+  if (stage === "PROPOSAL") {
+    return (
+      <div className={glyphClass} aria-hidden="true">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <span key={index} className="proposal-card" />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className={glyphClass} aria-hidden="true">
+      <span className="brief-sheet business">CEO</span>
+      <span className="brief-sheet technical">CTO</span>
+      <span className="guru-lens" />
     </div>
   );
 }
@@ -727,6 +1184,18 @@ function Metric(props: { label: string; value: string }) {
       <strong>{props.value}</strong>
     </div>
   );
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 function deriveWorkerCards(status: StudioStatus) {

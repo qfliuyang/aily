@@ -87,6 +87,7 @@ class ReactorScheduler(BaseMindScheduler):
         circuit_breaker_threshold: int = 3,
         enabled: bool = True,
         nozzle_config: NozzleConfig | None = None,
+        method_timeout_seconds: float = 180.0,
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -100,8 +101,29 @@ class ReactorScheduler(BaseMindScheduler):
         self.obsidian_writer = obsidian_writer
         self.feishu_pusher = feishu_pusher
         self.nozzle_config = nozzle_config or NozzleConfig()
+        self.method_timeout_seconds = max(1.0, float(method_timeout_seconds))
         self._analyzers: dict[InnovationMethod, Any] = {}
         self._current_session_proposals: list[Proposal] = []
+
+    async def _run_method_bounded(
+        self,
+        method: InnovationMethod,
+        context: dict[str, Any],
+        budget: Any | None = None,
+    ) -> MethodResult | None:
+        try:
+            return await asyncio.wait_for(
+                self._run_method(method, context, budget=budget),
+                timeout=self.method_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[Reactor] Method %s timed out after %.1fs",
+                method.value,
+                self.method_timeout_seconds,
+            )
+            await self.circuit_breaker.record_failure()
+            return MethodResult(method=method, proposals=[], confidence=0.0)
 
     def _get_analyzer(self, method: InnovationMethod) -> Any:
         """Get or create analyzer for a method."""
@@ -148,6 +170,8 @@ class ReactorScheduler(BaseMindScheduler):
         self,
         context: dict[str, Any],
         budget: Any | None = None,
+        persist: bool = False,
+        output: bool = False,
     ) -> list[Proposal]:
         """Run enabled innovation frameworks on a context and return proposals.
 
@@ -161,7 +185,7 @@ class ReactorScheduler(BaseMindScheduler):
         enabled = self.nozzle_config.enabled_methods
         tasks = []
         for method in enabled:
-            task = self._run_method(method, context, budget=budget)
+            task = self._run_method_bounded(method, context, budget=budget)
             tasks.append(task)
 
         try:
@@ -185,6 +209,11 @@ class ReactorScheduler(BaseMindScheduler):
 
         logger.info(f"[Reactor] evaluate_context: {len(valid_results)}/{len(enabled)} methods produced proposals")
         proposals = await self._synthesis_nozzle(valid_results)
+        self._current_session_proposals = proposals
+        if persist:
+            await self._persist_framework_proposals(proposals)
+        if output:
+            await self._output_proposals(proposals, datetime.now(timezone.utc))
         return proposals
 
     async def _run_session(self) -> dict[str, Any]:
@@ -200,7 +229,7 @@ class ReactorScheduler(BaseMindScheduler):
         # Run all methods in parallel
         tasks = []
         for method in self.nozzle_config.enabled_methods:
-            task = self._run_method(method, context)
+            task = self._run_method_bounded(method, context)
             tasks.append(task)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)

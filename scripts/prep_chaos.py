@@ -15,7 +15,7 @@ from aily.chaos.processors.pdf import PDFProcessor
 
 async def main():
     vaults = []
-    for p in ["kimi", "zhipu", "deepseek"]:
+    for p in ["kimi", "deepseek"]:
         v = Path(f"/Users/luzi/code/aily/test-vault-{p}")
         for d in ["00-Chaos", "01-Data", "02-Information", "03-Knowledge",
                    "04-Insight", "05-Wisdom", "06-Impact",
@@ -72,7 +72,7 @@ async def main():
     )
 
     print("\nReady. Run 3 benchmarks in parallel:")
-    for p in ["kimi", "zhipu", "deepseek"]:
+    for p in ["kimi", "deepseek"]:
         print(f"  python scripts/benchmark_run.py {p} test-vault-{p}")
 
 asyncio.run(main())

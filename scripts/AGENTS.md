@@ -33,7 +33,7 @@ CLI tools, daemons, batch runners, and benchmarks for operating Aily.
 
 ### Common Patterns
 - `ChaosConfig()` for default chaos settings
-- `PrimaryLLMRoute.route_kimi()` for LLM client (or `route_zhipu()`, `route_deepseek()`)
+- `PrimaryLLMRoute.route_kimi()` for LLM client (or `route_deepseek()`)
 - `DikiwiObsidianWriter(vault_path=...)` for vault output
 - `GraphDB(db_path=vault/.aily/graph.db)` for graph persistence
 - Benchmark patterns: pre-extract once, run separately, compare reports

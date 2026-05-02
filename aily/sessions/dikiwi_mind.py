@@ -436,6 +436,24 @@ class DikiwiMind:
         agent: Any,
         max_concurrency: int,
     ) -> list[Any]:
+        if not contexts:
+            return []
+
+        batch_ids = sorted(
+            {
+                str(ctx.drop.metadata.get("batch_id"))
+                for ctx in contexts
+                if getattr(ctx, "drop", None) is not None and ctx.drop.metadata.get("batch_id")
+            }
+        )
+        batch_id = batch_ids[0] if len(batch_ids) == 1 else None
+        await emit_ui_event(
+            "batch_stage_started",
+            batch_id=batch_id,
+            stage=stage.name,
+            pipeline_ids=[ctx.pipeline_id for ctx in contexts],
+            source_count=len(contexts),
+        )
         semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
         async def _run(ctx: Any) -> StageResult:
@@ -457,7 +475,26 @@ class DikiwiMind:
                         stage=stage.name,
                         workload=f"dikiwi.{stage.name.lower()}",
                     ):
-                        result = await agent.execute(ctx)
+                        stage_timeout = float(getattr(SETTINGS, "dikiwi_stage_timeout_seconds", 240.0))
+                        if stage_timeout > 0:
+                            result = await asyncio.wait_for(agent.execute(ctx), timeout=stage_timeout)
+                        else:
+                            result = await agent.execute(ctx)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[DIKIWI] Batch stage %s timed out after %.1fs for %s",
+                        stage.name,
+                        float(getattr(SETTINGS, "dikiwi_stage_timeout_seconds", 240.0)),
+                        ctx.pipeline_id,
+                    )
+                    result = StageResult(
+                        stage=stage,
+                        success=False,
+                        error_message=(
+                            f"{stage.name} stage timed out after "
+                            f"{float(getattr(SETTINGS, 'dikiwi_stage_timeout_seconds', 240.0)):.1f}s"
+                        ),
+                    )
                 except Exception as exc:
                     logger.exception("[DIKIWI] Batch stage %s failed for %s", stage.name, ctx.pipeline_id)
                     result = StageResult(
@@ -478,7 +515,17 @@ class DikiwiMind:
                 )
                 return result
 
-        return await asyncio.gather(*[_run(ctx) for ctx in contexts])
+        results = await asyncio.gather(*[_run(ctx) for ctx in contexts])
+        await emit_ui_event(
+            "batch_stage_completed",
+            batch_id=batch_id,
+            stage=stage.name,
+            pipeline_ids=[ctx.pipeline_id for ctx in contexts],
+            source_count=len(contexts),
+            success_count=sum(1 for result in results if result.success),
+            failure_count=sum(1 for result in results if not result.success),
+        )
+        return results
 
     @staticmethod
     def _incremental_growth_ratio(pre_count: int, post_count: int) -> float:
@@ -560,6 +607,11 @@ class DikiwiMind:
 
     async def process_input(self, drop: "RainDrop") -> DikiwiResult:
         """Process raw input through complete DIKIWI hierarchy using LLM."""
+        if not hasattr(drop, "metadata") or getattr(drop, "metadata", None) is None:
+            try:
+                setattr(drop, "metadata", {})
+            except Exception:
+                pass
         if not self.enabled:
             return DikiwiResult(
                 input_id=drop.id,
@@ -899,23 +951,33 @@ class DikiwiMind:
                 if ctx.stage_results and ctx.stage_results[-1].stage == DikiwiStage.DATA and ctx.stage_results[-1].success
             ]
 
-            await self._execute_batch_stage(
-                stage_contexts,
-                stage=DikiwiStage.INFORMATION,
-                agent=agents[DikiwiStage.INFORMATION],
-                max_concurrency=concurrency,
-            )
+            if stage_contexts:
+                await self._execute_batch_stage(
+                    stage_contexts,
+                    stage=DikiwiStage.INFORMATION,
+                    agent=agents[DikiwiStage.INFORMATION],
+                    max_concurrency=concurrency,
+                )
             stage_contexts = [
                 ctx for ctx in stage_contexts
                 if ctx.stage_results and ctx.stage_results[-1].stage == DikiwiStage.INFORMATION and ctx.stage_results[-1].success
             ]
 
-            await self._execute_batch_stage(
-                stage_contexts,
-                stage=DikiwiStage.KNOWLEDGE,
-                agent=agents[DikiwiStage.KNOWLEDGE],
-                max_concurrency=concurrency,
-            )
+            if stage_contexts:
+                await self._execute_batch_stage(
+                    stage_contexts,
+                    stage=DikiwiStage.KNOWLEDGE,
+                    agent=agents[DikiwiStage.KNOWLEDGE],
+                    max_concurrency=concurrency,
+                )
+
+            knowledge_contexts = [
+                ctx
+                for ctx in stage_contexts
+                if ctx.stage_results
+                and ctx.stage_results[-1].stage == DikiwiStage.KNOWLEDGE
+                and ctx.stage_results[-1].success
+            ]
 
             post_information_nodes = pre_information_nodes
             if self.graph_db is not None:
@@ -928,26 +990,29 @@ class DikiwiMind:
                 pre_information_nodes,
                 post_information_nodes,
             )
-            higher_order_triggered = incremental_ratio >= threshold
+            higher_order_triggered = bool(knowledge_contexts) and incremental_ratio >= threshold
 
-            if not higher_order_triggered:
+            if not knowledge_contexts:
+                logger.info("[DIKIWI] Batch stopped before graph threshold check: no successful KNOWLEDGE results")
+            elif not higher_order_triggered:
                 logger.info(
                     "[DIKIWI] Batch stopped after KNOWLEDGE: information graph growth %.2f%% below threshold %.2f%%",
                     incremental_ratio * 100.0,
                     threshold * 100.0,
                 )
-            await emit_ui_event(
-                "threshold_crossed" if higher_order_triggered else "threshold_not_reached",
-                stage=DikiwiStage.KNOWLEDGE.name,
-                incremental_ratio=incremental_ratio,
-                incremental_threshold=threshold,
-                higher_order_triggered=higher_order_triggered,
-                pipeline_ids=[ctx.pipeline_id for ctx in contexts],
-            )
+            if knowledge_contexts:
+                await emit_ui_event(
+                    "threshold_crossed" if higher_order_triggered else "threshold_not_reached",
+                    stage=DikiwiStage.KNOWLEDGE.name,
+                    incremental_ratio=incremental_ratio,
+                    incremental_threshold=threshold,
+                    higher_order_triggered=higher_order_triggered,
+                    pipeline_ids=[ctx.pipeline_id for ctx in knowledge_contexts],
+                )
 
             higher_order_contexts = [
                 ctx
-                for ctx in stage_contexts
+                for ctx in knowledge_contexts
                 if ctx.stage_results
                 and ctx.stage_results[-1].stage == DikiwiStage.KNOWLEDGE
                 and ctx.stage_results[-1].success
@@ -957,6 +1022,8 @@ class DikiwiMind:
 
             if higher_order_contexts:
                 for stage in (DikiwiStage.INSIGHT, DikiwiStage.WISDOM, DikiwiStage.IMPACT):
+                    if not higher_order_contexts:
+                        break
                     await self._execute_batch_stage(
                         higher_order_contexts,
                         stage=stage,
@@ -1845,15 +1912,15 @@ class DikiwiMind:
         - Links to related concepts
         """
         insights_desc = "\n".join(
-            f"- [{i.insight_type}] {i.description[:200]}"
-            for i in insights[:10]
+            f"- [{i.insight_type}] {i.description[:140]}"
+            for i in insights[:4]
         )
 
         info_samples = "\n".join(
-            f"- [{n.domain}] {n.content[:220]}" for n in info_nodes[:20]
+            f"- [{n.domain}] {n.content[:140]}" for n in info_nodes[:8]
         )
 
-        memory_context = DikiwiPromptRegistry.render_memory(memory, limit=1500)
+        memory_context = DikiwiPromptRegistry.render_memory(memory, limit=700)
         messages = DikiwiPromptRegistry.wisdom(
             insights_desc=insights_desc,
             info_samples=info_samples,
@@ -1862,30 +1929,39 @@ class DikiwiMind:
         stage_key = f"wisdom:{hashlib.sha1((insights_desc + info_samples).encode('utf-8')).hexdigest()[:8]}"
 
         try:
-            result = await self._multi_agent_json(
-                stage="wisdom",
-                stage_key=stage_key,
-                producer_messages=messages,
-                reviewer_messages_factory=lambda draft_json: DikiwiPromptRegistry.review(
-                    stage="WISDOM",
-                    reviewer_role="Slip-Box Editor",
-                    objective="Review the draft permanent notes and return a cleaner set of atomic, source-grounded zettels for long-term use.",
-                    output_contract=DikiwiPromptRegistry.WISDOM_CONTRACT,
-                    draft_json=draft_json,
-                    memory_context=memory_context,
-                    review_focus=(
-                        "Reject summary-shaped notes and preserve distinct durable ideas instead.",
-                        "Split mechanisms, workflows, constraints, tradeoffs, and examples into separate notes when the source supports them.",
-                        "Keep titles readable, human, and conceptually precise.",
+            if SETTINGS.dikiwi_wisdom_review_enabled:
+                result = await self._multi_agent_json(
+                    stage="wisdom",
+                    stage_key=stage_key,
+                    producer_messages=messages,
+                    reviewer_messages_factory=lambda draft_json: DikiwiPromptRegistry.review(
+                        stage="WISDOM",
+                        reviewer_role="Slip-Box Editor",
+                        objective="Review the draft permanent notes and return a cleaner set of atomic, source-grounded zettels for long-term use.",
+                        output_contract=DikiwiPromptRegistry.WISDOM_CONTRACT,
+                        draft_json=draft_json,
+                        memory_context=memory_context,
+                        review_focus=(
+                            "Reject summary-shaped notes and preserve distinct durable ideas instead.",
+                            "Split mechanisms, workflows, constraints, tradeoffs, and examples into separate notes when the source supports them.",
+                            "Keep titles readable, human, and conceptually precise.",
+                        ),
+                        context_sections=(
+                            ("Insights", insights_desc or "No insights available."),
+                            ("Knowledge Base", info_samples or "No information samples available."),
+                        ),
                     ),
-                    context_sections=(
-                        ("Insights", insights_desc or "No insights available."),
-                        ("Knowledge Base", info_samples or "No information samples available."),
-                    ),
-                ),
-                temperature=0.5,  # Slightly higher for creativity
-                memory=memory,
-            )
+                    temperature=0.5,
+                    memory=memory,
+                )
+            else:
+                result = await self._chat_json(
+                    stage="wisdom",
+                    stage_key=stage_key,
+                    messages=messages,
+                    temperature=0.45,
+                    memory=memory,
+                )
 
             if not isinstance(result, dict):
                 return []

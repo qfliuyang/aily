@@ -140,7 +140,7 @@ Deliverables:
 - basic design tokens
 - initial websocket event schema
 - backend API contract doc
-- sample mocked event replay file
+- recorded real event replay file from an evidence run
 
 Tasks:
 
@@ -375,6 +375,10 @@ Acceptance criteria:
 Duration:
 - 1 week
 
+Status:
+- partially implemented: evidence run registry APIs exist, Studio Operations can list runs, and UI events can persist to JSONL and reload after restart.
+- remaining: queryable event storage, timeline scrubber, graph diff overlays, and provider comparison UI.
+
 Goal:
 - make past runs explainable and comparable
 
@@ -395,7 +399,7 @@ Tasks:
 Acceptance criteria:
 
 - user can replay a previous pipeline run
-- user can compare Kimi vs DeepSeek vs Zhipu runs visually
+- user can compare Kimi vs DeepSeek runs visually
 
 ## Phase 6: Local Product Hardening
 
@@ -441,7 +445,8 @@ Deliverables:
 - deployable frontend build
 - reverse-proxy-safe websocket handling
 - config separation for local vs hosted
-- auth boundary design
+- single-owner auth boundary
+- upload size and active-upload guardrails
 
 Tasks:
 
@@ -450,6 +455,7 @@ Tasks:
 - add artifact path abstraction
 - define user/session scoping model
 - define storage abstraction for vault and graph access
+- add hosted-mode rate-limit tests before public exposure
 
 ## Detailed Backend Plan
 
@@ -461,16 +467,16 @@ Responsibilities:
 
 - accept internal pipeline events
 - fan out to websocket subscribers
-- optionally persist events for replay
+- persist events for replay when configured
 
 Implementation options:
 
-- in-process async pub/sub first
+- in-process async pub/sub plus JSONL persistence first
 - Redis pub/sub later if needed
 
 Recommended first version:
 
-- in-process event hub with replay buffer
+- in-process event hub with replay buffer and disk-backed JSONL reload
 
 ## 2. Event emission points
 

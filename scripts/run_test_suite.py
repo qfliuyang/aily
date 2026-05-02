@@ -53,6 +53,9 @@ async def main() -> int:
     full.add_argument("--log-llm", action="store_true", help="Record all LLM calls to a jsonl trace")
     full.add_argument("--vault", type=Path, default=DEFAULT_VAULT_PATH, help="Vault path")
     full.add_argument("--report-dir", type=Path, default=DEFAULT_LOG_DIR / "e2e", help="Directory for reports/logs")
+    full.add_argument("--seed", type=int, default=260502, help="Seed for deterministic PDF pressure-test selection")
+    full.add_argument("--phase-timeout", type=float, default=600.0, help="Timeout in seconds for each full-pipeline phase")
+    full.add_argument("--force-business", action="store_true", help="Run Reactor/Entrepreneur even if no Impact outputs exist")
 
     legacy = subparsers.add_parser("legacy-atomicizer", help="Run the old Kimi->atomicizer MVP path in one scenario")
     legacy.add_argument("--url", required=True, help="Kimi share URL")
@@ -86,6 +89,9 @@ async def main() -> int:
             log_llm=args.log_llm,
             vault_path=args.vault,
             report_dir=args.report_dir,
+            source_seed=args.seed,
+            phase_timeout_seconds=args.phase_timeout,
+            force_business=args.force_business,
         )
     elif args.scenario == "legacy-atomicizer":
         result = await scenario_legacy_atomicizer(
@@ -99,7 +105,12 @@ async def main() -> int:
         parser.error(f"Unknown scenario: {args.scenario}")
         return 2
 
-    print(json.dumps(result, indent=2, default=str, ensure_ascii=False))
+    rendered_result = json.dumps(result, indent=2, default=str, ensure_ascii=False)
+    if isinstance(result, dict) and result.get("evidence_dir"):
+        evidence_dir = Path(str(result["evidence_dir"]))
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        (evidence_dir / "stdout.log").write_text(rendered_result + "\n", encoding="utf-8")
+    print(rendered_result)
     return 0
 
 

@@ -9,7 +9,8 @@ import uuid
 
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
-from aily.dikiwi.agents.llm_tools import multi_agent_json
+from aily.config import SETTINGS
+from aily.dikiwi.agents.llm_tools import chat_json, multi_agent_json
 from aily.dikiwi.network_synthesis import SubgraphCandidate
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.sessions.dikiwi_mind import DikiwiStage, InformationNode, Insight, StageResult, ZettelkastenNote
@@ -36,16 +37,26 @@ class WisdomAgent(DikiwiAgent):
             info_nodes: list[InformationNode] = []
             if knowledge_result:
                 info_nodes = knowledge_result.data.get("network_nodes", [])
+            if not info_nodes:
+                info_nodes = info_result.data.get("information_nodes", [])
 
             zettels: list[ZettelkastenNote] = []
-            long_path_context = self._long_path_context(candidates)
-            if insights and info_nodes and long_path_context:
+            long_path_context = self._long_path_context(candidates, max_paths=6)
+            if info_nodes and (insights or long_path_context):
                 zettels = await self._llm_synthesize_wisdom(
                     insights,
                     info_nodes,
                     ctx,
                     long_path_context,
                 )
+            elif info_nodes:
+                zettels = await self._llm_synthesize_wisdom(
+                    insights,
+                    info_nodes,
+                    ctx,
+                    "Direct information-node fallback for legacy Wisdom synthesis.",
+                )
+            if candidates and zettels:
                 provenance = self._graph_provenance(candidates, "long_information_paths")
                 for zettel in zettels:
                     setattr(zettel, "source", "dikiwi_graph")
@@ -122,18 +133,18 @@ class WisdomAgent(DikiwiAgent):
         long_path_context: str = "",
     ) -> list[ZettelkastenNote]:
         insights_desc = "\n".join(
-            f"- [{i.insight_type}] {i.description[:200]}"
-            for i in insights[:10]
+            f"- [{i.insight_type}] {i.description[:140]}"
+            for i in insights[:4]
         )
         info_samples = "\n".join(
-            f"- [{n.domain}] {n.content[:220]}"
-            for n in info_nodes[:20]
+            f"- [{n.domain}] {n.content[:140]}"
+            for n in info_nodes[:8]
         )
         knowledge_context = (
             "\n\n".join(part for part in (long_path_context, info_samples) if part)
         ).strip()
 
-        memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=1500)
+        memory_context = DikiwiPromptRegistry.render_memory(ctx.memory, limit=700)
         messages = DikiwiPromptRegistry.wisdom(
             insights_desc=insights_desc,
             info_samples=knowledge_context,
@@ -142,32 +153,42 @@ class WisdomAgent(DikiwiAgent):
         stage_key = f"wisdom:{hashlib.sha1((insights_desc + knowledge_context).encode('utf-8')).hexdigest()[:8]}"
 
         try:
-            result = await multi_agent_json(
-                llm_client=ctx.llm_client,
-                stage="wisdom",
-                stage_key=stage_key,
-                producer_messages=messages,
-                reviewer_messages_factory=lambda draft_json: DikiwiPromptRegistry.review(
-                    stage="WISDOM",
-                    reviewer_role="Slip-Box Editor",
-                    objective="Review the draft permanent notes and return a cleaner set of atomic, source-grounded zettels for long-term use.",
-                    output_contract=DikiwiPromptRegistry.WISDOM_CONTRACT,
-                    draft_json=draft_json,
-                    memory_context=memory_context,
-                    review_focus=(
-                        "Reject summary-shaped notes and preserve distinct durable ideas instead.",
-                        "Split mechanisms, workflows, constraints, tradeoffs, and examples into separate notes when the source supports them.",
-                        "Keep titles readable, human, and conceptually precise.",
+            if SETTINGS.dikiwi_wisdom_review_enabled:
+                result = await multi_agent_json(
+                    llm_client=ctx.llm_client,
+                    stage="wisdom",
+                    stage_key=stage_key,
+                    producer_messages=messages,
+                    reviewer_messages_factory=lambda draft_json: DikiwiPromptRegistry.review(
+                        stage="WISDOM",
+                        reviewer_role="Slip-Box Editor",
+                        objective="Review the draft permanent notes and return a cleaner set of atomic, source-grounded zettels for long-term use.",
+                        output_contract=DikiwiPromptRegistry.WISDOM_CONTRACT,
+                        draft_json=draft_json,
+                        memory_context=memory_context,
+                        review_focus=(
+                            "Reject summary-shaped notes and preserve distinct durable ideas instead.",
+                            "Split mechanisms, workflows, constraints, tradeoffs, and examples into separate notes when the source supports them.",
+                            "Keep titles readable, human, and conceptually precise.",
+                        ),
+                        context_sections=(
+                            ("Insights", insights_desc or "No insights available."),
+                            ("Graph Long Paths", long_path_context or "No long-path context available."),
+                            ("Knowledge Base", knowledge_context or "No information samples available."),
+                        ),
                     ),
-                    context_sections=(
-                        ("Insights", insights_desc or "No insights available."),
-                        ("Graph Long Paths", long_path_context or "No long-path context available."),
-                        ("Knowledge Base", knowledge_context or "No information samples available."),
-                    ),
-                ),
-                temperature=0.5,
-                budget=ctx.budget,
-            )
+                    temperature=0.5,
+                    budget=ctx.budget,
+                )
+            else:
+                result = await chat_json(
+                    llm_client=ctx.llm_client,
+                    stage="wisdom",
+                    stage_key=stage_key,
+                    messages=messages,
+                    temperature=0.45,
+                    budget=ctx.budget,
+                )
 
             if not isinstance(result, dict):
                 return []
@@ -190,10 +211,10 @@ class WisdomAgent(DikiwiAgent):
             return []
 
     @staticmethod
-    def _long_path_context(candidates: list[SubgraphCandidate]) -> str:
+    def _long_path_context(candidates: list[SubgraphCandidate], max_paths: int = 6) -> str:
         """Describe longer candidate paths connecting distant information nodes."""
         paths: list[str] = []
-        for candidate in candidates:
+        for candidate in candidates[:4]:
             labels = {str(node.get("id")): str(node.get("label", "")) for node in candidate.nodes}
             info_ids = [str(node.get("id")) for node in candidate.nodes if node.get("type") == "information"]
             adjacency: dict[str, list[tuple[str, dict]]] = {node_id: [] for node_id in info_ids}
@@ -203,7 +224,9 @@ class WisdomAgent(DikiwiAgent):
                 if src in adjacency and tgt in adjacency:
                     adjacency[src].append((tgt, edge))
                     adjacency[tgt].append((src, edge))
-            for start in info_ids[:4]:
+            for start in info_ids[:2]:
+                if len(paths) >= max_paths:
+                    break
                 seen = {start}
                 path_nodes = [start]
                 path_edges: list[dict] = []
@@ -228,6 +251,8 @@ class WisdomAgent(DikiwiAgent):
                         if idx < len(path_edges):
                             rendered.append(f"--{path_edges[idx].get('relation_type')}-->")
                     paths.append(f"- {candidate.id}: " + " ".join(rendered))
+            if len(paths) >= max_paths:
+                break
         if not paths:
             return ""
         return "\n".join(["Long-path candidates for Wisdom synthesis:", *paths])

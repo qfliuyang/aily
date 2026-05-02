@@ -139,7 +139,7 @@ class TestProcessingRouterProcessUrl:
         mock_response = AsyncMock()
         mock_response.content = b"# Markdown content"
         mock_response.headers = {"content-type": "text/markdown"}
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)

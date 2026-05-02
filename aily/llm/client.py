@@ -132,6 +132,23 @@ class LLMClient:
                     await asyncio.sleep(2 ** attempt)
         raise LLMError(f"LLM failed after {self.max_retries + 1} attempts: {last_error}")
 
+    async def complete(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        system_prompt: str | None = None,
+    ) -> str:
+        """Compatibility wrapper for single-prompt callers.
+
+        Older DIKIWI gates and skills use a completion-style interface while
+        provider implementations use OpenAI-compatible chat completions.
+        """
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        return await self.chat(messages, temperature=temperature)
+
     async def _chat_once(
         self,
         messages: list[dict[str, str]],

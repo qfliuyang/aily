@@ -46,22 +46,26 @@ class MindsConfig:
         """Create MindsConfig from settings dict (e.g., from env vars)."""
         config = cls()
 
+        def value(name: str, default: str) -> str:
+            normalized = name.removeprefix("aily_")
+            return settings.get(name, settings.get(normalized, default))
+
         # Parse boolean flags
-        config.dikiwi_enabled = settings.get("aily_dikiwi_enabled", "true").lower() == "true"
-        config.innovation_enabled = settings.get("aily_innovation_enabled", "true").lower() == "true"
-        config.entrepreneur_enabled = settings.get("aily_entrepreneur_enabled", "true").lower() == "true"
-        config.mac_enabled = settings.get("aily_mac_enabled", "true").lower() == "true"
+        config.dikiwi_enabled = value("aily_dikiwi_enabled", "true").lower() == "true"
+        config.innovation_enabled = value("aily_innovation_enabled", "true").lower() == "true"
+        config.entrepreneur_enabled = value("aily_entrepreneur_enabled", "true").lower() == "true"
+        config.mac_enabled = value("aily_mac_enabled", "true").lower() == "true"
 
         # Parse times
-        innovation_time_str = settings.get("aily_innovation_time", "08:00")
-        entrepreneur_time_str = settings.get("aily_entrepreneur_time", "09:00")
+        innovation_time_str = value("aily_innovation_time", "08:00")
+        entrepreneur_time_str = value("aily_entrepreneur_time", "09:00")
         config.innovation_time = cls._parse_time(innovation_time_str)
         config.entrepreneur_time = cls._parse_time(entrepreneur_time_str)
 
         # Parse floats/ints
-        config.proposal_min_confidence = float(settings.get("aily_proposal_min_confidence", "0.7"))
-        config.proposal_max_per_session = int(settings.get("aily_proposal_max_per_session", "10"))
-        config.circuit_breaker_threshold = int(settings.get("aily_circuit_breaker_threshold", "3"))
+        config.proposal_min_confidence = float(value("aily_proposal_min_confidence", "0.7"))
+        config.proposal_max_per_session = int(value("aily_proposal_max_per_session", "10"))
+        config.circuit_breaker_threshold = int(value("aily_circuit_breaker_threshold", "3"))
 
         return config
 
@@ -113,11 +117,16 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.moonshot.cn/v1"
     llm_model: str = "kimi-k2.6"
     llm_workload_routes_json: str = ""
+    llm_timeout_seconds: float = 120.0
+    llm_max_retries: int = 0
     llm_max_concurrency: int = 1
     llm_min_interval_seconds: float = 3.0
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
+    dikiwi_stage_timeout_seconds: float = 240.0
+    dikiwi_wisdom_review_enabled: bool = False
     dikiwi_batch_stage_concurrency: int = 4
+    reactor_method_timeout_seconds: float = 180.0
     dikiwi_incremental_trigger_ratio: float = 0.05
     dikiwi_network_min_nodes: int = 3
     dikiwi_network_trigger_score: float = 4.0
@@ -155,6 +164,17 @@ class Settings(BaseSettings):
     # File processing limits (bytes)
     max_file_size: int = 50 * 1024 * 1024  # 50MB default limit
     max_image_size: int = 10 * 1024 * 1024  # 10MB for images (OCR memory limit)
+    ui_max_upload_files: int = 8
+    ui_max_active_uploads: int = 16
+    ui_upload_concurrency: int = 2
+    ui_event_trace_limit: int = 200
+    ui_auth_enabled: bool = False
+    ui_auth_token: str = ""
+    hosted_mode: bool = False
+    ui_rate_limit_requests: int = 20
+    ui_rate_limit_window_seconds: float = 60.0
+    audit_log_path: Path | None = None
+    evidence_runs_dir: Path = Path("logs/runs")
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -165,6 +185,22 @@ class Settings(BaseSettings):
     @property
     def graph_db_path(self) -> Path:
         return self.aily_data_dir / "aily_graph.db"
+
+    @property
+    def source_store_db_path(self) -> Path:
+        return self.aily_data_dir / "source_store.db"
+
+    @property
+    def source_object_dir(self) -> Path:
+        return self.aily_data_dir / "sources"
+
+    @property
+    def ui_event_log_path(self) -> Path:
+        return self.aily_data_dir / "ui-events.jsonl"
+
+    @property
+    def resolved_audit_log_path(self) -> Path:
+        return self.audit_log_path or (self.aily_data_dir / "audit.jsonl")
 
     # Thinking system configuration
     thinking: ThinkingConfig = ThinkingConfig()

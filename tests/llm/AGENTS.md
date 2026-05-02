@@ -18,7 +18,7 @@ Tests for the LLM abstraction layer. Verifies provider routing, client initializ
 ### Working In This Directory
 - Tests verify correct provider selection based on settings
 - Mock responses avoid real API calls in unit tests
-- Provider routing tests cover Kimi, Zhipu, and fallback logic
+- Provider routing tests cover Kimi, DeepSeek, and fallback logic
 
 ### Testing Requirements
 - Run with: `pytest tests/llm/ -xvs`

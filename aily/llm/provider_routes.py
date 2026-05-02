@@ -6,6 +6,7 @@ from typing import Any
 
 from aily.llm.client import LLMClient
 from aily.llm.llm_router import LLMRouter
+from aily.llm.provider_capabilities import provider_capability_matrix, workload_route_matrix
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,8 @@ class ResolvedLLMRoute:
     thinking: bool
     max_concurrency: int
     min_interval_seconds: float
+    timeout: float
+    max_retries: int
 
 
 class PrimaryLLMRoute:
@@ -39,13 +42,6 @@ class PrimaryLLMRoute:
         provider="kimi",
         model="kimi-k2.6",
         base_url="https://api.moonshot.cn/v1",
-        mode="standard",
-    )
-
-    ZHIPU_ROUTE = ProviderRoute(
-        provider="zhipu",
-        model="glm-5.1",
-        base_url="https://open.bigmodel.cn/api/paas/v4",
         mode="standard",
     )
 
@@ -60,7 +56,6 @@ class PrimaryLLMRoute:
     # llm_workload_routes_json take precedence over these defaults.
     # Stage 01-02 (DATA, INFORMATION): Kimi — fast, cheap extraction
     # Stage 03-08 (KNOWLEDGE → Entrepreneur): DeepSeek — strong reasoning
-    # Zhipu: standby, activate via llm_workload_routes_json override
     DEFAULT_WORKLOAD_ROUTES: dict[str, dict[str, str]] = {
         "dikiwi.DATA": {"provider": "kimi"},
         "dikiwi.INFORMATION": {"provider": "kimi"},
@@ -71,23 +66,17 @@ class PrimaryLLMRoute:
         "dikiwi.RESIDUAL": {"provider": "deepseek"},
         "reactor": {"provider": "deepseek"},
         "entrepreneur": {"provider": "deepseek"},
+        "guru": {"provider": "deepseek"},
+        "gstack": {"provider": "deepseek"},
+        "chaos.vision": {"provider": "kimi"},
     }
 
     @classmethod
-    def route_zhipu(
-        cls,
-        *,
-        api_key: str,
-        model: str = "glm-5.1",
-        max_concurrency: int = 1,
-        min_interval_seconds: float = 3.0,
-    ) -> LLMClient:
-        return LLMRouter.standard_zhipu(
-            api_key=api_key,
-            model=model,
-            max_concurrency=max_concurrency,
-            min_interval_seconds=min_interval_seconds,
-        )
+    def describe_routes(cls) -> dict[str, Any]:
+        return {
+            "providers": provider_capability_matrix(),
+            "workloads": workload_route_matrix(cls.DEFAULT_WORKLOAD_ROUTES),
+        }
 
     @classmethod
     def route_kimi(
@@ -98,6 +87,8 @@ class PrimaryLLMRoute:
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 3.0,
+        timeout: float = 120.0,
+        max_retries: int = 0,
     ) -> LLMClient:
         return LLMRouter.standard_kimi(
             api_key=api_key,
@@ -105,6 +96,8 @@ class PrimaryLLMRoute:
             thinking=thinking,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     @classmethod
@@ -116,6 +109,8 @@ class PrimaryLLMRoute:
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 3.0,
+        timeout: float = 120.0,
+        max_retries: int = 0,
     ) -> LLMClient:
         return LLMRouter.standard_deepseek(
             api_key=api_key,
@@ -123,6 +118,8 @@ class PrimaryLLMRoute:
             thinking=thinking,
             max_concurrency=max_concurrency,
             min_interval_seconds=min_interval_seconds,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     @staticmethod
@@ -164,12 +161,10 @@ class PrimaryLLMRoute:
         normalized = str(provider or "kimi").strip().lower()
         if normalized == "kimi":
             return cls.KIMI_ROUTE
-        if normalized == "zhipu":
-            return cls.ZHIPU_ROUTE
         if normalized == "deepseek":
             return cls.DEEPSEEK_ROUTE
         raise ValueError(
-            f"Unsupported llm_provider={provider!r}. Create a dedicated route for that platform first."
+            f"Unsupported llm_provider={provider!r}. Active providers are: kimi, deepseek."
         )
 
     @staticmethod
@@ -177,8 +172,6 @@ class PrimaryLLMRoute:
         normalized = str(provider).strip().lower()
         if normalized == "kimi":
             return getattr(settings, "kimi_api_key", "") or getattr(settings, "llm_api_key", "")
-        if normalized == "zhipu":
-            return getattr(settings, "zhipu_api_key", "") or getattr(settings, "llm_api_key", "")
         if normalized == "deepseek":
             return getattr(settings, "deepseek_api_key", "") or getattr(settings, "llm_api_key", "")
         raise ValueError(f"Unsupported provider={provider!r} for API key resolution.")
@@ -214,6 +207,8 @@ class PrimaryLLMRoute:
         resolved_thinking = bool(thinking) if thinking is not None else False
         resolved_concurrency = int(getattr(settings, "llm_max_concurrency", 1))
         resolved_interval = float(getattr(settings, "llm_min_interval_seconds", 3.0))
+        resolved_timeout = float(getattr(settings, "llm_timeout_seconds", 120.0))
+        resolved_max_retries = max(0, int(getattr(settings, "llm_max_retries", 0)))
 
         applied_override: dict[str, Any] = {}
         for candidate in reversed(cls._workload_candidates(workload)):
@@ -246,12 +241,14 @@ class PrimaryLLMRoute:
                 resolved_concurrency = max(1, int(applied_override["max_concurrency"]))
             if "min_interval_seconds" in applied_override:
                 resolved_interval = max(0.0, float(applied_override["min_interval_seconds"]))
+            if "timeout" in applied_override:
+                resolved_timeout = max(1.0, float(applied_override["timeout"]))
+            if "max_retries" in applied_override:
+                resolved_max_retries = max(0, int(applied_override["max_retries"]))
 
         if workload.startswith("chaos.vision"):
             if resolved_provider == "kimi":
                 resolved_model = getattr(settings, "kimi_vision_model", "") or resolved_model
-            elif resolved_provider == "zhipu":
-                resolved_model = getattr(settings, "zhipu_vision_model", "") or resolved_model
         if resolved_provider == "deepseek" and workload.startswith("chaos.vision"):
             raise ValueError(
                 "DeepSeek is not configured for chaos.vision workloads because the current official docs do not expose image/video chat input."
@@ -270,6 +267,8 @@ class PrimaryLLMRoute:
             thinking=resolved_thinking,
             max_concurrency=resolved_concurrency,
             min_interval_seconds=resolved_interval,
+            timeout=resolved_timeout,
+            max_retries=resolved_max_retries,
         )
 
     @classmethod
@@ -281,13 +280,8 @@ class PrimaryLLMRoute:
                 thinking=route.thinking,
                 max_concurrency=route.max_concurrency,
                 min_interval_seconds=route.min_interval_seconds,
-            )
-        if route.provider == "zhipu":
-            return cls.route_zhipu(
-                api_key=route.api_key,
-                model=route.model,
-                max_concurrency=route.max_concurrency,
-                min_interval_seconds=route.min_interval_seconds,
+                timeout=route.timeout,
+                max_retries=route.max_retries,
             )
         if route.provider == "deepseek":
             return cls.route_deepseek(
@@ -296,6 +290,8 @@ class PrimaryLLMRoute:
                 thinking=route.thinking,
                 max_concurrency=route.max_concurrency,
                 min_interval_seconds=route.min_interval_seconds,
+                timeout=route.timeout,
+                max_retries=route.max_retries,
             )
         raise ValueError(f"Unsupported route provider={route.provider!r}")
 

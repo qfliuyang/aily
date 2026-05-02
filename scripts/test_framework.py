@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import textwrap
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,8 +45,11 @@ from aily.processing.atomicizer import AtomicNoteGenerator
 from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiStage
 from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 from aily.sessions.reactor_scheduler import ReactorScheduler
+from aily.sessions.reactor_scheduler import NozzleConfig
 from aily.thinking.models import KnowledgePayload
 from aily.thinking.orchestrator import ThinkingOrchestrator
+from aily.ui.events import ui_event_hub
+from aily.verify.evidence import EvidenceRun
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 
 logger = logging.getLogger(__name__)
@@ -54,6 +58,7 @@ CHAOS_FOLDER = Path.home() / "aily_chaos"
 DEFAULT_VAULT_PATH = Path(SETTINGS.dikiwi_vault_path or SETTINGS.obsidian_vault_path).expanduser()
 DEFAULT_GRAPH_DB_PATH = DEFAULT_VAULT_PATH / ".aily" / "graph.db"
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs" / "tests"
+DEFAULT_RUN_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
 
 TEST_MESSAGES = [
     "【转向AI芯片架构的路径与优势 - Monica AI Chat】https://monica.im/share/chat?shareId=1jB54WO31xDzAIjL",
@@ -216,15 +221,23 @@ async def build_runtime(
     )
 
     if enable_business:
+        nozzle_config = NozzleConfig(
+            min_confidence=SETTINGS.minds.proposal_min_confidence,
+            max_proposals_per_session=SETTINGS.minds.proposal_max_per_session,
+        )
         dikiwi_mind.reactor_scheduler = ReactorScheduler(
             graph_db=graph_db,
             llm_client=llm_client,
             obsidian_writer=obsidian_writer,
+            nozzle_config=nozzle_config,
+            method_timeout_seconds=SETTINGS.reactor_method_timeout_seconds,
         )
         dikiwi_mind.entrepreneur_scheduler = EntrepreneurScheduler(
             graph_db=graph_db,
             llm_client=llm_client,
             obsidian_writer=obsidian_writer,
+            proposal_min_confidence=SETTINGS.minds.proposal_min_confidence,
+            proposal_max_per_session=SETTINGS.minds.proposal_max_per_session,
         )
 
     bridge = ChaosDikiwiBridge(
@@ -542,6 +555,9 @@ async def scenario_full_pipeline(
     log_llm: bool = False,
     vault_path: Path = DEFAULT_VAULT_PATH,
     report_dir: Path | None = None,
+    source_seed: int = 260502,
+    phase_timeout_seconds: float = 600.0,
+    force_business: bool = False,
 ) -> dict[str, Any]:
     report_dir = report_dir or DEFAULT_LOG_DIR / "e2e"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -552,109 +568,217 @@ async def scenario_full_pipeline(
     if not no_clean:
         clean_generated_vault(vault_path)
 
-    with llm_trace_logging(llm_log):
-        runtime = await build_runtime(vault_path=vault_path, enable_business=True)
+    pdf_dir = CHAOS_FOLDER / "pdf"
+    pdf_files = sorted(pdf_dir.glob("*.pdf"))
+    random.Random(source_seed).shuffle(pdf_files)
+    pdf_files = pdf_files[:max_pdfs]
+    if not pdf_files:
+        return {"error": "no pdfs"}
+
+    evidence = EvidenceRun(
+        root_dir=DEFAULT_RUN_DIR,
+        scenario=f"full_pipeline_{len(pdf_files)}pdf",
+        vault_path=vault_path,
+        graph_db_path=vault_path / ".aily" / "graph.db",
+        source_paths=pdf_files,
+        source_selector="seeded_random",
+        source_seed=source_seed,
+        mocked=False,
+        fake_components=[],
+        real_files=True,
+        real_graph_db=True,
+        real_vault=True,
+        real_llm=True,
+    )
+    evidence.capture_before()
+    progress: list[dict[str, Any]] = []
+
+    def _record_progress(phase: str, state: str, **payload: Any) -> None:
+        progress.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "phase": phase,
+            "state": state,
+            **payload,
+        })
+        evidence.write_json("progress.json", progress)
+
+    async def _run_phase(phase: str, awaitable: Any) -> Any:
+        _record_progress(phase, "started", timeout_seconds=phase_timeout_seconds)
+        started = time.monotonic()
         try:
-            pdf_dir = CHAOS_FOLDER / "pdf"
-            pdf_files = sorted(pdf_dir.glob("*.pdf"))
-            random.shuffle(pdf_files)
-            pdf_files = pdf_files[:max_pdfs]
-            if not pdf_files:
-                return {"error": "no pdfs"}
+            value = await asyncio.wait_for(awaitable, timeout=phase_timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            elapsed = round(time.monotonic() - started, 2)
+            _record_progress(phase, "timeout", elapsed_seconds=elapsed)
+            raise TimeoutError(f"Phase {phase!r} exceeded {phase_timeout_seconds}s") from exc
+        except Exception as exc:
+            elapsed = round(time.monotonic() - started, 2)
+            _record_progress(phase, "failed", elapsed_seconds=elapsed, error=str(exc))
+            raise
+        elapsed = round(time.monotonic() - started, 2)
+        _record_progress(phase, "completed", elapsed_seconds=elapsed)
+        return value
 
-            processor = PDFProcessor(config=ChaosConfig())
-            doc_results = []
-            total_start = time.monotonic()
-            transcript_dir = vault_path / "00-Chaos"
-            transcript_dir.mkdir(parents=True, exist_ok=True)
-            semaphore = asyncio.Semaphore(max(1, SETTINGS.mineru_batch_extract_concurrency))
+    try:
+        with llm_trace_logging(llm_log):
+            runtime = await build_runtime(vault_path=vault_path, enable_business=True)
+            try:
+                processor = PDFProcessor(config=ChaosConfig())
+                doc_results = []
+                total_start = time.monotonic()
+                transcript_dir = vault_path / "00-Chaos"
+                transcript_dir.mkdir(parents=True, exist_ok=True)
+                semaphore = asyncio.Semaphore(max(1, SETTINGS.mineru_batch_extract_concurrency))
 
-            async def _extract_one(pdf_path: Path) -> tuple[Path, ExtractedContentMultimodal | None, float]:
-                doc_start = time.monotonic()
-                async with semaphore:
-                    extracted = await processor.process(pdf_path)
-                if extracted:
-                    transcript_path = transcript_dir / f"{pdf_path.stem}.md"
-                    transcript_path.write_text(
-                        f"# {extracted.title or pdf_path.stem}\n\n{extracted.get_full_text()}",
-                        encoding="utf-8",
+                async def _extract_one(pdf_path: Path) -> tuple[Path, ExtractedContentMultimodal | None, float]:
+                    doc_start = time.monotonic()
+                    async with semaphore:
+                        extracted = await processor.process(pdf_path)
+                    if extracted:
+                        transcript_path = transcript_dir / f"{pdf_path.stem}.md"
+                        transcript_path.write_text(
+                            f"# {extracted.title or pdf_path.stem}\n\n{extracted.get_full_text()}",
+                            encoding="utf-8",
+                        )
+                        # Copy MinerU images to vault so markdown references resolve
+                        mineru_out = extracted.metadata.get("mineru_output_dir", "")
+                        src_images = Path(mineru_out) / "images" if mineru_out else None
+                        if src_images and src_images.is_dir():
+                            dest_images = transcript_dir / "images"
+                            dest_images.mkdir(parents=True, exist_ok=True)
+                            for img in src_images.iterdir():
+                                if img.is_file() and not (dest_images / img.name).exists():
+                                    shutil.copy2(img, dest_images / img.name)
+                    return pdf_path, extracted, round(time.monotonic() - doc_start, 2)
+
+                extracted_results = await _run_phase(
+                    "extract",
+                    asyncio.gather(*[_extract_one(pdf_path) for pdf_path in pdf_files]),
+                )
+                extracted_contents: list[ExtractedContentMultimodal] = []
+                extraction_elapsed: dict[str, float] = {}
+                for pdf_path, extracted, elapsed in extracted_results:
+                    extraction_elapsed[pdf_path.name] = elapsed
+                    if extracted is None:
+                        doc_results.append({"pdf": pdf_path.name, "error": "extraction_failed", "elapsed": elapsed})
+                    else:
+                        extracted_contents.append(extracted)
+
+                bridge_batch = await _run_phase(
+                    "dikiwi_batch",
+                    runtime.bridge.process_extracted_content_batch(extracted_contents),
+                )
+                bridge_by_source = {
+                    Path(item["source_path"]).name: item
+                    for item in bridge_batch.get("results", [])
+                    if item.get("source_path")
+                }
+
+                for pdf_path in pdf_files:
+                    if any(item.get("pdf") == pdf_path.name for item in doc_results):
+                        continue
+                    doc_results.append({
+                        "pdf": pdf_path.name,
+                        "bridge_result": bridge_by_source.get(pdf_path.name, {"error": "missing_batch_result"}),
+                        "elapsed": extraction_elapsed.get(pdf_path.name, 0.0),
+                        "tokens": runtime.llm_client.get_usage_stats(),
+                    })
+
+                pre_business_vault_status = get_vault_status(vault_path)
+                has_impact_outputs = pre_business_vault_status.get("06-Impact", 0) > 0
+                business_should_run = force_business or has_impact_outputs
+
+                reactor_elapsed = None
+                proposals = []
+                business_skipped_reason = ""
+                if runtime.dikiwi_mind.reactor_scheduler is not None and business_should_run:
+                    reactor_start = time.monotonic()
+                    context = await _run_phase(
+                        "reactor_context",
+                        runtime.dikiwi_mind.reactor_scheduler._gather_context(),
                     )
-                    # Copy MinerU images to vault so markdown references resolve
-                    mineru_out = extracted.metadata.get("mineru_output_dir", "")
-                    src_images = Path(mineru_out) / "images" if mineru_out else None
-                    if src_images and src_images.is_dir():
-                        dest_images = transcript_dir / "images"
-                        dest_images.mkdir(parents=True, exist_ok=True)
-                        for img in src_images.iterdir():
-                            if img.is_file() and not (dest_images / img.name).exists():
-                                shutil.copy2(img, dest_images / img.name)
-                return pdf_path, extracted, round(time.monotonic() - doc_start, 2)
+                    proposals = await _run_phase(
+                        "reactor_evaluate",
+                        runtime.dikiwi_mind.reactor_scheduler.evaluate_context(
+                            context,
+                            persist=True,
+                            output=True,
+                        ),
+                    )
+                    reactor_elapsed = round(time.monotonic() - reactor_start, 2)
+                elif not business_should_run:
+                    business_skipped_reason = "no_impact_outputs"
+                    _record_progress(
+                        "reactor_evaluate",
+                        "skipped",
+                        reason=business_skipped_reason,
+                        force_business=force_business,
+                    )
 
-            extracted_results = await asyncio.gather(*[_extract_one(pdf_path) for pdf_path in pdf_files])
-            extracted_contents: list[ExtractedContentMultimodal] = []
-            extraction_elapsed: dict[str, float] = {}
-            for pdf_path, extracted, elapsed in extracted_results:
-                extraction_elapsed[pdf_path.name] = elapsed
-                if extracted is None:
-                    doc_results.append({"pdf": pdf_path.name, "error": "extraction_failed", "elapsed": elapsed})
-                else:
-                    extracted_contents.append(extracted)
+                entrepreneur_elapsed = None
+                if runtime.dikiwi_mind.entrepreneur_scheduler is not None and business_should_run:
+                    entrepreneur_start = time.monotonic()
+                    await _run_phase(
+                        "entrepreneur",
+                        runtime.dikiwi_mind.entrepreneur_scheduler._run_session_wrapper(),
+                    )
+                    entrepreneur_elapsed = round(time.monotonic() - entrepreneur_start, 2)
 
-            bridge_batch = await runtime.bridge.process_extracted_content_batch(extracted_contents)
-            bridge_by_source = {
-                Path(item["source_path"]).name: item
-                for item in bridge_batch.get("results", [])
-                if item.get("source_path")
-            }
-
-            for pdf_path in pdf_files:
-                if any(item.get("pdf") == pdf_path.name for item in doc_results):
-                    continue
-                doc_results.append({
-                    "pdf": pdf_path.name,
-                    "bridge_result": bridge_by_source.get(pdf_path.name, {"error": "missing_batch_result"}),
-                    "elapsed": extraction_elapsed.get(pdf_path.name, 0.0),
-                    "tokens": runtime.llm_client.get_usage_stats(),
-                })
-
-            reactor_elapsed = None
-            proposals = []
-            if runtime.dikiwi_mind.reactor_scheduler is not None:
-                reactor_start = time.monotonic()
-                context = await runtime.dikiwi_mind.reactor_scheduler._gather_context()
-                proposals = await runtime.dikiwi_mind.reactor_scheduler.evaluate_context(context)
-                reactor_elapsed = round(time.monotonic() - reactor_start, 2)
-
-            entrepreneur_elapsed = None
-            if runtime.dikiwi_mind.entrepreneur_scheduler is not None:
-                entrepreneur_start = time.monotonic()
-                await runtime.dikiwi_mind.entrepreneur_scheduler._run_session_wrapper()
-                entrepreneur_elapsed = round(time.monotonic() - entrepreneur_start, 2)
-
-            total_elapsed = round(time.monotonic() - total_start, 2)
-            result = {
-                "documents": len(doc_results),
-                "results": doc_results,
-                "elapsed_seconds": total_elapsed,
-                "batch_incremental_ratio": bridge_batch.get("incremental_ratio"),
-                "batch_incremental_threshold": bridge_batch.get("incremental_threshold"),
-                "batch_higher_order_triggered": bridge_batch.get("higher_order_triggered"),
-                "reactor_elapsed_seconds": reactor_elapsed,
-                "entrepreneur_elapsed_seconds": entrepreneur_elapsed,
-                "reactor_proposals": len(proposals),
-                "vault_status": get_vault_status(vault_path),
-                "vault_samples": {
-                    dir_name: get_dir_samples(vault_path, dir_name)
-                    for dir_name in ["00-Chaos", "05-Wisdom", "07-Proposal", "08-Entrepreneurship"]
-                },
-                "token_usage": runtime.llm_client.get_usage_stats(),
-                "llm_log_file": str(llm_log) if llm_log else None,
-            }
-            report_file.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
-            result["report_file"] = str(report_file)
-            return result
-        finally:
-            await close_runtime(runtime)
+                final_vault_status = get_vault_status(vault_path)
+                total_elapsed = round(time.monotonic() - total_start, 2)
+                result = {
+                    "documents": len(doc_results),
+                    "results": doc_results,
+                    "elapsed_seconds": total_elapsed,
+                    "source_seed": source_seed,
+                    "batch_incremental_ratio": bridge_batch.get("incremental_ratio"),
+                    "batch_incremental_threshold": bridge_batch.get("incremental_threshold"),
+                    "batch_higher_order_triggered": bridge_batch.get("higher_order_triggered"),
+                    "reactor_elapsed_seconds": reactor_elapsed,
+                    "entrepreneur_elapsed_seconds": entrepreneur_elapsed,
+                    "reactor_proposals": len(proposals),
+                    "business_skipped_reason": business_skipped_reason,
+                    "vault_status": final_vault_status,
+                    "pre_business_vault_status": pre_business_vault_status,
+                    "vault_samples": {
+                        dir_name: get_dir_samples(vault_path, dir_name)
+                        for dir_name in ["00-Chaos", "05-Wisdom", "07-Proposal", "08-Entrepreneurship"]
+                    },
+                    "token_usage": runtime.llm_client.get_usage_stats(),
+                    "llm_log_file": str(llm_log) if llm_log else None,
+                }
+                failures = [
+                    {"pdf": item.get("pdf", ""), "error": str(item.get("error") or item.get("bridge_result", {}).get("error"))}
+                    for item in doc_results
+                    if item.get("error") or item.get("bridge_result", {}).get("error")
+                ]
+                evidence.finalize(
+                    exit_code=0,
+                    result=result,
+                    failures=failures,
+                    llm_log_file=str(llm_log) if llm_log else None,
+                    ui_events=ui_event_hub.recent_events(limit=10000),
+                    repo_root=Path(__file__).resolve().parent.parent,
+                )
+                result["evidence_dir"] = str(evidence.path)
+                result["evidence_manifest"] = str(evidence.path / "manifest.json")
+                report_file.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+                result["report_file"] = str(report_file)
+                return result
+            finally:
+                await close_runtime(runtime)
+    except Exception as exc:
+        stderr_text = traceback.format_exc()
+        evidence.finalize(
+            exit_code=1,
+            result={"error": str(exc)},
+            failures=[{"error": str(exc), "traceback": stderr_text}],
+            llm_log_file=str(llm_log) if llm_log else None,
+            ui_events=ui_event_hub.recent_events(limit=10000),
+            stderr_text=stderr_text,
+            repo_root=Path(__file__).resolve().parent.parent,
+        )
+        raise
 
 
 async def scenario_legacy_atomicizer(

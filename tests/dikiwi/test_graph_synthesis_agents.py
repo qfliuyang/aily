@@ -297,7 +297,7 @@ async def test_wisdom_requires_graph_candidates_and_writes_graph_provenance(monk
         ),
     ]
 
-    async def fake_multi_agent_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {
             "zettels": [
                 {
@@ -312,7 +312,7 @@ async def test_wisdom_requires_graph_candidates_and_writes_graph_provenance(monk
             ]
         }
 
-    monkeypatch.setattr("aily.dikiwi.agents.wisdom_agent.multi_agent_json", fake_multi_agent_json)
+    monkeypatch.setattr("aily.dikiwi.agents.wisdom_agent.chat_json", fake_chat_json)
 
     result = await WisdomAgent().execute(ctx)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from aily.config import SETTINGS
 from aily.sessions.dikiwi_mind import DataPoint, DikiwiMind, InformationNode, Insight, LLMUsageBudget
 
 
@@ -107,7 +108,54 @@ async def test_classification_multi_agent_rounds_are_scoped_per_data_point():
 
 
 @pytest.mark.asyncio
-async def test_wisdom_uses_producer_and_reviewer_agents():
+async def test_wisdom_uses_single_pass_by_default():
+    client = SequenceLLMClient(
+        [
+            {
+                "zettels": [
+                    {
+                        "title": "Architecture Decisions Set the Ceiling for Later Optimization",
+                        "content": "Architecture decisions shape later optimization capacity by defining the feasible constraint space before implementation begins. " * 6,
+                        "tags": ["architecture", "optimization"],
+                        "links_to": ["Timing Closure Depends on Early Constraint Modeling"],
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+        ]
+    )
+    mind = DikiwiMind(graph_db=None, llm_client=client)
+    pipeline_id = "pipeline-wisdom-single"
+    memory = mind._get_or_create_memory(pipeline_id)
+    mind._llm_budgets[pipeline_id] = LLMUsageBudget(max_calls=4, stage_round_limit=2)
+
+    original_review_enabled = SETTINGS.dikiwi_wisdom_review_enabled
+    try:
+        SETTINGS.dikiwi_wisdom_review_enabled = False
+        zettels = await mind._llm_synthesize_wisdom(
+            insights=[Insight(id="i1", insight_type="pattern", description="Architecture and closure are tightly coupled.")],
+            info_nodes=[
+                InformationNode(
+                    id="n1",
+                    data_point_id="d1",
+                    content="Architecture determines the downstream physical optimization options in chip design.",
+                    tags=["architecture"],
+                    info_type="fact",
+                    domain="semiconductor",
+                )
+            ],
+            memory=memory,
+        )
+    finally:
+        SETTINGS.dikiwi_wisdom_review_enabled = original_review_enabled
+
+    assert client.calls == 1
+    assert len(zettels) == 1
+    assert zettels[0].title == "Architecture Decisions Set the Ceiling for Later Optimization"
+
+
+@pytest.mark.asyncio
+async def test_wisdom_can_use_producer_and_reviewer_agents_when_enabled():
     client = SequenceLLMClient(
         [
             {
@@ -146,20 +194,25 @@ async def test_wisdom_uses_producer_and_reviewer_agents():
     memory = mind._get_or_create_memory(pipeline_id)
     mind._llm_budgets[pipeline_id] = LLMUsageBudget(max_calls=4, stage_round_limit=2)
 
-    zettels = await mind._llm_synthesize_wisdom(
-        insights=[Insight(id="i1", insight_type="pattern", description="Architecture and closure are tightly coupled.")],
-        info_nodes=[
-            InformationNode(
-                id="n1",
-                data_point_id="d1",
-                content="Architecture determines the downstream physical optimization options in chip design.",
-                tags=["architecture"],
-                info_type="fact",
-                domain="semiconductor",
-            )
-        ],
-        memory=memory,
-    )
+    original_review_enabled = SETTINGS.dikiwi_wisdom_review_enabled
+    try:
+        SETTINGS.dikiwi_wisdom_review_enabled = True
+        zettels = await mind._llm_synthesize_wisdom(
+            insights=[Insight(id="i1", insight_type="pattern", description="Architecture and closure are tightly coupled.")],
+            info_nodes=[
+                InformationNode(
+                    id="n1",
+                    data_point_id="d1",
+                    content="Architecture determines the downstream physical optimization options in chip design.",
+                    tags=["architecture"],
+                    info_type="fact",
+                    domain="semiconductor",
+                )
+            ],
+            memory=memory,
+        )
+    finally:
+        SETTINGS.dikiwi_wisdom_review_enabled = original_review_enabled
 
     assert client.calls == 2
     assert len(zettels) == 2

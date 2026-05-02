@@ -51,7 +51,8 @@ def check_real_services() -> dict[str, bool]:
         "feishu": all(os.getenv(v) for v in ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]),
         "obsidian": all(os.getenv(v) for v in ["OBSIDIAN_VAULT_PATH", "OBSIDIAN_REST_API_KEY"]),
         "llm": bool(os.getenv("LLM_API_KEY")),
-        "browser": True,  # Always available (local Playwright)
+        "browser": bool(os.getenv("BROWSER_SERVICE_URL")),
+        "playwright": True,  # Local Playwright browser tests manage their own skips.
     }
 
 
@@ -270,6 +271,28 @@ async def obsidian_client(service_availability: dict) -> AsyncGenerator[RealObsi
         await client.close()
 
 
+@pytest_asyncio.fixture
+async def browser_client(service_availability: dict) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """
+    HTTP client for the optional browser service.
+
+    The service-backed tests require the integration docker stack or another
+    compatible browser service. Local Playwright tests use browser_page instead.
+    """
+    base_url = os.getenv("BROWSER_SERVICE_URL")
+    if not base_url:
+        pytest.skip("BROWSER_SERVICE_URL not configured")
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+        try:
+            health = await client.get("/health")
+        except httpx.HTTPError as exc:
+            pytest.skip(f"Browser service unavailable at {base_url}: {exc}")
+        if health.status_code >= 500:
+            pytest.skip(f"Browser service unhealthy at {base_url}: HTTP {health.status_code}")
+        yield client
+
+
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_obsidian_tests(service_availability: dict) -> Generator[None, None, None]:
     """
@@ -301,8 +324,15 @@ def cleanup_obsidian_tests(service_availability: dict) -> Generator[None, None, 
 # REAL BROWSER
 # =============================================================================
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-from playwright_stealth import Stealth
+try:
+    from playwright.async_api import async_playwright, Page
+    from playwright_stealth import Stealth
+    PLAYWRIGHT_IMPORT_ERROR: Exception | None = None
+except ModuleNotFoundError as exc:
+    async_playwright = None
+    Page = object
+    Stealth = None
+    PLAYWRIGHT_IMPORT_ERROR = exc
 
 
 @pytest_asyncio.fixture
@@ -312,8 +342,15 @@ async def browser_page() -> AsyncGenerator[Page, None]:
 
     Fetches real websites over real network with anti-bot evasion.
     """
+    if PLAYWRIGHT_IMPORT_ERROR is not None or async_playwright is None or Stealth is None:
+        pytest.skip(f"Playwright integration dependencies not installed: {PLAYWRIGHT_IMPORT_ERROR}")
+
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=True)
+    try:
+        browser = await playwright.chromium.launch(headless=True)
+    except Exception as exc:
+        await playwright.stop()
+        pytest.skip(f"Playwright browser not available: {exc}")
     context = await browser.new_context(
         viewport={"width": 1920, "height": 1080},
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -482,14 +519,19 @@ async def visual_browser_page(test_id: str) -> AsyncGenerator[tuple[Page, Path],
     Yields (page, artifacts_dir) for visual test verification.
     Uses stealth mode to evade bot detection.
     """
-    from playwright.async_api import async_playwright
+    if PLAYWRIGHT_IMPORT_ERROR is not None or async_playwright is None or Stealth is None:
+        pytest.skip(f"Playwright integration dependencies not installed: {PLAYWRIGHT_IMPORT_ERROR}")
 
     # Create artifacts directory for this test
     artifacts_dir = Path("test-artifacts") / test_id
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=True)
+    try:
+        browser = await playwright.chromium.launch(headless=True)
+    except Exception as exc:
+        await playwright.stop()
+        pytest.skip(f"Playwright browser not available: {exc}")
 
     # Enable video recording with realistic user agent
     context = await browser.new_context(

@@ -29,11 +29,6 @@ PROVIDERS = {
         "model": SETTINGS.kimi_model or "kimi-k2.6",
         "thinking": False,
     },
-    "zhipu": {
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": getattr(SETTINGS, "zhipu_model", "") or "glm-5.1",
-        "thinking": False,
-    },
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "model": getattr(SETTINGS, "deepseek_model", "") or "deepseek-v4-pro",
@@ -44,8 +39,6 @@ PROVIDERS = {
 def get_api_key(provider: str) -> str:
     if provider == "kimi":
         return SETTINGS.kimi_api_key
-    if provider == "zhipu":
-        return getattr(SETTINGS, "zhipu_api_key", "")
     if provider == "deepseek":
         return getattr(SETTINGS, "deepseek_api_key", "")
     raise ValueError(f"Unknown provider: {provider}")
@@ -191,7 +184,7 @@ async def main():
     selected = pdf_files[:10]
     print(f"Selected {len(selected)} PDFs: {[p.stem for p in selected]}")
 
-    providers = ["kimi", "zhipu", "deepseek"]
+    providers = ["kimi", "deepseek"]
     import logging
     logging.getLogger("aily.llm.client").setLevel(logging.WARNING)
 

@@ -32,13 +32,17 @@ class TestRealFeishuExposesProblems:
     - Show network issues
     """
 
-    async def test_auth_exposes_wrong_credentials(self, exposure) -> None:
+    async def test_auth_exposes_wrong_credentials(self, exposure, service_availability) -> None:
         """
         Wrong credentials should fail loudly, not silently.
 
         EXPOSES: Misconfigured auth, expired tokens, wrong app ID
         """
-        from conftest import RealFeishuClient
+        from tests.integration.conftest import RealFeishuClient
+
+        if not service_availability["feishu"]:
+            exposure.expose("CONFIG_MISSING", "Feishu credentials not configured")
+            pytest.skip("Feishu credentials not configured")
 
         # Temporarily break credentials
         original_id = os.environ.get("FEISHU_APP_ID")

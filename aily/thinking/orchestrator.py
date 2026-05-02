@@ -112,7 +112,7 @@ class ThinkingOrchestrator:
             return None
 
         timestamp, result = self._cache[content_hash]
-        if time.time() - timestamp > self._cache_ttl_seconds:
+        if time.time() - timestamp >= self._cache_ttl_seconds:
             # Expired
             del self._cache[content_hash]
             return None

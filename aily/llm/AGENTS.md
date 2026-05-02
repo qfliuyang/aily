@@ -5,7 +5,7 @@
 
 ## Purpose
 
-LLM abstraction layer. Provides a unified `LLMClient` interface, 4-provider routing (Kimi, Zhipu, DeepSeek, ByteDance Ark) with workload-aware dispatch, rate limiting via `LLMRouter`, and a centralized prompt registry. Thinking mode is disabled by default for batch speed. Timeout: 300s.
+LLM abstraction layer. Provides a unified `LLMClient` interface, active runtime routing for Kimi and DeepSeek, legacy coding-plan adapters, workload-aware dispatch, rate limiting via `LLMRouter`, and a centralized prompt registry. Thinking mode is disabled by default for batch speed. Timeout: 300s.
 
 ## Key Files
 
@@ -45,6 +45,6 @@ LLM abstraction layer. Provides a unified `LLMClient` interface, 4-provider rout
 
 ### External
 - `httpx` / `aiohttp` — HTTP transport
-- `openai` — OpenAI-compatible client (used for Kimi/Zhipu)
+- `openai` — OpenAI-compatible client
 
 <!-- MANUAL: -->

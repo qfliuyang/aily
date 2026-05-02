@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -77,7 +78,7 @@ class TestReactorScheduler:
             nozzle_config=NozzleConfig(enabled_methods={InnovationMethod.TRIZ}),
         )
 
-        async def fake_run_method(method, context):
+        async def fake_run_method(method, context, budget=None):
             return MethodResult(
                 method=method,
                 proposals=[proposal],
@@ -123,6 +124,69 @@ class TestReactorScheduler:
         mock_graph_db.set_node_property.assert_any_await(
             "reactor_prop_1", "status", "pending_business"
         )
+
+    @pytest.mark.asyncio
+    async def test_evaluate_context_can_persist_and_output_proposals(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+        mock_obsidian_writer,
+        monkeypatch,
+    ):
+        proposal = Proposal(
+            id="reactor_prop_2",
+            mind_name="reactor",
+            title="Constraint Debugging Theater",
+            content="Show constraint lineage as an interactive debugging graph.",
+            summary="Show constraint lineage as an interactive debugging graph.",
+            confidence=0.88,
+            framework_used="TRIZ",
+        )
+        scheduler = ReactorScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            obsidian_writer=mock_obsidian_writer,
+            nozzle_config=NozzleConfig(enabled_methods={InnovationMethod.TRIZ}),
+        )
+
+        async def fake_run_method(method, context, budget=None):
+            return MethodResult(method=method, proposals=[proposal], confidence=0.88)
+
+        monkeypatch.setattr(scheduler, "_run_method", fake_run_method)
+
+        proposals = await scheduler.evaluate_context(
+            {"focus_areas": ["eda"]},
+            persist=True,
+            output=True,
+        )
+
+        assert proposals == [proposal]
+        mock_graph_db.insert_node.assert_awaited()
+        mock_obsidian_writer.write_note.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_evaluate_context_bounds_slow_methods(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+        monkeypatch,
+    ):
+        scheduler = ReactorScheduler(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            nozzle_config=NozzleConfig(enabled_methods={InnovationMethod.TRIZ}),
+            method_timeout_seconds=0.01,
+        )
+
+        async def slow_run_method(method, context, budget=None):
+            await asyncio.sleep(1)
+            return MethodResult(method=method, proposals=[], confidence=0.0)
+
+        monkeypatch.setattr(scheduler, "_run_method", slow_run_method)
+
+        proposals = await scheduler.evaluate_context({"focus_areas": ["eda"]})
+
+        assert proposals == []
 
     @pytest.mark.asyncio
     async def test_run_method_adapts_triz_framework_output(

@@ -28,6 +28,31 @@ async def test_chat_success(client):
 
 
 @pytest.mark.asyncio
+async def test_complete_wraps_prompt_as_chat(client):
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "done"}}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    captured = {}
+
+    async def mock_post(*args, **kwargs):
+        captured.update(kwargs)
+        return mock_resp
+
+    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+        result = await client.complete("Review this", system_prompt="You are a gate")
+
+    assert result == "done"
+    assert captured["json"]["messages"] == [
+        {"role": "system", "content": "You are a gate"},
+        {"role": "user", "content": "Review this"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_chat_timeout_retries_then_raises(client):
     with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("timeout")):
         with pytest.raises(LLMError) as exc_info:

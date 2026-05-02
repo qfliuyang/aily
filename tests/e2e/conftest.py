@@ -16,7 +16,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
-from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -128,167 +127,27 @@ async def queue_db(e2e_context: E2EContext) -> AsyncGenerator["QueueDB", None]:
 
 
 @pytest.fixture
-def llm_client() -> MagicMock | "LLMClient":
-    """LLM client - real if configured, mock if not.
+def llm_client() -> "LLMClient":
+    """Real LLM client for E2E tests.
 
-    For E2E tests, we prefer real LLM calls but allow mock fallback
-    to ensure tests can run in CI without API keys.
+    E2E tests are acceptance tests. They must not use fake or mocked model
+    responses because that hides DIKIWI quality and provider integration bugs.
     """
     from aily.llm.client import LLMClient
     from aily.config import SETTINGS
 
-    # Check if real LLM is configured
-    if SETTINGS.llm_api_key and SETTINGS.llm_api_key != "test-key":
-        return LLMClient(
-            base_url=SETTINGS.llm_base_url,
-            api_key=SETTINGS.llm_api_key,
-            model=SETTINGS.llm_model,
-        )
+    if not SETTINGS.llm_api_key or SETTINGS.llm_api_key == "test-key":
+        pytest.fail("E2E requires a real LLM_API_KEY; mocked LLM responses are forbidden")
 
-    # Return mock for CI/testing without API keys
-    mock = MagicMock(spec=LLMClient)
-    mock.complete = MagicMock(side_effect=RuntimeError(
-        "Real LLM not configured. Set LLM_API_KEY for E2E tests."
-    ))
-
-    async def mock_chat_json(messages, temperature=0.7):
-        content = ""
-        for msg in messages:
-            content += msg.get("content", "") + "\n"
-        content_lower = content.lower()
-
-        # DATA extraction
-        if "data distiller" in content_lower or '"data_points"' in content_lower:
-            return {
-                "title": "Test Document",
-                "data_points": [
-                    {
-                        "concept": "Distributed systems",
-                        "content": "Distributed systems require careful consensus design to maintain consistency across nodes.",
-                        "context": "computing",
-                        "confidence": 0.9,
-                        "type": "principle",
-                    },
-                    {
-                        "concept": "Consensus protocols",
-                        "content": "Consensus protocols like Raft and Paxos enable distributed agreement.",
-                        "context": "computing",
-                        "confidence": 0.85,
-                        "type": "mechanism",
-                    },
-                ],
-                "summary": "A brief summary",
-                "quality_assessment": "high",
-            }
-
-        # DATA fallback
-        if "recovery summarizer" in content_lower or '"summary"' in content_lower:
-            return {
-                "summary": "Machine learning and artificial intelligence drive modern automation.",
-                "key_takeaway": "AI and ML are key drivers of automation.",
-                "confidence": 0.8,
-            }
-
-        # INFORMATION batch classification
-        if "semantic classifier" in content_lower or '"classifications"' in content_lower:
-            return {
-                "classifications": [
-                    {
-                        "index": 0,
-                        "tags": ["distributed-systems", "consensus", "computing"],
-                        "info_type": "principle",
-                        "domain": "technology",
-                        "confidence": 0.9,
-                    },
-                    {
-                        "index": 1,
-                        "tags": ["consensus", "protocols", "computing"],
-                        "info_type": "fact",
-                        "domain": "technology",
-                        "confidence": 0.85,
-                    },
-                ]
-            }
-
-        # KNOWLEDGE batch relation mapping
-        if "relationship cartographer" in content_lower or '"links"' in content_lower:
-            return {
-                "links": [
-                    {
-                        "node_a_index": 0,
-                        "node_b_index": 1,
-                        "relation_type": "relates_to",
-                        "strength": 0.8,
-                        "reasoning": "Consensus protocols are a mechanism for achieving consensus in distributed systems.",
-                    }
-                ]
-            }
-
-        # INSIGHT pattern detection
-        if "pattern synthesizer" in content_lower or '"insights"' in content_lower:
-            return {
-                "insights": [
-                    {
-                        "type": "pattern",
-                        "description": "Consensus design is fundamental to reliable distributed systems.",
-                        "confidence": 0.9,
-                        "related_node_indices": [0, 1],
-                        "significance": "High",
-                    }
-                ],
-                "synthesis": "A brief synthesis",
-                "knowledge_gaps": [],
-            }
-
-        # WISDOM zettelkasten authoring
-        if "zettelkasten author" in content_lower or '"zettels"' in content_lower:
-            return {
-                "zettels": [
-                    {
-                        "title": "Distributed systems require careful consensus design",
-                        "content": "In distributed systems, maintaining consistency across multiple nodes requires well-designed consensus protocols. Raft and Paxos are two prominent approaches.",
-                        "tags": ["distributed-systems", "consensus"],
-                        "links_to": ["Raft consensus protocol", "Paxos"],
-                        "confidence": 0.9,
-                        "source_evidence": ["Distributed systems require careful consensus design"],
-                    }
-                ],
-                "note_strategy": "One atomic note per core idea.",
-            }
-
-        # IMPACT action generation
-        if "action strategist" in content_lower or '"impacts"' in content_lower:
-            return {
-                "impacts": [
-                    {
-                        "type": "research",
-                        "description": "Investigate consensus protocol implementations for our distributed services.",
-                        "priority": "high",
-                        "rationale": "Improves system reliability",
-                        "effort_estimate": "medium",
-                        "potential_value": "Higher uptime and consistency guarantees",
-                    }
-                ]
-            }
-
-        # Reviewer prompts: pass through by extracting draft JSON object
-        if "review the draft" in content_lower or "repair weak structure" in content_lower:
-            import json
-            # Try to find and return the draft JSON object
-            try:
-                start = content.find("{")
-                end = content.rfind("}")
-                if start != -1 and end != -1 and end > start:
-                    return json.loads(content[start:end + 1])
-            except Exception:
-                pass
-            return {}
-
-        # Fallback: empty dict (agents will use their fallbacks)
-        return {}
-
-    mock.chat_json = mock_chat_json
-    return mock
+    return LLMClient(
+        base_url=SETTINGS.llm_base_url,
+        api_key=SETTINGS.llm_api_key,
+        model=SETTINGS.llm_model,
+        timeout=300.0,
+        thinking=False,
+        max_concurrency=SETTINGS.llm_max_concurrency,
+        min_interval_seconds=SETTINGS.llm_min_interval_seconds,
+    )
 
 
 @pytest_asyncio.fixture
@@ -326,27 +185,6 @@ async def obsidian_writer(e2e_context: E2EContext) -> "ObsidianWriter":
     return TestObsidianWriter(e2e_context.obsidian_vault_path)
 
 
-@pytest.fixture
-def feishu_pusher() -> MagicMock:
-    """Mock Feishu pusher that records messages for verification.
-
-    For E2E tests, we don't send real messages but we verify
-    the *intent* to send correct messages.
-    """
-    mock = MagicMock()
-    mock.sent_messages: list[dict] = []
-
-    async def mock_send_message(open_id: str, text: str) -> None:
-        mock.sent_messages.append({
-            "open_id": open_id,
-            "text": text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-    mock.send_message = mock_send_message
-    return mock
-
-
 # =============================================================================
 # THREE-MIND SYSTEM FIXTURES
 # =============================================================================
@@ -371,7 +209,6 @@ async def entrepreneur_scheduler(
     llm_client,
     graph_db: "GraphDB",
     obsidian_writer,
-    feishu_pusher,
 ) -> "EntrepreneurScheduler":
     """Real EntrepreneurScheduler (not started)."""
     from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
@@ -380,7 +217,7 @@ async def entrepreneur_scheduler(
         llm_client=llm_client,
         graph_db=graph_db,
         obsidian_writer=obsidian_writer,
-        feishu_pusher=feishu_pusher,
+        feishu_pusher=None,
         enabled=True,
     )
 

@@ -6,7 +6,10 @@ from aily.queue.db import QueueDB
 async def queue_db(tmp_path):
     db = QueueDB(tmp_path / "aily_queue.db")
     await db.initialize()
-    return db
+    try:
+        yield db
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio

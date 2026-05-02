@@ -241,8 +241,12 @@ class TestAilyWithRealServices:
         """
         try:
             response = await aily_client.get("/status")
-            assert response.status_code == 200
-            data = response.json()
-            assert "aily_version" in data
         except httpx.ConnectError:
             pytest.skip("Aily service not running - start with: python -m aily.main")
+
+        if response.status_code in {502, 503, 504}:
+            pytest.skip(f"Aily service unavailable at localhost:8000: HTTP {response.status_code}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "aily_version" in data
