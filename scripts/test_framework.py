@@ -58,7 +58,11 @@ CHAOS_FOLDER = Path.home() / "aily_chaos"
 DEFAULT_VAULT_PATH = Path(SETTINGS.dikiwi_vault_path or SETTINGS.obsidian_vault_path).expanduser()
 DEFAULT_GRAPH_DB_PATH = DEFAULT_VAULT_PATH / ".aily" / "graph.db"
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs" / "tests"
-DEFAULT_RUN_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
+DEFAULT_RUN_DIR = (
+    SETTINGS.evidence_runs_dir
+    if SETTINGS.evidence_runs_dir.is_absolute()
+    else Path(__file__).resolve().parent.parent / SETTINGS.evidence_runs_dir
+)
 
 TEST_MESSAGES = [
     "【转向AI芯片架构的路径与优势 - Monica AI Chat】https://monica.im/share/chat?shareId=1jB54WO31xDzAIjL",
@@ -167,6 +171,19 @@ def get_dir_samples(vault_path: Path, dir_name: str, limit: int = 3) -> list[tup
     return [(str(f.relative_to(vault_path)), f.stat().st_size) for f in files[:limit]]
 
 
+def extraction_metadata_for(extracted: ExtractedContentMultimodal) -> dict[str, Any]:
+    """Build evidence metadata for one real extraction result."""
+    return {
+        "title": extracted.title,
+        "source_type": extracted.source_type,
+        "processing_method": extracted.processing_method,
+        "text_chars": len(extracted.text or ""),
+        "visual_elements": len(extracted.visual_elements or []),
+        "metadata_method": extracted.metadata.get("method") or extracted.metadata.get("extraction_method"),
+        "mineru_output_dir": extracted.metadata.get("mineru_output_dir", ""),
+    }
+
+
 @contextmanager
 def llm_trace_logging(log_path: Path | None) -> Iterator[Path | None]:
     if log_path is None:
@@ -238,6 +255,7 @@ async def build_runtime(
             obsidian_writer=obsidian_writer,
             proposal_min_confidence=SETTINGS.minds.proposal_min_confidence,
             proposal_max_per_session=SETTINGS.minds.proposal_max_per_session,
+            innovation_timeout_minutes=SETTINGS.entrepreneur_evaluation_timeout_minutes,
         )
 
     bridge = ChaosDikiwiBridge(
@@ -558,9 +576,11 @@ async def scenario_full_pipeline(
     source_seed: int = 260502,
     phase_timeout_seconds: float = 600.0,
     force_business: bool = False,
+    skip_business: bool = False,
 ) -> dict[str, Any]:
     report_dir = report_dir or DEFAULT_LOG_DIR / "e2e"
     report_dir.mkdir(parents=True, exist_ok=True)
+    ui_event_hub.configure_persistence(SETTINGS.ui_event_log_path)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_file = report_dir / f"e2e_report_{timestamp}.json"
     llm_log = report_dir / f"llm_calls_{timestamp}.jsonl" if log_llm else None
@@ -657,11 +677,13 @@ async def scenario_full_pipeline(
                 )
                 extracted_contents: list[ExtractedContentMultimodal] = []
                 extraction_elapsed: dict[str, float] = {}
+                extraction_metadata: dict[str, dict[str, Any]] = {}
                 for pdf_path, extracted, elapsed in extracted_results:
                     extraction_elapsed[pdf_path.name] = elapsed
                     if extracted is None:
                         doc_results.append({"pdf": pdf_path.name, "error": "extraction_failed", "elapsed": elapsed})
                     else:
+                        extraction_metadata[pdf_path.name] = extraction_metadata_for(extracted)
                         extracted_contents.append(extracted)
 
                 bridge_batch = await _run_phase(
@@ -679,6 +701,7 @@ async def scenario_full_pipeline(
                         continue
                     doc_results.append({
                         "pdf": pdf_path.name,
+                        "extraction": extraction_metadata.get(pdf_path.name, {}),
                         "bridge_result": bridge_by_source.get(pdf_path.name, {"error": "missing_batch_result"}),
                         "elapsed": extraction_elapsed.get(pdf_path.name, 0.0),
                         "tokens": runtime.llm_client.get_usage_stats(),
@@ -686,7 +709,7 @@ async def scenario_full_pipeline(
 
                 pre_business_vault_status = get_vault_status(vault_path)
                 has_impact_outputs = pre_business_vault_status.get("06-Impact", 0) > 0
-                business_should_run = force_business or has_impact_outputs
+                business_should_run = (force_business or has_impact_outputs) and not skip_business
 
                 reactor_elapsed = None
                 proposals = []
@@ -707,12 +730,13 @@ async def scenario_full_pipeline(
                     )
                     reactor_elapsed = round(time.monotonic() - reactor_start, 2)
                 elif not business_should_run:
-                    business_skipped_reason = "no_impact_outputs"
+                    business_skipped_reason = "business_disabled_by_test" if skip_business else "no_impact_outputs"
                     _record_progress(
                         "reactor_evaluate",
                         "skipped",
                         reason=business_skipped_reason,
                         force_business=force_business,
+                        skip_business=skip_business,
                     )
 
                 entrepreneur_elapsed = None
@@ -734,6 +758,20 @@ async def scenario_full_pipeline(
                     "batch_incremental_ratio": bridge_batch.get("incremental_ratio"),
                     "batch_incremental_threshold": bridge_batch.get("incremental_threshold"),
                     "batch_higher_order_triggered": bridge_batch.get("higher_order_triggered"),
+                    "batch_higher_order_candidates": bridge_batch.get("higher_order_candidates"),
+                    "batch_higher_order_selected": bridge_batch.get("higher_order_selected"),
+                    "extraction_methods": {
+                        method: sum(
+                            1
+                            for metadata in extraction_metadata.values()
+                            if metadata.get("processing_method") == method
+                        )
+                        for method in sorted({
+                            metadata.get("processing_method", "")
+                            for metadata in extraction_metadata.values()
+                            if metadata.get("processing_method")
+                        })
+                    },
                     "reactor_elapsed_seconds": reactor_elapsed,
                     "entrepreneur_elapsed_seconds": entrepreneur_elapsed,
                     "reactor_proposals": len(proposals),

@@ -33,6 +33,7 @@ class UIEventHub:
         self._uploads: dict[str, deque[dict[str, Any]]] = {}
         self._runs: dict[str, deque[dict[str, Any]]] = {}
         self._event_log_path: Path | None = None
+        self._next_seq = 1
         self._lock = asyncio.Lock()
 
     def configure_persistence(self, event_log_path: Path | None) -> None:
@@ -57,6 +58,9 @@ class UIEventHub:
                 except json.JSONDecodeError:
                     logger.warning("Skipping malformed UI event log line in %s", path)
                     continue
+                if "seq" not in event:
+                    event["seq"] = self._next_seq
+                self._next_seq = max(self._next_seq, int(event.get("seq") or 0) + 1)
                 self._index_event(event)
                 loaded += 1
         return loaded
@@ -68,6 +72,8 @@ class UIEventHub:
         pipeline_id: str | None = None,
         upload_id: str | None = None,
         event_type: str | None = None,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         """Query durable JSONL events by lineage IDs.
@@ -85,6 +91,8 @@ class UIEventHub:
                 pipeline_id=pipeline_id,
                 upload_id=upload_id,
                 event_type=event_type,
+                after_seq=after_seq,
+                before_seq=before_seq,
                 limit=safe_limit,
             )
         return await asyncio.to_thread(
@@ -94,6 +102,8 @@ class UIEventHub:
             pipeline_id,
             upload_id,
             event_type,
+            after_seq,
+            before_seq,
             safe_limit,
         )
 
@@ -105,10 +115,17 @@ class UIEventHub:
         pipeline_id: str | None,
         upload_id: str | None,
         event_type: str | None,
+        after_seq: int | None,
+        before_seq: int | None,
         limit: int,
     ) -> list[dict[str, Any]]:
         filtered: list[dict[str, Any]] = []
         for event in events:
+            seq = int(event.get("seq") or 0)
+            if after_seq is not None and seq <= after_seq:
+                continue
+            if before_seq is not None and seq >= before_seq:
+                continue
             if run_id is not None and str(event.get("run_id", "")) != run_id:
                 continue
             if pipeline_id is not None and str(event.get("pipeline_id", "")) != pipeline_id:
@@ -118,6 +135,8 @@ class UIEventHub:
             if event_type is not None and str(event.get("type", "")) != event_type:
                 continue
             filtered.append(event)
+            if after_seq is not None and len(filtered) >= limit:
+                break
         return filtered[-limit:]
 
     @classmethod
@@ -128,17 +147,28 @@ class UIEventHub:
         pipeline_id: str | None,
         upload_id: str | None,
         event_type: str | None,
+        after_seq: int | None,
+        before_seq: int | None,
         limit: int,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        fallback_seq = 0
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
                     continue
+                fallback_seq += 1
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     logger.warning("Skipping malformed UI event log line in %s", path)
+                    continue
+                if "seq" not in event:
+                    event["seq"] = fallback_seq
+                seq = int(event.get("seq") or 0)
+                if after_seq is not None and seq <= after_seq:
+                    continue
+                if before_seq is not None and seq >= before_seq:
                     continue
                 if run_id is not None and str(event.get("run_id", "")) != run_id:
                     continue
@@ -149,6 +179,8 @@ class UIEventHub:
                 if event_type is not None and str(event.get("type", "")) != event_type:
                     continue
                 events.append(event)
+                if after_seq is not None and len(events) >= limit:
+                    break
                 if len(events) > limit:
                     events = events[-limit:]
         return events
@@ -161,6 +193,8 @@ class UIEventHub:
             **payload,
         }
         async with self._lock:
+            event["seq"] = payload.pop("seq", self._next_seq)
+            self._next_seq = max(self._next_seq, int(event["seq"]) + 1)
             self._index_event(event)
             if self._event_log_path is not None:
                 await asyncio.to_thread(
@@ -225,14 +259,19 @@ class UIEventHub:
         return list(self._runs.get(str(run_id), []))
 
     def active_pipeline_ids(self) -> list[str]:
-        recent = {}
+        recent: dict[str, dict[str, Any]] = {}
         for event in self._events:
-            pipeline_id = event.get("pipeline_id")
-            if pipeline_id:
-                recent[str(pipeline_id)] = event
+            pipeline_ids: list[str] = []
+            if event.get("pipeline_id"):
+                pipeline_ids.append(str(event["pipeline_id"]))
+            if isinstance(event.get("pipeline_ids"), list):
+                pipeline_ids.extend(str(value) for value in event["pipeline_ids"] if value)
+            for pipeline_id in pipeline_ids:
+                recent[pipeline_id] = event
         active = []
+        terminal = {"pipeline_completed", "pipeline_failed", "proposal_review_completed", "business_flow_skipped"}
         for pipeline_id, event in recent.items():
-            if event.get("type") not in {"pipeline_completed", "pipeline_failed"}:
+            if event.get("type") not in terminal:
                 active.append(pipeline_id)
         return active
 

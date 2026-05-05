@@ -21,6 +21,8 @@ type StudioEvent = {
 
 type StudioStatus = {
   queue: Record<string, number>;
+  source_jobs?: Record<string, number>;
+  provider_pressure?: Record<string, Record<string, number>>;
   graph: Record<string, number>;
   active_pipelines: string[];
   active_uploads: string[];
@@ -90,6 +92,32 @@ type SourceListResponse = {
   sources: SourceSummary[];
 };
 
+type SourceJobSummary = {
+  job_id: string;
+  source_id: string;
+  job_type: string;
+  status: string;
+  priority: number;
+  attempt_count: number;
+  available_at: string;
+  locked_by?: string | null;
+  locked_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  filename?: string | null;
+  normalized_source?: string | null;
+  source_kind?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  source_status?: string | null;
+};
+
+type SourceJobListResponse = {
+  total: number;
+  jobs: SourceJobSummary[];
+};
+
 type VaultNote = {
   title: string;
   note_path: string;
@@ -115,6 +143,7 @@ type PipelineTrack = {
   startedAt: string;
   completedStages: Set<StageName>;
   failed: boolean;
+  completed: boolean;
   spark: boolean;
   provider?: string;
   model?: string;
@@ -223,7 +252,19 @@ const emptyStatus: StudioStatus = {
 const emptyGraph: GraphSnapshot = { nodes: [], edges: [] };
 const emptyRuns: RunListResponse = { root_dir: "", total: 0, runs: [] };
 const emptySources: SourceListResponse = { total: 0, sources: [] };
+const emptySourceJobs: SourceJobListResponse = { total: 0, jobs: [] };
 const emptyVaultNotes: VaultNoteListResponse = { stage: "", total: 0, items: [] };
+const AUTH_STORAGE_KEY = "aily_studio_token";
+const MAX_STUDIO_EVENTS = 2000;
+
+function initialAuthToken() {
+  const urlToken = new URLSearchParams(window.location.search).get("token")?.trim();
+  if (urlToken) {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, urlToken);
+    return urlToken;
+  }
+  return window.localStorage.getItem(AUTH_STORAGE_KEY) ?? "";
+}
 
 function responseError(response: Response, fallback: string): Promise<Error> {
   return response
@@ -232,12 +273,27 @@ function responseError(response: Response, fallback: string): Promise<Error> {
     .catch(() => new Error(fallback));
 }
 
+function mergeStudioEvents(current: StudioEvent[], incoming: StudioEvent[]): StudioEvent[] {
+  if (!incoming.length) return current;
+  const byId = new Map<string, StudioEvent>();
+  for (const event of current) {
+    byId.set(event.id, event);
+  }
+  for (const event of incoming) {
+    byId.set(event.id, event);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .slice(-MAX_STUDIO_EVENTS);
+}
+
 function App() {
   const [events, setEvents] = useState<StudioEvent[]>([]);
   const [status, setStatus] = useState<StudioStatus>(emptyStatus);
   const [graph, setGraph] = useState<GraphSnapshot>(emptyGraph);
   const [runs, setRuns] = useState<RunListResponse>(emptyRuns);
   const [sources, setSources] = useState<SourceListResponse>(emptySources);
+  const [sourceJobs, setSourceJobs] = useState<SourceJobListResponse>(emptySourceJobs);
   const [proposals, setProposals] = useState<VaultNoteListResponse>(emptyVaultNotes);
   const [entrepreneurship, setEntrepreneurship] = useState<VaultNoteListResponse>(emptyVaultNotes);
   const [mode, setMode] = useState<"live" | "replay">("live");
@@ -247,25 +303,40 @@ function App() {
   const [submittingUrl, setSubmittingUrl] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState(initialAuthToken);
+  const [pendingAuthToken, setPendingAuthToken] = useState(authToken);
   const [wsConnected, setWsConnected] = useState(false);
+  const [eventPollConnected, setEventPollConnected] = useState(false);
   const [view, setView] = useState<ViewMode>("theater");
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
   const [nodeTypeFilter, setNodeTypeFilter] = useState<string>("all");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("token")) {
+      url.searchParams.delete("token");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
+
+  useEffect(() => {
     void refreshStatus();
     void refreshGraph();
     void refreshRuns();
     void refreshSources();
+    void refreshSourceJobs();
     void refreshJudgmentArtifacts();
+    void refreshRecentEvents();
 
     const interval = window.setInterval(() => {
       void refreshStatus();
       void refreshGraph();
       void refreshRuns();
       void refreshSources();
+      void refreshSourceJobs();
       void refreshJudgmentArtifacts();
+      void refreshRecentEvents();
     }, 5000);
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -274,14 +345,15 @@ function App() {
     let cancelled = false;
 
     const connect = () => {
-      ws = new WebSocket(`${protocol}://${window.location.host}/api/ui/events`);
+      const tokenQuery = authToken ? `?token=${encodeURIComponent(authToken)}` : "";
+      ws = new WebSocket(`${protocol}://${window.location.host}/api/ui/events${tokenQuery}`);
       ws.onopen = () => {
         setWsConnected(true);
         setStreamError(null);
       };
       ws.onmessage = (message) => {
         const event = JSON.parse(message.data) as StudioEvent;
-        setEvents((current) => [...current.slice(-499), event]);
+        setEvents((current) => mergeStudioEvents(current, [event]));
         if (event.pipeline_id) {
           setSelectedPipelineId((current) => current ?? event.pipeline_id ?? null);
         }
@@ -318,11 +390,35 @@ function App() {
       }
       ws?.close();
     };
-  }, []);
+  }, [authToken]);
+
+  function authHeaders(extra: Record<string, string> = {}) {
+    return authToken ? { ...extra, "x-aily-token": authToken } : extra;
+  }
+
+  async function apiFetch(input: string, init: RequestInit = {}) {
+    const headers = new Headers(init.headers ?? {});
+    if (authToken) {
+      headers.set("x-aily-token", authToken);
+    }
+    return fetch(input, { ...init, headers });
+  }
+
+  function saveAuthToken() {
+    const token = pendingAuthToken.trim();
+    if (token) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+    setAuthToken(token);
+    setApiError(null);
+    setStreamError(null);
+  }
 
   async function refreshStatus() {
     try {
-      const response = await fetch("/api/ui/status");
+      const response = await apiFetch("/api/ui/status");
       if (!response.ok) {
         throw await responseError(response, "Failed to fetch studio status.");
       }
@@ -334,9 +430,28 @@ function App() {
     }
   }
 
+  async function refreshRecentEvents() {
+    if (mode === "replay") return;
+    try {
+      const response = await apiFetch(`/api/ui/events/query?limit=${MAX_STUDIO_EVENTS}`);
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch persisted UI events.");
+      }
+      const payload = (await response.json()) as { events: StudioEvent[] };
+      setEvents((current) => mergeStudioEvents(current, payload.events));
+      setSelectedPipelineId((current) => {
+        if (current) return current;
+        return payload.events.find((event) => event.pipeline_id)?.pipeline_id ?? null;
+      });
+      setEventPollConnected(true);
+    } catch {
+      setEventPollConnected(false);
+    }
+  }
+
   async function refreshGraph() {
     try {
-      const response = await fetch("/api/ui/graph");
+      const response = await apiFetch("/api/ui/graph");
       if (!response.ok) {
         throw await responseError(response, "Failed to fetch graph snapshot.");
       }
@@ -350,7 +465,7 @@ function App() {
 
   async function refreshRuns() {
     try {
-      const response = await fetch("/api/ui/runs?limit=8");
+      const response = await apiFetch("/api/ui/runs?limit=8");
       if (!response.ok) {
         throw await responseError(response, "Failed to fetch evidence runs.");
       }
@@ -364,7 +479,7 @@ function App() {
 
   async function refreshSources() {
     try {
-      const response = await fetch("/api/ui/sources?limit=8");
+      const response = await apiFetch("/api/ui/sources?limit=8");
       if (!response.ok) {
         throw await responseError(response, "Failed to fetch source store.");
       }
@@ -376,11 +491,25 @@ function App() {
     }
   }
 
+  async function refreshSourceJobs() {
+    try {
+      const response = await apiFetch("/api/ui/source-jobs?limit=24");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch source job ledger.");
+      }
+      const payload = (await response.json()) as SourceJobListResponse;
+      setSourceJobs(payload);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch source job ledger.");
+    }
+  }
+
   async function refreshJudgmentArtifacts() {
     try {
       const [proposalResponse, entrepreneurshipResponse] = await Promise.all([
-        fetch("/api/ui/proposals?limit=12"),
-        fetch("/api/ui/entrepreneurship?limit=12"),
+        apiFetch("/api/ui/proposals?limit=12"),
+        apiFetch("/api/ui/entrepreneurship?limit=12"),
       ]);
       if (!proposalResponse.ok) {
         throw await responseError(proposalResponse, "Failed to fetch proposals.");
@@ -405,12 +534,13 @@ function App() {
     }
     setUploading(true);
     try {
-      const response = await fetch("/api/ui/uploads", { method: "POST", body: form });
+      const response = await apiFetch("/api/ui/uploads", { method: "POST", body: form });
       if (!response.ok) {
         throw await responseError(response, "Upload failed.");
       }
       setApiError(null);
       await refreshStatus();
+      await refreshSourceJobs();
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Upload failed.");
     } finally {
@@ -424,9 +554,9 @@ function App() {
     if (!url) return;
     setSubmittingUrl(true);
     try {
-      const response = await fetch("/api/ui/sources/urls", {
+      const response = await apiFetch("/api/ui/sources/urls", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ url }),
       });
       if (!response.ok) {
@@ -435,6 +565,7 @@ function App() {
       setUrlInput("");
       setApiError(null);
       await refreshSources();
+      await refreshSourceJobs();
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "URL intake failed.");
     } finally {
@@ -444,9 +575,9 @@ function App() {
 
   async function sendControl(action: string, payload: Record<string, unknown> = {}) {
     try {
-      const response = await fetch("/api/ui/control", {
+      const response = await apiFetch("/api/ui/control", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ action, ...payload }),
       });
       if (!response.ok) {
@@ -455,6 +586,7 @@ function App() {
       setApiError(null);
       await refreshStatus();
       await refreshSources();
+      await refreshSourceJobs();
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Control action failed.");
     }
@@ -462,7 +594,9 @@ function App() {
 
   async function loadRunReplay(runId: string) {
     try {
-      const response = await fetch(`/api/ui/events/query?run_id=${encodeURIComponent(runId)}&limit=500`);
+      const response = await apiFetch(
+        `/api/ui/events/query?run_id=${encodeURIComponent(runId)}&limit=${MAX_STUDIO_EVENTS}`,
+      );
       if (!response.ok) {
         throw await responseError(response, "Failed to load run replay.");
       }
@@ -513,6 +647,10 @@ function App() {
     [events, pipelineTracks],
   );
   const recentMilestones = useMemo(() => deriveMilestones(events), [events]);
+  const eventBackedPipelineCount = pipelineTracks.filter((track) => !track.failed && !track.completed).length;
+  const displayedQueueTotal = Math.max(status.queue.total ?? 0, eventBackedPipelineCount);
+  const displayedActivePipelines = Math.max(status.active_pipelines.length, eventBackedPipelineCount);
+  const displayedSources = Math.max(sources.total, pipelineTracks.length);
 
   useEffect(() => {
     if (!selectedPipelineId && pipelineTracks[0]) {
@@ -538,12 +676,25 @@ function App() {
           </p>
         </div>
         <div className="hero-metrics">
-          <Metric label="Queue" value={String(status.queue.total ?? 0)} />
-          <Metric label="Active Pipelines" value={String(status.active_pipelines.length)} />
+          <Metric label="Queue" value={String(displayedQueueTotal)} />
+          <Metric label="Active Pipelines" value={String(displayedActivePipelines)} />
           <Metric label="Active Uploads" value={String(status.active_uploads.length)} />
-          <Metric label="Sources" value={String(sources.total)} />
+          <Metric label="Sources" value={String(displayedSources)} />
           <Metric label="Evidence Runs" value={String(runs.total)} />
-          <Metric label="Event Stream" value={mode === "replay" ? "replay" : wsConnected ? "live" : "down"} />
+          <Metric
+            label="Event Stream"
+            value={
+              mode === "replay"
+                ? "replay"
+                : wsConnected && eventPollConnected
+                  ? "live+poll"
+                  : eventPollConnected
+                    ? "polling"
+                    : wsConnected
+                      ? "connected"
+                      : "down"
+            }
+          />
         </div>
       </header>
 
@@ -553,6 +704,39 @@ function App() {
           <span>{streamError ?? apiError}</span>
         </section>
       )}
+
+      <section className="auth-strip" aria-label="Private Studio token">
+        <div>
+          <span className="eyebrow">Private Access</span>
+          <strong>{authToken ? "Token attached to Studio requests" : "Local mode or token not set"}</strong>
+        </div>
+        <div className="auth-controls">
+          <input
+            type="password"
+            value={pendingAuthToken}
+            onChange={(event) => setPendingAuthToken(event.target.value)}
+            placeholder="UI_AUTH_TOKEN for hosted mode"
+            aria-label="Aily Studio authentication token"
+          />
+          <button type="button" className="control-button" onClick={saveAuthToken}>
+            Save token
+          </button>
+          {authToken && (
+            <button
+              type="button"
+              className="control-button ghost"
+              onClick={() => {
+                setPendingAuthToken("");
+                window.localStorage.removeItem(AUTH_STORAGE_KEY);
+                document.cookie = "aily_ui_token=; Max-Age=0; path=/; SameSite=Lax";
+                setAuthToken("");
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </section>
 
       <nav className="view-nav" aria-label="Studio views">
         {VIEWS.map((item) => (
@@ -611,9 +795,10 @@ function App() {
                   aria-label="Submit URL to Aily"
                 />
                 <button type="submit" disabled={submittingUrl || !urlInput.trim()}>
-                  {submittingUrl ? "Saving..." : "Send link"}
+                  {submittingUrl ? "Queueing..." : "Process link"}
                 </button>
               </form>
+              <p className="intake-note">Links are stored first, then fetched and routed through the same DIKIWI processing path.</p>
             </div>
           </section>
 
@@ -677,7 +862,11 @@ function App() {
                     </div>
                   )}
                 </div>
-                <ThinkingStageCanvas track={activeTrack} />
+                <ThinkingStageCanvas
+                  track={activeTrack}
+                  proposalArtifactCount={proposals.total}
+                  entrepreneurshipArtifactCount={entrepreneurship.total}
+                />
               </section>
 
               <section className="milestone-panel">
@@ -830,6 +1019,39 @@ function App() {
                 <Panel title="Queue Status" subtitle="Background jobs">
                   <KeyValueMap items={status.queue} />
                 </Panel>
+                <Panel title="Source Jobs" subtitle="Durable intake backlog">
+                  <KeyValueMap items={status.source_jobs ?? {}} />
+                </Panel>
+                <Panel title="Processing Ledger" subtitle={`${sourceJobs.total} durable jobs`}>
+                  <div className="source-list">
+                    {sourceJobs.jobs.map((job) => (
+                      <article key={job.job_id} className={`source-card state-${job.status}`}>
+                        <div className="run-head">
+                          <strong>{job.filename ?? job.normalized_source ?? job.source_id}</strong>
+                          <span className="pill">{job.status}</span>
+                        </div>
+                        <p className="mono">{job.job_id}</p>
+                        <div className="run-meta">
+                          <span>{job.job_type}</span>
+                          <span>attempt {job.attempt_count}</span>
+                          <span>source {job.source_status ?? "unknown"}</span>
+                          <span>{formatBytes(Number(job.size_bytes ?? 0))}</span>
+                        </div>
+                        <div className="run-meta">
+                          <span>available {new Date(job.available_at).toLocaleString()}</span>
+                          {job.locked_by && <span>locked by {job.locked_by}</span>}
+                        </div>
+                        {job.last_error && <p className="error-text">{job.last_error}</p>}
+                      </article>
+                    ))}
+                    {!sourceJobs.jobs.length && (
+                      <p className="empty-state">No durable source jobs found.</p>
+                    )}
+                  </div>
+                </Panel>
+                <Panel title="Provider Pressure" subtitle="Global LLM budgets">
+                  <KeyValueMap items={flattenProviderPressure(status.provider_pressure ?? {})} />
+                </Panel>
                 <Panel title="Graph Counts" subtitle="Persistent knowledge">
                   <KeyValueMap items={status.graph} />
                 </Panel>
@@ -960,13 +1182,24 @@ function App() {
   );
 }
 
-function ThinkingStageCanvas(props: { track: PipelineTrack | null }) {
+function ThinkingStageCanvas(props: {
+  track: PipelineTrack | null;
+  proposalArtifactCount?: number;
+  entrepreneurshipArtifactCount?: number;
+}) {
   if (!props.track) {
     return <div className="theater-canvas empty-canvas">No active pipeline</div>;
   }
   const track = props.track;
 
   const currentStageIndex = Math.max(0, STAGES.findIndex((stage) => stage === track.currentStage));
+  const revealedStages = new Set<StageName>(["CHAOS", track.currentStage, ...track.completedStages]);
+  if ((props.proposalArtifactCount ?? 0) > 0) {
+    revealedStages.add("PROPOSAL");
+  }
+  if ((props.entrepreneurshipArtifactCount ?? 0) > 0) {
+    revealedStages.add("ENTREPRENEUR");
+  }
 
   return (
     <div className={`theater-canvas ${track.spark ? "sparked" : ""}`}>
@@ -974,11 +1207,14 @@ function ThinkingStageCanvas(props: { track: PipelineTrack | null }) {
         {STAGES.map((stage, index) => {
           const completed = track.completedStages.has(stage);
           const active = stage === track.currentStage;
+          const revealed = revealedStages.has(stage);
           return (
             <div key={stage} className="stage-column">
-              <div className={`stage-core stage-${stage.toLowerCase()} ${completed ? "completed" : ""} ${active ? "active" : ""}`}>
-                <StageGlyph stage={stage} active={active} />
-                <span className="stage-axiom">{STAGE_AXIOMS[stage]}</span>
+              <div
+                className={`stage-core stage-${stage.toLowerCase()} ${completed ? "completed" : ""} ${active ? "active" : ""} ${revealed ? "" : "locked"}`}
+              >
+                {revealed ? <StageGlyph stage={stage} active={active} /> : <LockedStageGlyph />}
+                <span className="stage-axiom">{revealed ? STAGE_AXIOMS[stage] : "locked until real event"}</span>
               </div>
               <span className="stage-label">{STAGE_LABELS[stage]}</span>
             </div>
@@ -993,6 +1229,15 @@ function ThinkingStageCanvas(props: { track: PipelineTrack | null }) {
         </div>
       </div>
       <div className="traveler" style={{ left: `${(currentStageIndex / (STAGES.length - 1)) * 100}%` }} />
+    </div>
+  );
+}
+
+function LockedStageGlyph() {
+  return (
+    <div className="stage-glyph glyph-locked" aria-hidden="true">
+      <span className="lock-ring" />
+      <span className="lock-bar" />
     </div>
   );
 }
@@ -1177,6 +1422,16 @@ function KeyValueMap(props: { items: Record<string, unknown>; boolean?: boolean 
   );
 }
 
+function flattenProviderPressure(items: Record<string, Record<string, number>>) {
+  const flattened: Record<string, number> = {};
+  Object.entries(items).forEach(([provider, metrics]) => {
+    Object.entries(metrics).forEach(([metric, value]) => {
+      flattened[`${provider}.${metric}`] = value;
+    });
+  });
+  return flattened;
+}
+
 function Metric(props: { label: string; value: string }) {
   return (
     <div className="metric">
@@ -1205,6 +1460,16 @@ function deriveWorkerCards(status: StudioStatus) {
   ];
 }
 
+function pipelineIdsForEvent(event: StudioEvent): string[] {
+  if (typeof event.pipeline_id === "string" && event.pipeline_id) {
+    return [event.pipeline_id];
+  }
+  if (Array.isArray(event.pipeline_ids)) {
+    return event.pipeline_ids.filter((id): id is string => typeof id === "string" && Boolean(id));
+  }
+  return [];
+}
+
 function derivePipelineTracks(events: StudioEvent[]): PipelineTrack[] {
   const byPipeline = new Map<string, PipelineTrack>();
   const uploadNames = new Map<string, string>();
@@ -1216,60 +1481,72 @@ function derivePipelineTracks(events: StudioEvent[]): PipelineTrack[] {
   }
 
   for (const event of events) {
-    const pipelineId = event.pipeline_id;
-    if (!pipelineId) continue;
-    const current =
-      byPipeline.get(pipelineId) ??
-      {
-        pipelineId,
-        uploadId: event.upload_id,
-        sourceLabel: String(
-          event.filename ??
-            (typeof event.upload_id === "string" ? uploadNames.get(event.upload_id) : undefined) ??
-            event.upload_id ??
-            "Untitled upload",
-        ),
-        currentStage: "CHAOS" as StageName,
-        startedAt: event.timestamp,
-        completedStages: new Set<StageName>(),
-        failed: false,
-        spark: false,
-        provider: undefined,
-        model: undefined,
-      };
+    for (const pipelineId of pipelineIdsForEvent(event)) {
+      const current =
+        byPipeline.get(pipelineId) ??
+        {
+          pipelineId,
+          uploadId: event.upload_id,
+          sourceLabel: String(
+            event.filename ??
+              (typeof event.upload_id === "string" ? uploadNames.get(event.upload_id) : undefined) ??
+              event.upload_id ??
+              pipelineId,
+          ),
+          currentStage: "CHAOS" as StageName,
+          startedAt: event.timestamp,
+          completedStages: new Set<StageName>(),
+          failed: false,
+          completed: false,
+          spark: false,
+          provider: undefined,
+          model: undefined,
+        };
 
-    if (event.type === "source_uploaded" || event.type === "chaos_note_created") {
-      current.currentStage = "CHAOS";
-      current.sourceLabel = String(event.filename ?? current.sourceLabel);
+      if (event.type === "source_uploaded" || event.type === "chaos_note_created") {
+        current.currentStage = "CHAOS";
+        current.sourceLabel = String(event.filename ?? current.sourceLabel);
+      }
+      if (typeof event.filename === "string" && event.filename) {
+        current.sourceLabel = event.filename;
+      }
+      if (event.type === "stage_started" && typeof event.stage === "string") {
+        current.currentStage = normalizeStage(event.stage);
+        current.provider = typeof event.provider === "string" ? event.provider : current.provider;
+        current.model = typeof event.model === "string" ? event.model : current.model;
+      }
+      if (event.type === "stage_completed" && typeof event.stage === "string") {
+        const stage = normalizeStage(event.stage);
+        current.completedStages.add(stage);
+        current.currentStage = stage;
+      }
+      if (event.type === "threshold_crossed") {
+        current.spark = true;
+      }
+      if (event.type === "proposal_generation_started") {
+        current.currentStage = "PROPOSAL";
+      }
+      if (event.type === "proposal_review_started") {
+        current.currentStage = "ENTREPRENEUR";
+      }
+      if (event.type === "proposal_review_completed") {
+        current.completedStages.add("ENTREPRENEUR");
+        current.currentStage = "ENTREPRENEUR";
+        current.completed = true;
+      }
+      if (event.type === "pipeline_completed") {
+        if (typeof event.final_stage === "string") {
+          current.currentStage = normalizeStage(event.final_stage);
+          current.completedStages.add(current.currentStage);
+        }
+        current.completed = true;
+      }
+      if (event.type === "pipeline_failed") {
+        current.failed = true;
+        current.completed = true;
+      }
+      byPipeline.set(pipelineId, current);
     }
-    if (typeof event.filename === "string" && event.filename) {
-      current.sourceLabel = event.filename;
-    }
-    if (event.type === "stage_started" && typeof event.stage === "string") {
-      current.currentStage = normalizeStage(event.stage);
-      current.provider = typeof event.provider === "string" ? event.provider : current.provider;
-      current.model = typeof event.model === "string" ? event.model : current.model;
-    }
-    if (event.type === "stage_completed" && typeof event.stage === "string") {
-      const stage = normalizeStage(event.stage);
-      current.completedStages.add(stage);
-      current.currentStage = stage;
-    }
-    if (event.type === "threshold_crossed") {
-      current.spark = true;
-      current.currentStage = "IMPACT";
-    }
-    if (event.type === "proposal_review_started") {
-      current.currentStage = "ENTREPRENEUR";
-    }
-    if (event.type === "proposal_review_completed") {
-      current.completedStages.add("ENTREPRENEUR");
-      current.currentStage = "ENTREPRENEUR";
-    }
-    if (event.type === "pipeline_failed") {
-      current.failed = true;
-    }
-    byPipeline.set(pipelineId, current);
   }
 
   return Array.from(byPipeline.values()).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -1280,43 +1557,44 @@ function deriveJudgmentSignals(events: StudioEvent[], tracks: PipelineTrack[]): 
   const signals: JudgmentSignal[] = [];
 
   for (const event of events) {
-    if (!event.pipeline_id) continue;
-    const track = tracksById.get(event.pipeline_id);
-    if (event.type === "threshold_crossed") {
-      signals.push({
-        id: event.id,
-        pipelineId: event.pipeline_id,
-        title: track?.sourceLabel ?? event.pipeline_id,
-        state: "warming",
-        rationale: `Threshold crossed${typeof event.incremental_ratio === "number" ? ` at ${(event.incremental_ratio * 100).toFixed(1)}% graph growth` : ""}. Higher-order synthesis activated.`,
-        provider: track?.provider,
-        model: track?.model,
-        timestamp: event.timestamp,
-      });
-    }
-    if (event.type === "proposal_review_started") {
-      signals.push({
-        id: event.id,
-        pipelineId: event.pipeline_id,
-        title: track?.sourceLabel ?? event.pipeline_id,
-        state: "under_review",
-        rationale: "Entrepreneur evaluation has started for this cognition chain.",
-        provider: typeof event.provider === "string" ? event.provider : track?.provider,
-        model: typeof event.model === "string" ? event.model : track?.model,
-        timestamp: event.timestamp,
-      });
-    }
-    if (event.type === "proposal_review_completed") {
-      signals.push({
-        id: event.id,
-        pipelineId: event.pipeline_id,
-        title: track?.sourceLabel ?? event.pipeline_id,
-        state: "completed",
-        rationale: "Entrepreneur evaluation finished. Use the live console and downstream notes for full reasoning.",
-        provider: track?.provider,
-        model: track?.model,
-        timestamp: event.timestamp,
-      });
+    for (const pipelineId of pipelineIdsForEvent(event)) {
+      const track = tracksById.get(pipelineId);
+      if (event.type === "threshold_crossed") {
+        signals.push({
+          id: `${event.id}-${pipelineId}`,
+          pipelineId,
+          title: track?.sourceLabel ?? pipelineId,
+          state: "warming",
+          rationale: `Threshold crossed${typeof event.incremental_ratio === "number" ? ` at ${(event.incremental_ratio * 100).toFixed(1)}% graph growth` : ""}. Higher-order synthesis activated.`,
+          provider: track?.provider,
+          model: track?.model,
+          timestamp: event.timestamp,
+        });
+      }
+      if (event.type === "proposal_review_started") {
+        signals.push({
+          id: `${event.id}-${pipelineId}`,
+          pipelineId,
+          title: track?.sourceLabel ?? pipelineId,
+          state: "under_review",
+          rationale: "Entrepreneur evaluation has started for this cognition chain.",
+          provider: typeof event.provider === "string" ? event.provider : track?.provider,
+          model: typeof event.model === "string" ? event.model : track?.model,
+          timestamp: event.timestamp,
+        });
+      }
+      if (event.type === "proposal_review_completed") {
+        signals.push({
+          id: `${event.id}-${pipelineId}`,
+          pipelineId,
+          title: track?.sourceLabel ?? pipelineId,
+          state: "completed",
+          rationale: "Entrepreneur evaluation finished. Use the live console and downstream notes for full reasoning.",
+          provider: track?.provider,
+          model: track?.model,
+          timestamp: event.timestamp,
+        });
+      }
     }
   }
 

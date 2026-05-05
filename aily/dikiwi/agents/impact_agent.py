@@ -147,11 +147,27 @@ class ImpactAgent(DikiwiAgent):
         if not ctx.graph_db:
             return []
         try:
-            nodes = await ctx.graph_db.get_top_nodes_by_edge_count(limit=15)
-            return [node for node in nodes if node.get("type") == "information"]
+            if hasattr(ctx.graph_db, "get_top_information_nodes_by_semantic_edge_count"):
+                nodes = await ctx.graph_db.get_top_information_nodes_by_semantic_edge_count(limit=15)
+            else:
+                nodes = await ctx.graph_db.get_top_nodes_by_edge_count(limit=15)
+            return [
+                node
+                for node in nodes
+                if node.get("type") == "information" and not self._is_generic_center(node)
+            ]
         except Exception as exc:
             logger.warning("[DIKIWI] Failed to load graph centers for impact: %s", exc)
             return []
+
+    @staticmethod
+    def _is_generic_center(node: dict[str, Any]) -> bool:
+        label = str(node.get("label") or "").strip().lower().replace("_", " ").replace("-", " ")
+        if not label:
+            return True
+        if label.startswith(("page ", "slide ")) and label.split(" ", 1)[1].strip().isdigit():
+            return True
+        return label in {"page", "slide", "visual", "image", "figure", "table"}
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

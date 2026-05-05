@@ -92,3 +92,24 @@ async def test_ui_event_hub_queries_persisted_events_by_lineage_ids(tmp_path) ->
     assert [event["stage"] for event in by_run] == ["DATA"]
     assert [event["stage"] for event in by_pipeline] == ["IMPACT"]
     assert [event["pipeline_id"] for event in by_upload] == ["pipe-1"]
+
+
+@pytest.mark.asyncio
+async def test_ui_event_hub_assigns_sequence_numbers_and_pages_persisted_events(tmp_path) -> None:
+    event_log = tmp_path / "ui-events.jsonl"
+    hub = UIEventHub(max_events=10)
+    hub.configure_persistence(event_log)
+
+    await hub.emit("stage_started", stage="DATA")
+    await hub.emit("stage_completed", stage="DATA")
+    await hub.emit("stage_started", stage="INFORMATION")
+
+    restored = UIEventHub(max_events=10)
+    restored.configure_persistence(event_log)
+
+    first_page = await restored.query_persisted(after_seq=0, limit=2)
+    second_page = await restored.query_persisted(after_seq=first_page[-1]["seq"], limit=2)
+
+    assert [event["seq"] for event in first_page] == [1, 2]
+    assert [event["seq"] for event in second_page] == [3]
+    assert second_page[0]["stage"] == "INFORMATION"

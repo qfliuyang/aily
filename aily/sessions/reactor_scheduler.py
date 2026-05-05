@@ -17,7 +17,7 @@ from typing import Any
 
 from aily.dikiwi.agents.llm_tools import chat_json
 from aily.sessions.base import BaseMindScheduler
-from aily.sessions.models import Proposal, ProposalStage
+from aily.sessions.models import Proposal, ProposalStage, ProposalType
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,8 @@ class ReactorScheduler(BaseMindScheduler):
 
         logger.info(f"[Reactor] evaluate_context: {len(valid_results)}/{len(enabled)} methods produced proposals")
         proposals = await self._synthesis_nozzle(valid_results)
+        if not proposals:
+            proposals = await self._generate_context_fallback_proposals(context, budget=budget)
         self._current_session_proposals = proposals
         if persist:
             await self._persist_framework_proposals(proposals)
@@ -250,6 +252,8 @@ class ReactorScheduler(BaseMindScheduler):
 
         # Synthesis nozzle
         proposals = await self._synthesis_nozzle(valid_results)
+        if not proposals:
+            proposals = await self._generate_context_fallback_proposals(context)
         self._current_session_proposals = proposals
         await self._persist_framework_proposals(proposals)
 
@@ -344,6 +348,134 @@ class ReactorScheduler(BaseMindScheduler):
         # Apply max proposals per session limit
         max_proposals = self.nozzle_config.max_proposals_per_session
         return filtered[:max_proposals]
+
+    async def _generate_context_fallback_proposals(
+        self,
+        context: dict[str, Any],
+        budget: Any | None = None,
+    ) -> list[Proposal]:
+        """Generate bounded, evidence-grounded proposals if all Reactor methods fail or filter out."""
+        recent_insights = context.get("recent_insights", []) or []
+        if not recent_insights:
+            return []
+
+        evidence_lines = []
+        source_ids: list[str] = []
+        for item in recent_insights[:16]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()
+            node_type = str(item.get("type", "")).strip()
+            node_id = str(item.get("id", "")).strip()
+            if not label:
+                continue
+            evidence_lines.append(f"- {node_type}: {label}")
+            if node_id:
+                source_ids.append(node_id)
+
+        if not evidence_lines:
+            return []
+
+        prompt = f"""All configured Reactor methods were executed but produced no proposals that survived the nozzle.
+Use the graph evidence below to create fallback innovation proposals. This is not a mock: each proposal must be grounded in the provided evidence and must be concrete enough for business evaluation.
+
+Focus areas: {", ".join(context.get("focus_areas", []))}
+
+Graph evidence:
+{chr(10).join(evidence_lines)}
+
+Return JSON:
+{{
+  "proposals": [
+    {{
+      "title": "specific non-truncated proposal title",
+      "summary": "one concrete sentence",
+      "problem": "specific workflow or market problem",
+      "solution": "specific product or technical solution",
+      "target_user": "specific user or buyer",
+      "adoption_wedge": "first narrow adoption path",
+      "proof_of_value": "prototype, benchmark, or validation artifact",
+      "technical_path": "implementation path",
+      "business_path": "commercial path",
+      "risks": ["specific risk"],
+      "confidence": 0.0,
+      "innovation_score": 0.0
+    }}
+  ]
+}}
+
+Rules:
+- Produce at most {self.nozzle_config.max_proposals_per_session} proposals.
+- Do not generate generic consulting, dashboard, or platform language.
+- Prefer narrow EDA/deep-tech wedges over broad weak ideas.
+- Confidence must reflect evidence quality; do not inflate scores without concrete proof paths.
+"""
+        try:
+            data = await chat_json(
+                llm_client=self.llm_client,
+                stage="reactor",
+                stage_key="context_fallback",
+                messages=[
+                    {"role": "system", "content": "Return valid JSON only. Generate evidence-grounded innovation proposals."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.45,
+                budget=budget,
+            )
+        except Exception as exc:
+            logger.warning("[Reactor] Context fallback proposal generation failed: %s", exc)
+            return []
+
+        raw_proposals = data.get("proposals", []) if isinstance(data, dict) else []
+        proposals: list[Proposal] = []
+        for raw in raw_proposals:
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title", "")).strip()
+            summary = str(raw.get("summary", "")).strip()
+            if not title or not summary:
+                continue
+            confidence = max(0.0, min(1.0, float(raw.get("confidence") or self.nozzle_config.min_confidence)))
+            innovation_score = max(0.0, min(1.0, float(raw.get("innovation_score") or confidence)))
+            content = "\n\n".join(
+                part
+                for part in [
+                    f"Problem: {raw.get('problem', '')}",
+                    f"Solution: {raw.get('solution', '')}",
+                    f"Target user: {raw.get('target_user', '')}",
+                    f"Adoption wedge: {raw.get('adoption_wedge', '')}",
+                    f"Proof of value: {raw.get('proof_of_value', '')}",
+                    f"Technical path: {raw.get('technical_path', '')}",
+                    f"Business path: {raw.get('business_path', '')}",
+                    "Risks:\n" + "\n".join(f"- {risk}" for risk in raw.get("risks", []) if risk),
+                ]
+                if part and not part.endswith(": ")
+            )
+            proposals.append(
+                Proposal(
+                    mind_name="reactor",
+                    proposal_type=ProposalType.INNOVATION,
+                    title=title,
+                    content=content,
+                    summary=summary,
+                    confidence=confidence,
+                    priority="high" if confidence >= 0.8 else "medium",
+                    innovation_score=innovation_score,
+                    stage=ProposalStage.PENDING_BUSINESS,
+                    source_knowledge_ids=source_ids[:10],
+                    framework_used="Reactor-Context-Fallback",
+                    metadata={
+                        "framework": "Reactor-Context-Fallback",
+                        "fallback_reason": "all_configured_methods_empty_or_filtered",
+                        "source_evidence": evidence_lines[:10],
+                        "proof_of_value": raw.get("proof_of_value", ""),
+                        "adoption_wedge": raw.get("adoption_wedge", ""),
+                    },
+                )
+            )
+
+        proposals.sort(key=lambda item: item.confidence, reverse=True)
+        return proposals[: self.nozzle_config.max_proposals_per_session]
 
     async def _run_triz_method(self, context: dict[str, Any]) -> MethodResult:
         """Adapt the legacy TRIZ analyzer into Reactor proposals."""
@@ -713,7 +845,7 @@ Return JSON:
                 # Get recent nodes as insights
                 nodes = await self.graph_db.get_recent_nodes(limit=20)
                 context["recent_insights"] = [
-                    {"label": n.get("label", ""), "type": n.get("type", "")}
+                    {"id": n.get("id", ""), "label": n.get("label", ""), "type": n.get("type", "")}
                     for n in nodes
                 ]
                 # Build dynamic focus areas from recent node types (deduplicated, preserving order)

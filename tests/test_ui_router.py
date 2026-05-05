@@ -60,6 +60,28 @@ def test_ui_router_auth_gate_when_configured() -> None:
     assert accepted.status_code == 200
 
 
+def test_ui_router_auth_gate_accepts_private_cookie() -> None:
+    app = FastAPI()
+    app.include_router(
+        create_ui_router(
+            upload_handler=None,
+            status_provider=_status_provider,
+            graph_provider=_graph_provider,
+            pipeline_provider=_pipeline_provider,
+            enable_uploads=False,
+            auth_token="secret-token",
+        )
+    )
+    client = TestClient(app)
+
+    rejected = client.get("/api/ui/status")
+    client.cookies.set("aily_ui_token", "secret-token")
+    accepted = client.get("/api/ui/status")
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
 def test_ui_router_websocket_auth_gate_when_configured() -> None:
     import asyncio
     from aily.ui.events import ui_event_hub
@@ -158,6 +180,7 @@ def test_ui_router_source_store_endpoints() -> None:
             pipeline_provider=_pipeline_provider,
             source_provider=_source_provider,
             source_detail_provider=_source_detail_provider,
+            source_jobs_provider=_source_jobs_provider,
             enable_uploads=False,
         )
     )
@@ -172,6 +195,9 @@ def test_ui_router_source_store_endpoints() -> None:
     assert source.status_code == 200
     assert source.json()["status"] == "completed"
     assert missing.status_code == 404
+    jobs = client.get("/api/ui/source-jobs")
+    assert jobs.status_code == 200
+    assert jobs.json()["jobs"][0]["job_id"] == "job-1"
 
 
 def test_ui_router_persisted_event_query_endpoint(tmp_path) -> None:
@@ -201,6 +227,11 @@ def test_ui_router_persisted_event_query_endpoint(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["events"][0]["pipeline_id"] == "pipe-1"
+
+    page = client.get("/api/ui/events/query?after_seq=1&limit=10")
+    assert page.status_code == 200
+    assert page.json()["events"][0]["pipeline_id"] == "pipe-2"
+    assert page.json()["next_after_seq"] == 2
 
 
 def test_ui_router_proposal_entrepreneur_and_control_endpoints() -> None:
@@ -419,6 +450,26 @@ async def _source_detail_provider(source_id: str):
         "status": "completed",
         "filename": "a.txt",
         "size_bytes": 5,
+    }
+
+
+async def _source_jobs_provider(limit: int, offset: int, status: str | None):
+    return {
+        "total": 1,
+        "jobs": [
+            {
+                "job_id": "job-1",
+                "source_id": "source-1",
+                "job_type": "process_upload_source",
+                "status": status or "queued",
+                "attempt_count": 0,
+                "available_at": "2026-01-01T00:00:00+00:00",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "filename": "a.txt",
+                "source_status": "queued",
+            }
+        ],
     }
 
 

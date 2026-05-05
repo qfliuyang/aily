@@ -56,6 +56,7 @@ async def main() -> int:
     full.add_argument("--seed", type=int, default=260502, help="Seed for deterministic PDF pressure-test selection")
     full.add_argument("--phase-timeout", type=float, default=600.0, help="Timeout in seconds for each full-pipeline phase")
     full.add_argument("--force-business", action="store_true", help="Run Reactor/Entrepreneur even if no Impact outputs exist")
+    full.add_argument("--skip-business", action="store_true", help="Stop after DIKIWI; do not run Reactor/Entrepreneur")
 
     legacy = subparsers.add_parser("legacy-atomicizer", help="Run the old Kimi->atomicizer MVP path in one scenario")
     legacy.add_argument("--url", required=True, help="Kimi share URL")
@@ -92,6 +93,7 @@ async def main() -> int:
             source_seed=args.seed,
             phase_timeout_seconds=args.phase_timeout,
             force_business=args.force_business,
+            skip_business=args.skip_business,
         )
     elif args.scenario == "legacy-atomicizer":
         result = await scenario_legacy_atomicizer(

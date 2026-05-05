@@ -54,7 +54,8 @@ from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.processing.router import ProcessingRouter
-from aily.source_store import SourceStore
+from aily.runtime.backpressure import provider_backpressure
+from aily.source_store import SourceJobCapacityError, SourceStore
 from aily.ui.events import emit_ui_event, ui_event_hub
 from aily.ui.router import create_ui_router
 from aily.verify.run_registry import RunRegistry
@@ -88,6 +89,8 @@ claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 ws_client = None
 browser_manager_instance = None
 ui_upload_tasks: dict[str, asyncio.Task[Any]] = {}
+source_worker_tasks: list[asyncio.Task[Any]] = []
+source_worker_stop: asyncio.Event | None = None
 ui_upload_semaphore = asyncio.Semaphore(max(1, SETTINGS.ui_upload_concurrency))
 ui_rate_limiter = FixedWindowRateLimiter(
     max_requests=max(1, SETTINGS.ui_rate_limit_requests),
@@ -109,6 +112,78 @@ ERROR_MESSAGES = {
     "OBSIDIAN_TIMEOUT": "Obsidian did not respond. Please check that the vault is open.",
     "PUSH_FAILED": "Saved to Obsidian, but could not send confirmation.",
 }
+
+
+def _retry_delay_for_attempt(attempt_count: int) -> float:
+    base = max(1.0, float(SETTINGS.source_retry_base_delay_seconds))
+    cap = max(base, float(SETTINGS.source_retry_max_delay_seconds))
+    return min(cap, base * (2 ** max(0, attempt_count - 1)))
+
+
+def _is_retryable_processing_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    retry_markers = (
+        "timed out",
+        "timeout",
+        "llm failed",
+        "provider",
+        "rate limit",
+        "temporarily",
+        "connection",
+        "network",
+        "circuit breaker",
+    )
+    return any(marker in lowered for marker in retry_markers)
+
+
+def _failed_stage(result: Any) -> Any | None:
+    return next((stage for stage in getattr(result, "stage_results", []) if not stage.success), None)
+
+
+def _stage_provider_model(result: Any, stage: Any | None) -> tuple[str, str]:
+    data = getattr(stage, "data", {}) if stage else {}
+    return str(data.get("provider", "")), str(data.get("model", ""))
+
+
+def _source_queue_active_count(counts: dict[str, int]) -> int:
+    return int(counts.get("queued", 0)) + int(counts.get("retry_pending", 0)) + int(counts.get("running", 0))
+
+
+async def _ensure_source_queue_capacity(additional_jobs: int) -> None:
+    max_pending = int(SETTINGS.source_job_max_pending)
+    if max_pending <= 0 or additional_jobs <= 0:
+        return
+    counts = await source_store.get_source_job_counts()
+    active = _source_queue_active_count(counts)
+    if active + additional_jobs > max_pending:
+        await emit_ui_event(
+            "source_queue_rejected",
+            active_jobs=active,
+            requested_jobs=additional_jobs,
+            max_pending=max_pending,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "source_queue_full",
+                "active_jobs": active,
+                "requested_jobs": additional_jobs,
+                "max_pending": max_pending,
+            },
+        )
+
+
+def _should_enqueue_upload_source(source_record: dict[str, Any]) -> bool:
+    if not source_record.get("duplicate"):
+        return True
+    return str(source_record.get("status") or "") in {
+        "stored",
+        "deferred",
+        "failed",
+        "failed_retry_exhausted",
+        "cancelled",
+        "retry_pending",
+    }
 
 
 async def _enqueue_url(url: str, open_id: str = "") -> None:
@@ -163,12 +238,20 @@ async def _process_reactor_job(job: dict) -> None:
         logger.warning("Reactor scheduler not available, skipping job %s", job.get("id"))
         return
     context = job.get("payload", {}).get("context", {})
-    proposals = await innovation_scheduler.evaluate_context(context)
+    proposals = await innovation_scheduler.evaluate_context(context, persist=True, output=True)
     logger.info(
         "Reactor evaluation completed for job %s: %d proposals",
         job.get("id"),
         len(proposals),
     )
+    if proposals and entrepreneur_scheduler is not None:
+        await db.enqueue(
+            "entrepreneur_evaluate",
+            {
+                "pipeline_id": context.get("pipeline_id"),
+                "proposal_ids": [proposal.proposal_id for proposal in proposals],
+            },
+        )
 
 
 async def _process_entrepreneur_job(job: dict) -> None:
@@ -547,7 +630,7 @@ async def _process_ui_upload(
                 id="",
                 rain_type=RainType.DOCUMENT,
                 content=content,
-                raw_bytes=data,
+                raw_bytes=b"",
                 source="web_upload",
                 source_id=source_id,
                 stream_type=StreamType.EXTRACT_ANALYZE,
@@ -579,6 +662,15 @@ async def _process_ui_upload(
                 final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
                 stage_count=len(result.stage_results),
             )
+            if upload_id.startswith("retry-"):
+                await emit_ui_event(
+                    "source_retry_completed",
+                    upload_id=upload_id,
+                    source_id=source_id,
+                    filename=filename,
+                    pipeline_id=result.pipeline_id,
+                    final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+                )
     except asyncio.CancelledError:
         await emit_ui_event(
             "upload_cancelled",
@@ -596,9 +688,408 @@ async def _process_ui_upload(
             source_id=source_id,
             error=str(exc),
         )
+        if upload_id.startswith("retry-"):
+            await emit_ui_event(
+                "source_retry_failed",
+                upload_id=upload_id,
+                source_id=source_id,
+                filename=filename,
+                error=str(exc),
+            )
         await source_store.update_status(source_id, "failed", {"error": str(exc)})
     finally:
         ui_upload_tasks.pop(upload_id, None)
+
+
+async def _process_upload_source_job(job: dict[str, Any]) -> str:
+    payload = dict(job.get("payload") or {})
+    source_id = str(job.get("source_id") or payload.get("source_id") or "")
+    upload_id = str(payload.get("upload_id") or f"source-job-{job.get('job_id', '')}")
+    batch_id = str(payload.get("batch_id") or "")
+    source = await source_store.get_source(source_id)
+    if source is None:
+        return "failed:source_not_found"
+    filename = str(source.get("filename") or payload.get("filename") or source_id)
+    content_type = str(source.get("content_type") or payload.get("content_type") or "application/octet-stream")
+
+    await emit_ui_event(
+        "source_job_started",
+        job_id=job.get("job_id"),
+        source_id=source_id,
+        upload_id=upload_id,
+        batch_id=batch_id or None,
+        filename=filename,
+        job_type=job.get("job_type"),
+        attempt_count=job.get("attempt_count", 0),
+    )
+    await source_store.update_status(
+        source_id,
+        "extracting",
+        {"job_id": job.get("job_id"), "batch_id": batch_id, "upload_id": upload_id},
+    )
+    data = await source_store.read_stored_object(source_id)
+    router = ProcessingRouter(browser_manager=browser_manager_instance)
+    extracted = await router.process(data, filename=filename, http_content_type=content_type)
+    await source_store.update_status(
+        source_id,
+        "extracted",
+        {
+            "source_type": extracted.source_type,
+            "extracted_chars": len(extracted.text or ""),
+            "batch_id": batch_id,
+            "job_id": job.get("job_id"),
+        },
+    )
+    await emit_ui_event(
+        "chaos_note_created",
+        batch_id=batch_id or None,
+        upload_id=upload_id,
+        source_id=source_id,
+        filename=filename,
+        source_type=extracted.source_type,
+        title=extracted.title or Path(filename).stem,
+        text_length=len(extracted.text or ""),
+    )
+
+    if not dikiwi_mind:
+        raise RuntimeError("DIKIWI Mind is not initialized")
+
+    title = extracted.title or Path(filename).stem
+    content = extracted.text or ""
+    if title:
+        content = f"# {title}\n\n{content}".strip()
+
+    drop = RainDrop(
+        id="",
+        rain_type=RainType.DOCUMENT,
+        content=content,
+        raw_bytes=b"",
+        source="web_upload_source_job",
+        source_id=source_id,
+        stream_type=StreamType.EXTRACT_ANALYZE,
+        metadata={
+            "ui_upload_id": upload_id,
+            "batch_id": batch_id,
+            "source_id": source_id,
+            "filename": filename,
+            "content_type": content_type,
+            "source_type": extracted.source_type,
+            "processing_method": "durable_source_job",
+            **(extracted.metadata or {}),
+        },
+    )
+    await source_store.update_status(source_id, "processing", {"job_id": job.get("job_id"), "batch_id": batch_id})
+    result = await dikiwi_mind.process_input(drop)
+    failed_stage = _failed_stage(result)
+    if failed_stage is not None:
+        error = failed_stage.error_message or f"{failed_stage.stage.name} failed"
+        stage_name = getattr(getattr(failed_stage, "stage", None), "name", "")
+        provider, model = _stage_provider_model(result, failed_stage)
+        attempt_count = int(job.get("attempt_count") or 0)
+        if _is_retryable_processing_error(error) and attempt_count < SETTINGS.source_max_retry_attempts:
+            delay = _retry_delay_for_attempt(attempt_count)
+            await source_store.mark_retry_pending(
+                source_id,
+                error=error,
+                stage=stage_name,
+                provider=provider,
+                model=model,
+                pipeline_id=result.pipeline_id,
+                retry_delay_seconds=delay,
+            )
+            await emit_ui_event(
+                "source_retry_scheduled",
+                job_id=job.get("job_id"),
+                source_id=source_id,
+                upload_id=upload_id,
+                batch_id=batch_id or None,
+                pipeline_id=result.pipeline_id,
+                stage=stage_name,
+                error=error,
+                retry_delay_seconds=delay,
+                attempt_count=attempt_count,
+            )
+            return "retry"
+        await source_store.update_status(
+            source_id,
+            "failed_retry_exhausted" if _is_retryable_processing_error(error) else "failed",
+            {
+                "job_id": job.get("job_id"),
+                "batch_id": batch_id,
+                "pipeline_id": result.pipeline_id,
+                "error": error,
+                "last_failed_stage": stage_name,
+            },
+        )
+        await emit_ui_event(
+            "pipeline_failed",
+            job_id=job.get("job_id"),
+            source_id=source_id,
+            upload_id=upload_id,
+            batch_id=batch_id or None,
+            pipeline_id=result.pipeline_id,
+            error=error,
+        )
+        return "failed"
+
+    await source_store.update_status(
+        source_id,
+        "completed",
+        {
+            "job_id": job.get("job_id"),
+            "batch_id": batch_id,
+            "pipeline_id": result.pipeline_id,
+            "final_stage": result.final_stage_reached.name if result.final_stage_reached else "",
+        },
+    )
+    await emit_ui_event(
+        "source_ingest_completed",
+        job_id=job.get("job_id"),
+        upload_id=upload_id,
+        source_id=source_id,
+        filename=filename,
+        batch_id=batch_id or None,
+        pipeline_id=result.pipeline_id,
+        final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+        stage_count=len(result.stage_results),
+    )
+    return "completed"
+
+
+async def _source_worker_loop(worker_id: str) -> None:
+    logger.info("Source worker %s started", worker_id)
+    stale_lock_seconds = max(60.0, float(SETTINGS.source_job_stale_lock_seconds))
+    while source_worker_stop is None or not source_worker_stop.is_set():
+        try:
+            recovered = await source_store.requeue_stale_running_source_jobs(
+                stale_after_seconds=stale_lock_seconds
+            )
+            if recovered:
+                await emit_ui_event(
+                    "source_jobs_requeued_after_stale_lock",
+                    worker_id=worker_id,
+                    count=recovered,
+                    stale_after_seconds=stale_lock_seconds,
+                )
+            job = await source_store.claim_next_source_job(worker_id=worker_id)
+            if job is None:
+                await asyncio.sleep(2)
+                continue
+            result = "failed"
+            try:
+                if job.get("job_type") == "process_upload_source":
+                    result = await _process_upload_source_job(job)
+                else:
+                    result = f"failed:unknown_job_type:{job.get('job_type')}"
+                if result == "completed":
+                    await source_store.complete_source_job(str(job["job_id"]))
+                elif result == "retry":
+                    delay = _retry_delay_for_attempt(int(job.get("attempt_count") or 1))
+                    await source_store.retry_source_job(str(job["job_id"]), error="retryable processing failure", delay_seconds=delay)
+                else:
+                    await source_store.fail_source_job(str(job["job_id"]), error=result)
+            except Exception as exc:
+                logger.exception("Source job %s failed", job.get("job_id"))
+                attempt_count = int(job.get("attempt_count") or 0)
+                error = str(exc)
+                if _is_retryable_processing_error(error) and attempt_count < SETTINGS.source_max_retry_attempts:
+                    delay = _retry_delay_for_attempt(attempt_count)
+                    await source_store.mark_retry_pending(
+                        str(job.get("source_id")),
+                        error=error,
+                        retry_delay_seconds=delay,
+                    )
+                    await source_store.retry_source_job(str(job["job_id"]), error=error, delay_seconds=delay)
+                else:
+                    await source_store.update_status(str(job.get("source_id")), "failed", {"error": error})
+                    await source_store.fail_source_job(str(job["job_id"]), error=error)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Source worker %s loop error", worker_id)
+            await asyncio.sleep(5)
+    logger.info("Source worker %s stopped", worker_id)
+
+
+async def _retry_source(source: dict[str, Any]) -> dict[str, Any]:
+    source_id = str(source.get("source_id") or "")
+    previous_status = str(source.get("status") or "")
+    kind = str(source.get("kind") or "")
+    retry_id = f"retry-{source_id.split(':', 1)[-1][:12]}-{len(ui_upload_tasks) + 1}"
+    await emit_ui_event(
+        "source_retry_started",
+        upload_id=retry_id,
+        source_id=source_id,
+        source_type=kind,
+        previous_status=previous_status,
+    )
+    if kind == "url":
+        url = str(source.get("normalized_source") or "")
+        if not url:
+            reason = "URL source has no normalized URL to retry."
+            await source_store.update_status(source_id, "failed", {"retry_error": reason, "retry_upload_id": retry_id})
+            await emit_ui_event(
+                "source_retry_failed",
+                upload_id=retry_id,
+                source_id=source_id,
+                source_type=kind,
+                error=reason,
+            )
+            return {"source_id": source_id, "retry_id": retry_id, "started": False, "reason": reason}
+        await source_store.update_status(source_id, "processing", {"retry_upload_id": retry_id})
+        task = asyncio.create_task(_process_ui_url(source_id, url, retry_id=retry_id))
+        ui_upload_tasks[retry_id] = task
+        return {"source_id": source_id, "retry_id": retry_id, "started": True}
+
+    if kind != "upload":
+        reason = "Only stored upload and URL sources can be retried through the current Studio processing path."
+        await source_store.update_status(source_id, "failed", {"retry_error": reason, "retry_upload_id": retry_id})
+        await emit_ui_event(
+            "source_retry_failed",
+            upload_id=retry_id,
+            source_id=source_id,
+            source_type=kind,
+            error=reason,
+        )
+        return {"source_id": source_id, "retry_id": retry_id, "started": False, "reason": reason}
+
+    try:
+        await source_store.read_stored_object(source_id)
+    except Exception as exc:
+        await source_store.update_status(source_id, "failed", {"retry_error": str(exc), "retry_upload_id": retry_id})
+        await emit_ui_event(
+            "source_retry_failed",
+            upload_id=retry_id,
+            source_id=source_id,
+            source_type=kind,
+            error=str(exc),
+        )
+        return {"source_id": source_id, "retry_id": retry_id, "started": False, "reason": str(exc)}
+
+    filename = str(source.get("filename") or f"retry-{retry_id}")
+    content_type = str(source.get("content_type") or "application/octet-stream")
+    await source_store.update_status(source_id, "queued", {"retry_upload_id": retry_id})
+    job = await source_store.enqueue_source_job(
+        source_id=source_id,
+        job_type="process_upload_source",
+        payload={
+            "upload_id": retry_id,
+            "filename": filename,
+            "content_type": content_type,
+            "retry_of_status": previous_status,
+        },
+        priority=50,
+    )
+    await emit_ui_event(
+        "source_job_queued",
+        upload_id=retry_id,
+        source_id=source_id,
+        job_id=job["job_id"],
+        job_type=job["job_type"],
+        filename=filename,
+    )
+    return {"source_id": source_id, "retry_id": retry_id, "started": True}
+
+
+async def _process_ui_url(source_id: str, url: str, *, retry_id: str | None = None) -> None:
+    await emit_ui_event("url_fetch_started", source_id=source_id, url=url)
+    try:
+        await source_store.update_status(source_id, "fetching")
+        router = ProcessingRouter(browser_manager=browser_manager_instance)
+        extracted = await router.process_url(url, browser_manager=browser_manager_instance)
+        if not extracted.text or extracted.text.startswith("[Failed to fetch"):
+            raise RuntimeError(extracted.text or "URL extraction returned no text")
+
+        await source_store.update_status(
+            source_id,
+            "extracted",
+            {
+                "source_type": extracted.source_type,
+                "extracted_chars": len(extracted.text or ""),
+                "title": extracted.title or url,
+            },
+        )
+        await emit_ui_event(
+            "chaos_note_created",
+            source_id=source_id,
+            source_type=extracted.source_type,
+            url=url,
+            title=extracted.title or url,
+            text_length=len(extracted.text or ""),
+        )
+
+        if not dikiwi_mind:
+            raise RuntimeError("DIKIWI Mind is not initialized")
+
+        title = extracted.title or url
+        content = extracted.text or ""
+        if title:
+            content = f"# {title}\n\n{content}".strip()
+
+        drop = RainDrop(
+            id="",
+            rain_type=RainType.URL,
+            content=content,
+            raw_bytes=(extracted.text or "").encode("utf-8"),
+            source="studio_url",
+            source_id=source_id,
+            stream_type=StreamType.FETCH_ANALYZE,
+            metadata={
+                "source_id": source_id,
+                "url": url,
+                "source_type": extracted.source_type,
+                "processing_method": "studio_url_fetch_extract_dikiwi",
+                **(extracted.metadata or {}),
+            },
+        )
+        await source_store.update_status(source_id, "processing")
+        result = await dikiwi_mind.process_input(drop)
+        await source_store.update_status(
+            source_id,
+            "completed",
+            {
+                "pipeline_id": result.pipeline_id,
+                "final_stage": result.final_stage_reached.name if result.final_stage_reached else "",
+            },
+        )
+        await emit_ui_event(
+            "source_ingest_completed",
+            upload_id=retry_id,
+            source_id=source_id,
+            url=url,
+            pipeline_id=result.pipeline_id,
+            final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+            stage_count=len(result.stage_results),
+        )
+        if retry_id:
+            await emit_ui_event(
+                "source_retry_completed",
+                upload_id=retry_id,
+                source_id=source_id,
+                source_type="url",
+                url=url,
+                pipeline_id=result.pipeline_id,
+                final_stage=result.final_stage_reached.name if result.final_stage_reached else "",
+            )
+    except asyncio.CancelledError:
+        await emit_ui_event("url_processing_cancelled", source_id=source_id, url=url)
+        await source_store.update_status(source_id, "cancelled")
+        raise
+    except Exception as exc:
+        logger.exception("UI URL processing failed for %s", url)
+        await emit_ui_event("pipeline_failed", source_id=source_id, url=url, error=str(exc))
+        if retry_id:
+            await emit_ui_event(
+                "source_retry_failed",
+                upload_id=retry_id,
+                source_id=source_id,
+                source_type="url",
+                url=url,
+                error=str(exc),
+            )
+        await source_store.update_status(source_id, "failed", {"error": str(exc)})
+    finally:
+        ui_upload_tasks.pop(retry_id or f"url-{source_id}", None)
 
 
 async def _read_upload_bytes(file: UploadFile, max_bytes: int) -> bytes:
@@ -623,12 +1114,7 @@ async def _read_upload_bytes(file: UploadFile, max_bytes: int) -> bytes:
 
 
 async def _handle_ui_upload(file: UploadFile, upload_id: str) -> dict[str, Any]:
-    if len(ui_upload_tasks) >= SETTINGS.ui_max_active_uploads:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many active uploads; limit is {SETTINGS.ui_max_active_uploads}",
-        )
-
+    await _ensure_source_queue_capacity(1)
     data = await _read_upload_bytes(file, SETTINGS.max_file_size)
     filename = file.filename or f"upload-{upload_id}"
     content_type = file.content_type or "application/octet-stream"
@@ -649,11 +1135,35 @@ async def _handle_ui_upload(file: UploadFile, upload_id: str) -> dict[str, Any]:
         duplicate=source_record["duplicate"],
         sha256=source_record["sha256"],
     )
-    if not source_record["duplicate"]:
-        task = asyncio.create_task(
-            _process_ui_upload(upload_id, source_record["source_id"], filename, content_type, data)
+    should_enqueue = _should_enqueue_upload_source(source_record)
+    if should_enqueue:
+        await source_store.update_status(
+            source_record["source_id"],
+            "queued",
+            {"upload_id": upload_id, "intake": "studio_upload"},
         )
-        ui_upload_tasks[upload_id] = task
+        try:
+            job = await source_store.enqueue_source_job(
+                source_id=source_record["source_id"],
+                job_type="process_upload_source",
+                payload={
+                    "upload_id": upload_id,
+                    "filename": filename,
+                    "content_type": content_type,
+                },
+                max_pending=SETTINGS.source_job_max_pending,
+            )
+        except SourceJobCapacityError as exc:
+            await source_store.update_status(source_record["source_id"], "deferred", {"queue_error": str(exc)})
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        await emit_ui_event(
+            "source_job_queued",
+            upload_id=upload_id,
+            source_id=source_record["source_id"],
+            job_id=job["job_id"],
+            job_type=job["job_type"],
+            filename=filename,
+        )
     return {
         "upload_id": upload_id,
         "source_id": source_record["source_id"],
@@ -662,18 +1172,14 @@ async def _handle_ui_upload(file: UploadFile, upload_id: str) -> dict[str, Any]:
         "size_bytes": len(data),
         "sha256": source_record["sha256"],
         "duplicate": source_record["duplicate"],
-        "status": "duplicate" if source_record["duplicate"] else "accepted",
+        "status": "queued" if should_enqueue else "duplicate",
     }
 
 
 async def _handle_ui_upload_batch(files: list[tuple[UploadFile, str]], batch_id: str) -> dict[str, Any]:
-    if len(ui_upload_tasks) >= SETTINGS.ui_max_active_uploads:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many active uploads; limit is {SETTINGS.ui_max_active_uploads}",
-        )
     if not dikiwi_mind:
         raise HTTPException(status_code=503, detail="DIKIWI Mind is not initialized")
+    await _ensure_source_queue_capacity(len(files))
 
     accepted: list[dict[str, Any]] = []
     stored_items: list[dict[str, Any]] = []
@@ -707,6 +1213,7 @@ async def _handle_ui_upload_batch(files: list[tuple[UploadFile, str]], batch_id:
             duplicate=source_record["duplicate"],
             sha256=source_record["sha256"],
         )
+        should_enqueue = _should_enqueue_upload_source(source_record)
         item = {
             "upload_id": upload_id,
             "source_id": source_record["source_id"],
@@ -715,15 +1222,123 @@ async def _handle_ui_upload_batch(files: list[tuple[UploadFile, str]], batch_id:
             "size_bytes": len(data),
             "sha256": source_record["sha256"],
             "duplicate": source_record["duplicate"],
-            "status": "duplicate" if source_record["duplicate"] else "accepted",
-            "data": data,
+            "status": "queued" if should_enqueue else "duplicate",
         }
+        if should_enqueue:
+            await source_store.update_status(
+                source_record["source_id"],
+                "queued",
+                {"upload_id": upload_id, "batch_id": batch_id, "intake": "studio_upload"},
+            )
+            try:
+                job = await source_store.enqueue_source_job(
+                    source_id=source_record["source_id"],
+                    job_type="process_upload_source",
+                    payload={
+                        "upload_id": upload_id,
+                        "batch_id": batch_id,
+                        "filename": filename,
+                        "content_type": content_type,
+                    },
+                    max_pending=SETTINGS.source_job_max_pending,
+                )
+            except SourceJobCapacityError as exc:
+                await source_store.update_status(source_record["source_id"], "deferred", {"queue_error": str(exc)})
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            await emit_ui_event(
+                "source_job_queued",
+                batch_id=batch_id,
+                upload_id=upload_id,
+                source_id=source_record["source_id"],
+                job_id=job["job_id"],
+                job_type=job["job_type"],
+                filename=filename,
+            )
         stored_items.append(item)
-        accepted.append({key: value for key, value in item.items() if key != "data"})
+        accepted.append(dict(item))
 
-    task = asyncio.create_task(_process_ui_upload_batch(batch_id, stored_items))
-    ui_upload_tasks[batch_id] = task
-    return {"batch_id": batch_id, "uploads": accepted, "status": "accepted"}
+    await emit_ui_event(
+        "upload_batch_queued",
+        batch_id=batch_id,
+        queued=sum(1 for item in accepted if item["status"] == "queued"),
+        duplicates=sum(1 for item in stored_items if item["duplicate"]),
+    )
+    return {"batch_id": batch_id, "uploads": accepted, "status": "queued"}
+
+
+def _batch_reached_impact(batch: Any) -> bool:
+    """Return true when a DIKIWI batch produced graph-level impact output."""
+    if getattr(batch, "higher_order_triggered", False):
+        return True
+    for result in getattr(batch, "results", []) or []:
+        stage = getattr(result, "final_stage_reached", None)
+        if getattr(stage, "name", "") == "IMPACT":
+            return True
+    return False
+
+
+async def _run_studio_business_flow(batch_id: str, batch: Any) -> dict[str, Any]:
+    """Run Reactor and Entrepreneur from the same Studio batch path users exercise."""
+    pipeline_ids = [result.pipeline_id for result in getattr(batch, "results", []) or []]
+    if not _batch_reached_impact(batch):
+        await emit_ui_event(
+            "business_flow_skipped",
+            batch_id=batch_id,
+            pipeline_ids=pipeline_ids,
+            reason="batch_did_not_reach_impact",
+        )
+        return {"ran": False, "reason": "batch_did_not_reach_impact", "proposal_count": 0}
+    if innovation_scheduler is None:
+        await emit_ui_event(
+            "business_flow_skipped",
+            batch_id=batch_id,
+            pipeline_ids=pipeline_ids,
+            reason="reactor_scheduler_unavailable",
+        )
+        return {"ran": False, "reason": "reactor_scheduler_unavailable", "proposal_count": 0}
+
+    context = await innovation_scheduler._gather_context()
+    context["studio_batch"] = {
+        "batch_id": batch_id,
+        "pipeline_ids": pipeline_ids,
+        "incremental_ratio": getattr(batch, "incremental_ratio", 0.0),
+        "incremental_threshold": getattr(batch, "incremental_threshold", 0.0),
+        "higher_order_triggered": getattr(batch, "higher_order_triggered", False),
+    }
+
+    provider = getattr(innovation_scheduler.llm_client, "_provider_name", lambda: "unknown")()
+    await emit_ui_event(
+        "proposal_generation_started",
+        batch_id=batch_id,
+        pipeline_ids=pipeline_ids,
+        provider=provider,
+        model=getattr(innovation_scheduler.llm_client, "model", ""),
+    )
+    proposals = await innovation_scheduler.evaluate_context(context, persist=True, output=True)
+    await emit_ui_event(
+        "proposal_generation_completed",
+        batch_id=batch_id,
+        pipeline_ids=pipeline_ids,
+        proposal_count=len(proposals),
+    )
+
+    if proposals and entrepreneur_scheduler is not None:
+        await emit_ui_event(
+            "proposal_review_started",
+            batch_id=batch_id,
+            pipeline_ids=pipeline_ids,
+            provider=getattr(entrepreneur_scheduler.llm_client, "_provider_name", lambda: "unknown")(),
+            model=getattr(entrepreneur_scheduler.llm_client, "model", ""),
+        )
+        await entrepreneur_scheduler._run_session_wrapper()
+        await emit_ui_event(
+            "proposal_review_completed",
+            batch_id=batch_id,
+            pipeline_ids=pipeline_ids,
+            proposal_count=len(proposals),
+        )
+
+    return {"ran": True, "reason": "", "proposal_count": len(proposals)}
 
 
 async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -> None:
@@ -744,8 +1359,9 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
         )
         for item in process_items:
             await source_store.update_status(item["source_id"], "extracting")
+            data = await source_store.read_stored_object(item["source_id"])
             extracted = await router.process(
-                item["data"],
+                data,
                 filename=item["filename"],
                 http_content_type=item["content_type"],
             )
@@ -778,7 +1394,7 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
                 id="",
                 rain_type=RainType.DOCUMENT,
                 content=content,
-                raw_bytes=item["data"],
+                raw_bytes=b"",
                 source="web_upload_batch",
                 source_id=item["source_id"],
                 stream_type=StreamType.EXTRACT_ANALYZE,
@@ -831,6 +1447,7 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
                     },
                 )
 
+        business_result = await _run_studio_business_flow(batch_id, batch)
         await emit_ui_event(
             "upload_batch_completed",
             batch_id=batch_id,
@@ -840,6 +1457,7 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
             incremental_threshold=batch.incremental_threshold,
             higher_order_triggered=batch.higher_order_triggered,
             pipeline_ids=[result.pipeline_id for result in batch.results],
+            business_flow=business_result,
         )
     except asyncio.CancelledError:
         await emit_ui_event("upload_batch_cancelled", batch_id=batch_id, source_count=len(process_items))
@@ -857,14 +1475,21 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
 
 async def _handle_ui_url(url: str) -> dict[str, Any]:
     source = await source_store.store_url(url=url, metadata={"intake": "studio_url"})
+    if not source["duplicate"]:
+        task_key = f"url-{source['source_id']}"
+        task = asyncio.create_task(_process_ui_url(source["source_id"], url))
+        ui_upload_tasks[task_key] = task
     return {
         **source,
-        "status": "duplicate" if source["duplicate"] else "accepted",
+        "status": "duplicate" if source["duplicate"] else "queued",
+        "processing": not source["duplicate"],
     }
 
 
 async def _ui_status_provider() -> dict[str, Any]:
     queue_counts = await db.get_job_counts()
+    source_job_counts = await source_store.get_source_job_counts()
+    provider_pressure = await provider_backpressure.snapshot()
     graph_counts = {}
     for node_type in [
         "data",
@@ -882,13 +1507,21 @@ async def _ui_status_provider() -> dict[str, Any]:
             graph_counts[node_type] = 0
 
     worker_running = bool(worker and worker._task and not worker._task.done())
+    source_workers_running = sum(1 for task in source_worker_tasks if not task.done())
     return {
         "queue": queue_counts,
+        "source_jobs": source_job_counts,
+        "provider_pressure": provider_pressure,
         "graph": graph_counts,
-        "active_pipelines": ui_event_hub.active_pipeline_ids(),
+        "active_pipelines": [
+            pipeline_id
+            for pipeline_id in ui_event_hub.active_pipeline_ids()
+            if source_job_counts.get("running", 0) > 0
+        ],
         "active_uploads": sorted(ui_upload_tasks.keys()),
         "daemons": {
             "queue_worker": worker_running,
+            "source_workers": source_workers_running,
             "passive_capture_scheduler": scheduler is not None,
             "daily_digest_scheduler": digest_scheduler is not None,
             "claude_capture_scheduler": claude_capture_scheduler is not None,
@@ -924,6 +1557,10 @@ async def _ui_sources_provider(limit: int, offset: int) -> dict[str, Any]:
 
 async def _ui_source_detail_provider(source_id: str) -> dict[str, Any] | None:
     return await source_store.get_source(source_id)
+
+
+async def _ui_source_jobs_provider(limit: int, offset: int, status: str | None = None) -> dict[str, Any]:
+    return await source_store.list_source_jobs(limit=limit, offset=offset, status=status)
 
 
 def _studio_vault_path() -> Path:
@@ -997,23 +1634,29 @@ async def _ui_control_handler(action: str, payload: dict[str, Any]) -> dict[str,
         target_ids = sorted(ui_upload_tasks)
         for task in list(ui_upload_tasks.values()):
             task.cancel()
+        source_job_ids = await source_store.cancel_running_source_jobs()
         await emit_ui_event("uploads_cancel_requested", upload_ids=target_ids, count=len(target_ids))
-        return {"action": action, "cancelled": len(target_ids), "upload_ids": target_ids}
+        return {
+            "action": action,
+            "cancelled": len(target_ids),
+            "upload_ids": target_ids,
+            "source_job_ids": source_job_ids,
+        }
 
     if action == "retry_failed_sources":
-        listing = await source_store.list_sources(limit=500, offset=0)
-        failed = [source for source in listing.get("sources", []) if source.get("status") == "failed"]
-        for source in failed:
-            await source_store.update_status(source["source_id"], "stored", {"retry_requested": True})
+        failed = await source_store.list_failed_sources(limit=500)
         await emit_ui_event(
             "retry_failed_sources_requested",
             source_ids=[source["source_id"] for source in failed],
             count=len(failed),
         )
+        retries = [await _retry_source(source) for source in failed]
         return {
             "action": action,
             "retry_requested": len(failed),
+            "retry_started": sum(1 for retry in retries if retry.get("started")),
             "source_ids": [source["source_id"] for source in failed],
+            "retries": retries,
         }
 
     if action == "create_backup":
@@ -1099,6 +1742,7 @@ async def lifespan(app: FastAPI):
     global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
     global dikiwi_mind, innovation_scheduler, entrepreneur_scheduler
     global browser_manager_instance
+    global source_worker_stop, source_worker_tasks
     await db.initialize()
     await graph_db.initialize()
     await source_store.initialize()
@@ -1120,9 +1764,10 @@ async def lifespan(app: FastAPI):
     # Initialize Three-Mind System FIRST (needed for WebSocket routing)
     try:
         dikiwi_writer = None
-        if SETTINGS.obsidian_vault_path:
+        vault_path_for_dikiwi = SETTINGS.obsidian_vault_path or SETTINGS.dikiwi_vault_path
+        if vault_path_for_dikiwi:
             dikiwi_writer = DikiwiObsidianWriter(
-                vault_path=SETTINGS.obsidian_vault_path,
+                vault_path=vault_path_for_dikiwi,
                 folder_prefix="",
                 zettelkasten_only=True,
             )
@@ -1186,6 +1831,11 @@ async def lifespan(app: FastAPI):
     agent_registry.register("zettel_suggester", zettel_suggester_agent, "Suggest Zettelkasten links for a note.")
     worker = JobWorker(db, _dispatch_job)
     await worker.start()
+    source_worker_stop = asyncio.Event()
+    source_worker_tasks = [
+        asyncio.create_task(_source_worker_loop(f"source-worker-{index + 1}"))
+        for index in range(max(0, int(SETTINGS.source_worker_count)))
+    ]
     scheduler = PassiveCaptureScheduler(enqueue_fn=_enqueue_url)
     scheduler.start()
     digest_scheduler = DailyDigestScheduler(
@@ -1209,7 +1859,7 @@ async def lifespan(app: FastAPI):
         innovation_scheduler = ReactorScheduler(
             llm_client=llm_resolver("reactor"),
             graph_db=graph_db,
-            obsidian_writer=writer,
+            obsidian_writer=dikiwi_writer or writer,
             feishu_pusher=pusher,
             schedule_hour=SETTINGS.minds.innovation_time.hour,
             schedule_minute=SETTINGS.minds.innovation_time.minute,
@@ -1227,7 +1877,7 @@ async def lifespan(app: FastAPI):
             llm_client=llm_resolver("entrepreneur"),
             graph_db=graph_db,
             innovation_scheduler=innovation_scheduler,
-            obsidian_writer=writer,
+            obsidian_writer=dikiwi_writer or writer,
             feishu_pusher=pusher,
             schedule_hour=SETTINGS.minds.entrepreneur_time.hour,
             schedule_minute=SETTINGS.minds.entrepreneur_time.minute,
@@ -1271,6 +1921,13 @@ async def lifespan(app: FastAPI):
         innovation_scheduler.stop()
     if entrepreneur_scheduler:
         entrepreneur_scheduler.stop()
+    if source_worker_stop:
+        source_worker_stop.set()
+    for task in source_worker_tasks:
+        task.cancel()
+    if source_worker_tasks:
+        await asyncio.gather(*source_worker_tasks, return_exceptions=True)
+        source_worker_tasks = []
     if worker:
         await worker.stop()
     await source_store.close()
@@ -1292,7 +1949,14 @@ async def hosted_mode_guard(request: Request, call_next):
         token = SETTINGS.ui_auth_token
         bearer = request.headers.get("authorization", "")
         explicit_token = request.headers.get("x-aily-token", "")
-        if not token or (bearer != f"Bearer {token}" and explicit_token != token):
+        query_token = request.query_params.get("token", "")
+        cookie_token = request.cookies.get("aily_ui_token", "")
+        if not token or (
+            bearer != f"Bearer {token}"
+            and explicit_token != token
+            and query_token != token
+            and cookie_token != token
+        ):
             await audit_logger.log(
                 "hosted_static_rejected",
                 path=request.url.path,
@@ -1300,6 +1964,14 @@ async def hosted_mode_guard(request: Request, call_next):
             )
             return JSONResponse({"detail": "Aily hosted mode authentication required"}, status_code=401)
     response = await call_next(request)
+    if SETTINGS.hosted_mode and SETTINGS.ui_auth_token and request.query_params.get("token") == SETTINGS.ui_auth_token:
+        response.set_cookie(
+            "aily_ui_token",
+            SETTINGS.ui_auth_token,
+            httponly=False,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+        )
     if request.url.path.startswith("/api/ui"):
         await audit_logger.log(
             "ui_request",
@@ -1337,6 +2009,7 @@ app.include_router(
         pipeline_provider=_ui_pipeline_provider,
         source_provider=_ui_sources_provider,
         source_detail_provider=_ui_source_detail_provider,
+        source_jobs_provider=_ui_source_jobs_provider,
         proposal_provider=_ui_proposals_provider,
         entrepreneurship_provider=_ui_entrepreneurship_provider,
         control_handler=_ui_control_handler,

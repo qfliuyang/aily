@@ -139,6 +139,7 @@ class DikiwiObsidianWriter:
         self.zettelkasten_maps_root = self.vault_path / "99-MOC"
         self.zettelkasten_only = zettelkasten_only
         self._id_to_title: dict[str, str] = {}
+        self._id_to_target: dict[str, str] = {}
         self._ensure_zettelkasten_structure()
 
         if not self.zettelkasten_only:
@@ -149,7 +150,9 @@ class DikiwiObsidianWriter:
 
     def register_note_title(self, dikiwi_id: str, title: str) -> None:
         """Register a note title so _make_link can build full-filename wikilinks."""
-        self._id_to_title[dikiwi_id] = _slugify_title(title, max_length=200)
+        safe_title = _slugify_title(title, max_length=200)
+        self._id_to_title[dikiwi_id] = safe_title
+        self._id_to_target[dikiwi_id] = f"{dikiwi_id}-{safe_title}"
 
     def _ensure_zettelkasten_structure(self) -> None:
         """Create the flat numbered directories for the DIKIWI Zettelkasten."""
@@ -841,7 +844,10 @@ LIMIT 10
         without waiting for Obsidian's alias index.
         """
         safe_title = self._id_to_title.get(note_id, "")
-        if safe_title:
+        explicit_target = self._id_to_target.get(note_id, "")
+        if explicit_target:
+            target = explicit_target
+        elif safe_title:
             target = f"{note_id}-{safe_title}"
         else:
             target = note_id
@@ -863,6 +869,7 @@ LIMIT 10
         day_dir = self._get_day_dir(stage_folder)
         safe_title = _slugify_title(title)
         self._id_to_title[dikiwi_id] = safe_title
+        self._id_to_target[dikiwi_id] = f"{dikiwi_id}-{safe_title}"
         filename = f"{dikiwi_id}-{safe_title}.md"
         path = day_dir / filename
 
@@ -1012,6 +1019,9 @@ LIMIT 10
         dikiwi_id = f"information_{hashlib.sha1(nid.encode()).hexdigest()[:8]}"
         concept = getattr(node, "concept", "")
         title = concept or self._title_short(content, fallback=f"{domain.title()} Concept")
+        safe_title = _slugify_title(title)
+        if nid:
+            self._id_to_target[nid] = f"{dikiwi_id}-{safe_title}"
 
         fm: dict[str, Any] = {
             "type": "information",

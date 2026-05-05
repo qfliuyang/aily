@@ -93,6 +93,8 @@ class ChaosDikiwiBridge:
                 "insights": 0,
                 "incremental_ratio": 0.0,
                 "higher_order_triggered": False,
+                "higher_order_candidates": 0,
+                "higher_order_selected": 0,
             }
 
         drops = [self._create_raindrop(content) for content in contents]
@@ -145,6 +147,8 @@ class ChaosDikiwiBridge:
             "incremental_ratio": batch_run.incremental_ratio,
             "incremental_threshold": batch_run.incremental_threshold,
             "higher_order_triggered": batch_run.higher_order_triggered,
+            "higher_order_candidates": batch_run.higher_order_candidates,
+            "higher_order_selected": batch_run.higher_order_selected,
             "pre_information_nodes": batch_run.pre_information_nodes,
             "post_information_nodes": batch_run.post_information_nodes,
         }
@@ -224,6 +228,8 @@ class ChaosDikiwiBridge:
             "incremental_ratio": batch_run.incremental_ratio,
             "incremental_threshold": batch_run.incremental_threshold,
             "higher_order_triggered": batch_run.higher_order_triggered,
+            "higher_order_candidates": batch_run.higher_order_candidates,
+            "higher_order_selected": batch_run.higher_order_selected,
             "pre_information_nodes": batch_run.pre_information_nodes,
             "post_information_nodes": batch_run.post_information_nodes,
         }

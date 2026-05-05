@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +14,20 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _utc_after(seconds: float) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(0.0, seconds))).isoformat()
+
+
+def _utc_before(seconds: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=max(0.0, seconds))).isoformat()
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+class SourceJobCapacityError(RuntimeError):
+    """Raised when durable intake backlog reaches its configured admission cap."""
 
 
 class SourceStore:
@@ -62,9 +75,37 @@ class SourceStore:
             )
             """
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_jobs (
+                job_id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN (
+                    'queued','running','completed','retry_pending','failed','cancelled'
+                )),
+                priority INTEGER NOT NULL DEFAULT 100,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                available_at TEXT NOT NULL,
+                locked_by TEXT,
+                locked_at TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(source_id) REFERENCES sources(source_id)
+            )
+            """
+        )
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_sources_updated ON sources(updated_at)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_uploads_source ON source_uploads(source_id)")
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_source_jobs_claim ON source_jobs(status, available_at, priority, created_at)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_source_jobs_source ON source_jobs(source_id, status)"
+        )
         await self._db.commit()
 
     async def close(self) -> None:
@@ -215,6 +256,34 @@ class SourceStore:
         )
         await db.commit()
 
+    async def mark_retry_pending(
+        self,
+        source_id: str,
+        *,
+        error: str,
+        stage: str = "",
+        provider: str = "",
+        model: str = "",
+        pipeline_id: str = "",
+        retry_delay_seconds: float = 300.0,
+    ) -> None:
+        existing = await self.get_source(source_id)
+        metadata = dict(existing.get("metadata") or {}) if existing else {}
+        attempt_count = int(metadata.get("attempt_count") or 0) + 1
+        await self.update_status(
+            source_id,
+            "retry_pending",
+            {
+                "attempt_count": attempt_count,
+                "last_error": error,
+                "last_failed_stage": stage,
+                "provider": provider,
+                "model": model,
+                "pipeline_id": pipeline_id or metadata.get("pipeline_id", ""),
+                "next_retry_at": _utc_after(retry_delay_seconds),
+            },
+        )
+
     async def get_source(self, source_id: str) -> dict[str, Any] | None:
         db = self._check_db()
         cursor = await db.execute("SELECT * FROM sources WHERE source_id = ?", (source_id,))
@@ -239,6 +308,304 @@ class SourceStore:
             return None
         return self._row_to_dict(row)
 
+    async def list_failed_sources(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        db = self._check_db()
+        safe_limit = min(max(1, limit), 500)
+        cursor = await db.execute(
+            "SELECT * FROM sources WHERE status IN ('failed', 'failed_retry_exhausted') ORDER BY updated_at DESC LIMIT ?",
+            (safe_limit,),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    async def enqueue_source_job(
+        self,
+        *,
+        source_id: str,
+        job_type: str,
+        payload: dict[str, Any] | None = None,
+        priority: int = 100,
+        available_in_seconds: float = 0.0,
+        max_pending: int | None = None,
+    ) -> dict[str, Any]:
+        db = self._check_db()
+        now = _utc_now()
+        job_id = str(uuid.uuid4())
+        await db.execute("BEGIN IMMEDIATE")
+        if max_pending is not None and max_pending > 0:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM source_jobs WHERE status IN ('queued','retry_pending','running')"
+            )
+            pending = int((await cursor.fetchone())[0])
+            if pending >= max_pending:
+                await db.rollback()
+                raise SourceJobCapacityError(
+                    f"Source job queue is full: pending={pending}, max_pending={max_pending}"
+                )
+        await db.execute(
+            """
+            INSERT INTO source_jobs (
+                job_id, source_id, job_type, status, priority, attempt_count,
+                available_at, payload, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                source_id,
+                job_type,
+                priority,
+                _utc_after(available_in_seconds),
+                json.dumps(payload or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        await db.commit()
+        return {
+            "job_id": job_id,
+            "source_id": source_id,
+            "job_type": job_type,
+            "status": "queued",
+        }
+
+    async def claim_next_source_job(self, *, worker_id: str) -> dict[str, Any] | None:
+        db = self._check_db()
+        now = _utc_now()
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute(
+            """
+            SELECT *
+            FROM source_jobs
+            WHERE status IN ('queued', 'retry_pending') AND available_at <= ?
+            ORDER BY priority ASC, created_at ASC
+            LIMIT 1
+            """,
+            (now,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            await db.commit()
+            return None
+        await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'running',
+                attempt_count = attempt_count + 1,
+                locked_by = ?,
+                locked_at = ?,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (worker_id, now, now, row["job_id"]),
+        )
+        await db.commit()
+        payload = dict(row)
+        payload["status"] = "running"
+        payload["attempt_count"] = int(payload.get("attempt_count") or 0) + 1
+        try:
+            payload["payload"] = json.loads(payload.get("payload") or "{}")
+        except json.JSONDecodeError:
+            payload["payload"] = {}
+        return payload
+
+    async def complete_source_job(self, job_id: str) -> None:
+        db = self._check_db()
+        now = _utc_now()
+        await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'completed',
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (now, job_id),
+        )
+        await db.commit()
+
+    async def fail_source_job(self, job_id: str, *, error: str) -> None:
+        db = self._check_db()
+        now = _utc_now()
+        await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'failed',
+                last_error = ?,
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (error, now, job_id),
+        )
+        await db.commit()
+
+    async def retry_source_job(self, job_id: str, *, error: str, delay_seconds: float) -> None:
+        db = self._check_db()
+        now = _utc_now()
+        await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'retry_pending',
+                last_error = ?,
+                available_at = ?,
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (error, _utc_after(delay_seconds), now, job_id),
+        )
+        await db.commit()
+
+    async def requeue_stale_running_source_jobs(self, *, stale_after_seconds: float) -> int:
+        db = self._check_db()
+        cutoff = _utc_before(stale_after_seconds)
+        now = _utc_now()
+        cursor = await db.execute(
+            "SELECT source_id FROM source_jobs WHERE status = 'running' AND locked_at <= ?",
+            (cutoff,),
+        )
+        source_ids = sorted({str(row["source_id"]) for row in await cursor.fetchall()})
+        cursor = await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'retry_pending',
+                available_at = ?,
+                locked_by = NULL,
+                locked_at = NULL,
+                last_error = COALESCE(last_error, 'stale worker lock recovered'),
+                updated_at = ?
+            WHERE status = 'running' AND locked_at <= ?
+            """,
+            (now, now, cutoff),
+        )
+        recovered = int(cursor.rowcount or 0)
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            await db.execute(
+                f"UPDATE sources SET status = 'retry_pending', updated_at = ? WHERE source_id IN ({placeholders})",
+                (now, *source_ids),
+            )
+        await db.commit()
+        return recovered
+
+    async def cancel_running_source_jobs(self) -> list[str]:
+        db = self._check_db()
+        cursor = await db.execute(
+            "SELECT job_id, source_id FROM source_jobs WHERE status IN ('queued','retry_pending','running')"
+        )
+        rows = await cursor.fetchall()
+        job_ids = [str(row["job_id"]) for row in rows]
+        source_ids = sorted({str(row["source_id"]) for row in rows})
+        now = _utc_now()
+        await db.execute(
+            """
+            UPDATE source_jobs
+            SET status = 'cancelled',
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = ?
+            WHERE status IN ('queued','retry_pending','running')
+            """,
+            (now,),
+        )
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            await db.execute(
+                f"UPDATE sources SET status = 'cancelled', updated_at = ? WHERE source_id IN ({placeholders})",
+                (now, *source_ids),
+            )
+        await db.commit()
+        return job_ids
+
+    async def get_source_job_counts(self) -> dict[str, int]:
+        db = self._check_db()
+        cursor = await db.execute("SELECT status, COUNT(*) FROM source_jobs GROUP BY status")
+        rows = await cursor.fetchall()
+        counts = {
+            "queued": 0,
+            "running": 0,
+            "completed": 0,
+            "retry_pending": 0,
+            "failed": 0,
+            "cancelled": 0,
+        }
+        for status, count in rows:
+            counts[str(status)] = int(count)
+        counts["total"] = sum(counts.values())
+        return counts
+
+    async def list_source_jobs(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        db = self._check_db()
+        safe_limit = min(max(1, limit), 500)
+        safe_offset = max(0, offset)
+        where = ""
+        params: list[Any] = []
+        if status:
+            where = "WHERE j.status = ?"
+            params.append(status)
+        total_cursor = await db.execute(
+            f"SELECT COUNT(*) FROM source_jobs j {where}",
+            params,
+        )
+        total = int((await total_cursor.fetchone())[0])
+        cursor = await db.execute(
+            f"""
+            SELECT
+                j.*,
+                s.filename,
+                s.normalized_source,
+                s.kind AS source_kind,
+                s.content_type,
+                s.size_bytes,
+                s.status AS source_status,
+                s.metadata AS source_metadata
+            FROM source_jobs j
+            LEFT JOIN sources s ON s.source_id = j.source_id
+            {where}
+            ORDER BY
+                CASE j.status
+                    WHEN 'running' THEN 0
+                    WHEN 'queued' THEN 1
+                    WHEN 'retry_pending' THEN 2
+                    WHEN 'failed' THEN 3
+                    WHEN 'cancelled' THEN 4
+                    ELSE 5
+                END,
+                j.priority ASC,
+                j.available_at ASC,
+                j.created_at ASC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, safe_limit, safe_offset),
+        )
+        rows = await cursor.fetchall()
+        return {
+            "total": total,
+            "jobs": [self._job_row_to_dict(row) for row in rows],
+        }
+
+    async def read_stored_object(self, source_id: str) -> bytes:
+        source = await self.get_source(source_id)
+        if source is None:
+            raise FileNotFoundError(f"Source not found: {source_id}")
+        storage_path = source.get("storage_path")
+        if not storage_path:
+            raise FileNotFoundError(f"Source has no stored object: {source_id}")
+        path = Path(str(storage_path)).expanduser()
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"Stored object missing for {source_id}: {path}")
+        return path.read_bytes()
+
     async def list_sources(self, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         db = self._check_db()
         safe_limit = min(max(1, limit), 500)
@@ -262,4 +629,17 @@ class SourceStore:
             payload["metadata"] = json.loads(payload.get("metadata") or "{}")
         except json.JSONDecodeError:
             payload["metadata"] = {}
+        return payload
+
+    @staticmethod
+    def _job_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+        payload = dict(row)
+        try:
+            payload["payload"] = json.loads(payload.get("payload") or "{}")
+        except json.JSONDecodeError:
+            payload["payload"] = {}
+        try:
+            payload["source_metadata"] = json.loads(payload.get("source_metadata") or "{}")
+        except json.JSONDecodeError:
+            payload["source_metadata"] = {}
         return payload

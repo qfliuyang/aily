@@ -1,7 +1,7 @@
 # Browser Use Commercial API - Monica Chat Page Extraction Test Results
 
 **Date:** 2026-04-08
-**API Key Used:** `bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso`
+**API Key Used:** supplied by `BROWSER_USE_API_KEY`; raw key removed.
 **Tester:** Browser Use Commercial API (browser-use-sdk v2.0.15)
 
 ---

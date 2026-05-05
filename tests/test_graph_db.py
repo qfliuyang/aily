@@ -83,6 +83,21 @@ async def test_get_top_nodes_by_edge_count(graph_db):
 
 
 @pytest.mark.asyncio
+async def test_get_top_information_nodes_by_semantic_edge_count_ignores_tags(graph_db):
+    await graph_db.insert_node("info_1", "information", "Timing constraints are brittle", "doc-a")
+    await graph_db.insert_node("info_2", "information", "CDC checks need constraints", "doc-b")
+    await graph_db.insert_node("tag_timing", "tag", "timing", "dikiwi")
+    await graph_db.insert_edge("tag_1", "info_1", "tag_timing", "has_tag", 1.0, "dikiwi")
+    await graph_db.insert_edge("tag_2", "info_2", "tag_timing", "has_tag", 1.0, "dikiwi")
+    await graph_db.insert_edge("semantic", "info_1", "info_2", "enables", 0.8, "dikiwi_network")
+
+    top = await graph_db.get_top_information_nodes_by_semantic_edge_count(limit=10)
+
+    assert {node["id"] for node in top} == {"info_1", "info_2"}
+    assert all(node["edge_count"] == 1 for node in top)
+
+
+@pytest.mark.asyncio
 async def test_get_collisions_within_hours(graph_db):
     await graph_db.insert_node("n1", "topic", "AI", "test")
     await graph_db.insert_occurrence("o1", "n1", "log-a")

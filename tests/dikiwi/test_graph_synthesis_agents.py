@@ -70,6 +70,24 @@ class FakeDikiwiWriter:
 
 
 class FakeGraphDB:
+    async def get_top_information_nodes_by_semantic_edge_count(self, limit: int = 15) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "info_center",
+                "type": "information",
+                "label": "Constraint lineage connects CDC, STA, and signoff closure.",
+                "edge_count": 12,
+                "total_weight": 9.4,
+            },
+            {
+                "id": "info_page",
+                "type": "information",
+                "label": "Page 1",
+                "edge_count": 20,
+                "total_weight": 20.0,
+            },
+        ]
+
     async def get_top_nodes_by_edge_count(self, limit: int = 15) -> list[dict[str, Any]]:
         return [
             {

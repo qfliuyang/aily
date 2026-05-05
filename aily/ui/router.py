@@ -24,6 +24,7 @@ def create_ui_router(
     url_handler: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     source_provider: Callable[[int, int], Awaitable[dict[str, Any]]] | None = None,
     source_detail_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    source_jobs_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
     proposal_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     entrepreneurship_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     control_handler: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -40,7 +41,13 @@ def create_ui_router(
         bearer = request.headers.get("authorization", "")
         explicit_token = request.headers.get("x-aily-token", "")
         query_token = request.query_params.get("token", "")
-        return bearer == f"Bearer {auth_token}" or explicit_token == auth_token or query_token == auth_token
+        cookie_token = request.cookies.get("aily_ui_token", "")
+        return (
+            bearer == f"Bearer {auth_token}"
+            or explicit_token == auth_token
+            or query_token == auth_token
+            or cookie_token == auth_token
+        )
 
     async def _require_auth(request: HTTPConnection) -> None:
         if not _request_authorized(request):
@@ -52,7 +59,13 @@ def create_ui_router(
         bearer = websocket.headers.get("authorization", "")
         explicit_token = websocket.headers.get("x-aily-token", "")
         query_token = websocket.query_params.get("token", "")
-        return bearer == f"Bearer {auth_token}" or explicit_token == auth_token or query_token == auth_token
+        cookie_token = websocket.cookies.get("aily_ui_token", "")
+        return (
+            bearer == f"Bearer {auth_token}"
+            or explicit_token == auth_token
+            or query_token == auth_token
+            or cookie_token == auth_token
+        )
 
     router = APIRouter(prefix="/api/ui", tags=["ui"], dependencies=[Depends(_require_auth)])
 
@@ -178,6 +191,8 @@ def create_ui_router(
         pipeline_id: str | None = None,
         upload_id: str | None = None,
         event_type: str | None = None,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
         limit: int = 500,
     ) -> dict[str, Any]:
         events = await ui_event_hub.query_persisted(
@@ -185,6 +200,8 @@ def create_ui_router(
             pipeline_id=pipeline_id,
             upload_id=upload_id,
             event_type=event_type,
+            after_seq=after_seq,
+            before_seq=before_seq,
             limit=limit,
         )
         return {
@@ -192,7 +209,10 @@ def create_ui_router(
             "pipeline_id": pipeline_id,
             "upload_id": upload_id,
             "event_type": event_type,
+            "after_seq": after_seq,
+            "before_seq": before_seq,
             "events": events,
+            "next_after_seq": events[-1].get("seq") if events else after_seq,
         }
 
     @router.get("/sources")
@@ -209,6 +229,12 @@ def create_ui_router(
         if payload is None:
             raise HTTPException(status_code=404, detail="Source not found")
         return payload
+
+    @router.get("/source-jobs")
+    async def list_source_jobs(limit: int = 100, offset: int = 0, status: str | None = None) -> dict[str, Any]:
+        if source_jobs_provider is None:
+            return {"total": 0, "jobs": []}
+        return await source_jobs_provider(limit, offset, status)
 
     @router.get("/proposals")
     async def list_proposals(limit: int = 50) -> dict[str, Any]:

@@ -104,6 +104,27 @@ async def test_data_agent_writes_atomic_data_notes_and_visual_datapoints():
     assert visual_points[0].source_page == 7
 
 
+def test_data_agent_rejects_generic_page_containers():
+    agent = DataAgent()
+
+    assert agent._data_point_rejection_reason(
+        DataPoint(
+            id="dp_page",
+            content="Page 7: content overview",
+            source="chaos_processor",
+            concept="Page 7",
+        )
+    ) == "generic page/slide container"
+    assert agent._data_point_rejection_reason(
+        DataPoint(
+            id="dp_real",
+            content="Isolation enable signals generated in power gated domains can corrupt always-on clock behavior.",
+            source="chaos_processor",
+            concept="power domain isolation enable risk",
+        )
+    ) is None
+
+
 @pytest.mark.asyncio
 async def test_information_agent_uses_data_point_note_mapping():
     writer = FakeInfoWriter()

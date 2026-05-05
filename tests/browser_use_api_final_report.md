@@ -1,7 +1,7 @@
 # Browser Use Commercial API Test Report
 
 **Date:** 2026-04-08
-**API Key:** bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso (Free Plan)
+**API Key:** supplied by `BROWSER_USE_API_KEY`; raw key removed.
 **Testers:** worker-1, worker-2, worker-3 (Team: browser-use-api-test)
 
 ---

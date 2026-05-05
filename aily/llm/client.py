@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 
+from aily.runtime.backpressure import provider_backpressure
 from aily.ui.events import emit_ui_event
 from aily.ui.telemetry import get_ui_telemetry_context
 
@@ -177,16 +178,17 @@ class LLMClient:
         )
 
         try:
-            async with self._semaphore:
-                await self._wait_for_rate_window()
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
+            async with provider_backpressure.limit(self._provider_name(), self.max_concurrency):
+                async with self._semaphore:
+                    await self._wait_for_rate_window()
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        resp = await client.post(
+                            f"{self.base_url}/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
         except Exception as exc:
             await emit_ui_event(
                 "llm_request_failed",

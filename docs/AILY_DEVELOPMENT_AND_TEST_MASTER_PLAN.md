@@ -1,6 +1,6 @@
 # Aily Development And Test Master Plan
 
-Date: 2026-05-02
+Date: 2026-05-03
 
 ## Purpose
 
@@ -61,23 +61,34 @@ Important current capabilities:
 - Studio HTTP APIs and websocket can be protected with a single-owner token
 - provider timeout/retry settings and DIKIWI stage timeouts are configurable
 
-Main gaps after Phase 0-6 completion work:
+Main gaps after Phase 0-9 completion work and the 2026-05-03 fix sprint:
 
 - Multi-file Studio upload has a batch path, but the durable queue-backed ingestion job model is not finished.
 - Traceability across raw source, vault note, graph node, LLM call, proposal, review, and UI event is incomplete.
 - A fresh real two-PDF acceptance run now proves IMPACT, 07-Proposal, and 08-Entrepreneurship in one manifest, but the path is still slow and expensive enough to need performance hardening.
-- Link intake is durable, but media and website-specific intake are not productized as first-class Studio actions.
-- Hosted/private deployment needs auth, storage isolation, secret handling, and operational guardrails.
+- Link intake now performs real fetch/extract/routing, but richer media and website-specific intake are not productized as first-class Studio actions.
+- Full-product browser E2E with real DIKIWI/LLM enabled is still needed; current browser evidence is intentionally scoped UI/control evidence.
 
 Phase 0-9 completion evidence:
 
 - Backend full-pipeline acceptance: `logs/runs/2026-05-02T12-15-35Z_full_pipeline_2pdf/manifest.json`
 - Studio browser acceptance: `logs/runs/2026-05-02T13-50-50Z_studio_browser_e2e/manifest.json`
+- Docker pre-production acceptance: `logs/runs/2026-05-03T00-26-50Z_docker_preprod_retry_url_e2e/manifest.json`
+- Docker real-LLM DIKIWI quality acceptance: `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`
+- Docker full-flow failure plan: `docs/DOCKER_FULL_FLOW_TEST_AND_IMPROVEMENT_PLAN.md`
 - Provider smoke evidence: `logs/provider_smoke_report.json`
 - Project health evidence: `logs/project_health_report.json`
 - Prompt-regression artifacts: `test-artifacts/prompt-regression/`
-- Unit/regression gates: `665 passed, 4 skipped` outside integration/e2e; `6 passed, 41 skipped` integration.
+- Unit/regression gates: latest fast non-integration gate is `669 passed, 4 skipped` outside integration/e2e; historical integration gate was `6 passed, 41 skipped`.
 - Frontend gate: `npm --prefix frontend run build`.
+
+Closed 2026-05-03 review findings:
+
+- `frontend/src/App.tsx` locks higher-order/proposal/entrepreneurship state until real events or persisted artifacts exist.
+- `aily/main.py` retry controls perform actual retry work for stored uploads.
+- Hosted/private mode includes a usable frontend token flow for HTTP and websocket calls.
+- `scripts/run_studio_agent_browser_e2e.py` writes the durable evidence shape and declares scoped UI/control proof when DIKIWI/LLM are disabled.
+- URL intake moved beyond durable storage into fetch/extract/DIKIWI routing.
 
 Provider status:
 
@@ -150,8 +161,16 @@ Minimum `manifest.json` fields:
   "source_seed": 260502,
   "vault_path": "/absolute/path",
   "graph_db_path": "/absolute/path",
-  "provider_routes": {},
-  "started_at": "...",
+	  "provider_routes": {},
+	  "docker": {
+	    "enabled": false,
+	    "image": "",
+	    "image_digest": "",
+	    "compose_files": [],
+	    "compose_hash": "",
+	    "volume_paths": []
+	  },
+	  "started_at": "...",
   "completed_at": "...",
   "exit_code": 0,
   "acceptance": {
@@ -267,6 +286,83 @@ Storage layers:
 
 ## Development Roadmap
 
+### Fix And Upgrade Sprint 2026-05-03
+
+Status: implemented and verified for the scoped Studio control plane. Latest evidence:
+
+- `logs/runs/2026-05-02T16-38-24Z_studio_agent_browser_e2e/manifest.json`
+- `logs/runs/2026-05-02T16-34-08Z_studio_agent_browser_hosted_auth_e2e/manifest.json`
+- `logs/runs/2026-05-02T17-12-50Z_studio_agent_browser_hosted_auth_retry_url_e2e/manifest.json`
+
+Goal:
+
+Close the blocking gaps found in the code review before adding new features. This sprint protects the ultimate goal: a private second-brain website where visible state reflects real processing, controls perform real work, and evidence is trustworthy.
+
+Work items:
+
+- Reality-gated DIKIWI theater:
+  - Only render stages as active/completed when backend events or persisted run artifacts prove them.
+  - Show future stages as locked/planned, not active cognition.
+  - Do not show proposal cards unless 07-Proposal notes or proposal graph nodes exist.
+  - Do not show entrepreneur/Guru cards unless 08-Entrepreneurship artifacts or review events exist.
+- Real retry semantics:
+  - Add a retry path that reads failed source records, reloads the stored object or URL, and re-enters extraction/DIKIWI processing.
+  - Emit `source_retry_started`, `source_retry_completed`, and `source_retry_failed` events with `source_id`, previous status, new pipeline/batch IDs, and error details.
+  - Keep `retry_failed_sources_requested` as an admin intent event, not proof of retry success.
+- Hosted frontend auth:
+  - Add a simple single-owner token entry/storage flow for Aily Studio.
+  - Attach the token to all `/api/ui/*` fetch calls.
+  - Attach the token to `WS /api/ui/events` through query token or a documented reverse-proxy-safe mechanism.
+  - Add a visible auth failure state instead of endless websocket reconnect noise.
+- Evidence contract alignment:
+  - Make `scripts/run_studio_agent_browser_e2e.py` use `aily/verify/evidence.py` or produce the same required folder shape.
+  - Include `git_sha`, `dirty_worktree`, `started_at`, `completed_at`, `environment.json`, graph/vault snapshots, source manifest, failures, and samples where applicable.
+  - Set `real_llm=false` and scope text to UI/control proof when DIKIWI is disabled.
+  - Add a separate real full-product Studio E2E only when it runs DIKIWI with real LLM calls.
+- URL processing truthfulness:
+  - Either implement URL fetch/extract/DIKIWI scheduling from Studio URL submission, or label the current action as “Store link only”.
+  - Acceptance cannot claim “send links to Aily and process everything” until this path writes Chaos/DIKIWI artifacts.
+
+Implemented notes:
+
+- The DIKIWI theater now locks unproven stages and only reveals Proposal/Entrepreneur visuals when persisted artifacts exist.
+- Retry reprocesses failed stored uploads by reading the persisted source object and running the normal Studio upload processor with retry lifecycle events.
+- Hosted browser auth supports token entry/storage plus `/?token=...` cookie bootstrap for static page load, API calls, and websocket continuity.
+- The browser E2E script writes the standard evidence folder shape even on failure and labels disabled-DIKIWI runs as `ui_control`.
+- Studio URL intake now durably stores the link, performs real HTTP fetch/extraction, and routes the extracted content into the DIKIWI processing path.
+
+Primary files:
+
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `aily/main.py`
+- `aily/ui/router.py`
+- `aily/ui/events.py`
+- `aily/source_store/store.py`
+- `aily/verify/evidence.py`
+- `scripts/run_studio_agent_browser_e2e.py`
+- `tests/test_ui_router.py`
+- `tests/test_ui_events.py`
+- `tests/test_source_store.py`
+- `tests/test_ui_static.py`
+
+Acceptance tests:
+
+- `npm --prefix frontend run build`
+- `uv run python -m pytest tests/test_ui_router.py tests/test_ui_events.py tests/test_source_store.py tests/verify/test_evidence.py tests/verify/test_run_registry.py tests/test_ui_static.py -q`
+- `uv run python scripts/run_studio_agent_browser_e2e.py`
+- `uv run python scripts/run_studio_agent_browser_e2e.py --hosted-auth`
+- `uv run python scripts/run_studio_agent_browser_e2e.py --hosted-auth --exercise-retry --exercise-url`
+- Visual-gating E2E proves a Chaos-only upload does not display Insight/Wisdom/Impact/Proposal/Entrepreneur as active or completed.
+
+Exit criteria:
+
+- Studio visuals are truthful by default.
+- Retry controls do real backend work.
+- Hosted/private mode is usable from the browser.
+- Browser E2E artifacts match the evidence contract.
+- Current docs no longer overclaim link processing or UI/control evidence scope.
+
 ### Phase 0: Control-Plane Stabilization
 
 Goal:
@@ -327,6 +423,8 @@ Deliverables:
 - LLM call trace export
 - UI event stream export
 - final machine-readable acceptance summary
+- browser-E2E evidence writer that uses the same contract as pipeline evidence
+- explicit evidence scope labels: `ui_control`, `full_pipeline`, `provider`, `pressure`, `security`
 
 Recommended files:
 
@@ -340,6 +438,7 @@ Acceptance tests:
 - unit test evidence manifest serialization with temp paths
 - run `python3 scripts/run_test_suite.py full-pipeline --max 1 --log-llm --vault <temp-vault>`
 - assert evidence folder contains manifest, command, graph snapshots, vault counts, and samples
+- run `uv run python scripts/run_studio_agent_browser_e2e.py` and assert the evidence folder has the required contract fields, even when `real_llm=false`
 
 Anti-fake proof:
 
@@ -368,6 +467,8 @@ Deliverables:
 - endpoint for links/URLs
 - endpoint for media metadata
 - source detail API for Studio
+- source retry API or control action that reprocesses durable failed sources
+- URL source processing state beyond `stored`: fetched, extracted, queued, processing, completed, failed
 
 Recommended files:
 
@@ -382,7 +483,9 @@ Acceptance tests:
 - upload same file twice and prove only one source identity is created unless explicit reprocess is requested
 - upload invalid/oversized file and prove no partial source is promoted
 - submit URL and prove source record contains normalized URL and fetch state
+- submit URL and prove it either enters fetch/extract/DIKIWI processing or is visibly labeled as stored-only
 - restart backend and prove source status survives
+- create a failed source, retry it through the Studio control path, and prove the source status changes because actual processing was attempted
 
 Anti-fake proof:
 
@@ -558,6 +661,8 @@ Deliverables:
 - evidence explorer
 - proposal and entrepreneur views
 - clear distinction between live, replay, and demo modes
+- truth-gated stage rendering: future stages are locked/planned unless backed by real events or artifacts
+- frontend auth token flow for private hosted mode
 
 Recommended files:
 
@@ -576,6 +681,9 @@ Acceptance tests:
 - websocket receives real backend events
 - graph panel reflects GraphDB snapshot after pipeline completion
 - replay mode loads persisted events after backend restart
+- Chaos-only browser run does not show higher-order/proposal/entrepreneur stages as active/completed
+- hosted-mode browser run proves Studio can authenticate and keep websocket connected
+- retry browser run proves the retry control does actual backend processing, not only a button click
 
 Anti-fake proof:
 
@@ -583,6 +691,8 @@ Anti-fake proof:
 - visual stage progress must be driven by backend events
 - graph data must come from `GET /api/ui/graph`
 - proposal cards must come from vault/GraphDB data
+- auth tests must use the built frontend and real browser, not direct function calls only
+- retry tests must inspect source-store state and emitted retry lifecycle events
 
 Exit criteria:
 
@@ -646,6 +756,7 @@ Deliverables:
 - admin-only maintenance actions
 - health and readiness endpoints
 - basic audit log
+- frontend token entry/storage path for single-owner Studio access
 
 Recommended files:
 
@@ -660,6 +771,7 @@ Acceptance tests:
 - unauthenticated upload is rejected in hosted mode
 - authenticated upload succeeds
 - websocket auth works
+- authenticated Studio frontend can load status, upload, and receive websocket events without manual header injection
 - rate limit test rejects abusive upload stream
 - backup/restore dry run reconstructs vault, graph, and source manifests
 
@@ -673,7 +785,69 @@ Exit criteria:
 
 - Aily can be exposed as a private website without trusting obscurity.
 
-### Phase 9: Self-Improving Development Harness
+### Phase 9: Docker Pre-Production And Distribution
+
+Status: implemented for the scoped pre-production control-plane path and a real-LLM DIKIWI quality gate. Latest evidence:
+
+- `logs/runs/2026-05-03T00-26-50Z_docker_preprod_retry_url_e2e/manifest.json`
+- `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`
+
+Goal:
+
+Make Docker the clean-room pre-production path and the first practical distribution format for personal use. This phase must prove Aily can run outside the developer workstation state while still using real mounted data, real vault writes, real browser Studio actions, and real provider calls when keys are injected.
+
+Principle:
+
+Docker is not a mock environment. It is the pre-production environment. A Docker pass certifies that Aily can be installed, started, exercised, backed up, and inspected from a clean runtime with explicit volumes and secrets.
+
+Target topology:
+
+- `aily-app`: FastAPI backend plus built Aily Studio frontend.
+- `aily-data` volume: queue DB, graph DB, source store, source objects, audit log, run evidence.
+- `aily-vault` bind mount or named volume: Obsidian-compatible `00-Chaos` through `08-Entrepreneurship` layout.
+- `aily-chaos` bind mount: optional input/drop folder for batch PDF/media tests.
+- `aily-browser` optional service/profile: browser rendering support for URL processing and browser E2E.
+- `mineru` optional service/profile or image layer: heavyweight PDF/OCR extraction, enabled only for document pressure tests.
+- `.env.docker`: provider keys, `UI_AUTH_TOKEN`, vault paths, model routing, upload limits, and feature flags.
+
+Deliverables:
+
+- `Dockerfile` for the app image.
+- `.dockerignore` that excludes vault data, logs, local virtualenvs, generated artifacts, secrets, and node build caches.
+- `docker-compose.yml` for local pre-production use.
+- `docker-compose.preprod.yml` or profiles for MinerU/browser/real-LLM paths.
+- `docs/DOCKER_PREPROD.md` with setup, secrets, volumes, backup/restore, upgrade, and troubleshooting.
+- `scripts/run_docker_preprod_e2e.py` or equivalent command wrapper that starts the stack, runs browser E2E, collects logs, and writes an evidence folder.
+- Docker healthcheck using `/health` and readiness check using `/ready`.
+- Volume migration/backup smoke path that proves source store, graph DB, vault, and evidence survive container restart.
+
+Acceptance tests:
+
+- Build image from a clean checkout: `docker compose build --no-cache`.
+- Start pre-production stack with explicit `.env.docker` and mounted temp volumes.
+- Unauthenticated Studio/API access is rejected when hosted auth is enabled.
+- Authenticated browser can load Studio, connect websocket, upload a real file, submit a real local HTTP URL, and see persisted UI events.
+- Browser E2E inside or against Docker writes the standard evidence folder shape.
+- Restart the container and prove source records, UI event log, graph DB, vault files, and evidence manifests persist.
+- Backup/restore dry run works against Docker volumes and compares counts/hashes.
+- Real-LLM Docker DIKIWI quality gate runs a tiny fixed source set through 00-06 with provider keys injected by env, not baked into the image.
+- Real-LLM Docker DIKIWI quality gate must audit stage counts, note substance, graph connectivity, and LLM trace success with `scripts/audit_dikiwi_quality.py`.
+- Optional MinerU Docker profile processes a small PDF fixture into `00-Chaos` and routes the result into DIKIWI.
+
+Anti-fake proof:
+
+- Docker E2E must use real containers and real mounted volumes, not direct in-process function calls.
+- No API keys or vault content can be copied into the image layers.
+- Evidence manifest must include image tag/digest, compose file hash, env key names present without secret values, git SHA, dirty state, container logs, health/readiness responses, source manifest, graph/vault snapshots, screenshots, and failure list.
+- Browser proof must use the same Studio UI controls a human uses.
+- Restart proof must compare persisted artifacts before and after container restart.
+
+Exit criteria:
+
+- Aily can be distributed as a Docker Compose pre-production package that the user can actually run for daily private use.
+- Local acceptance remains the final personal-product proof, but Docker becomes the repeatable clean-room gate before any hosted deployment.
+
+### Phase 10: Self-Improving Development Harness
 
 Goal:
 
@@ -728,6 +902,7 @@ Exit criteria:
 | Pressure | volume, concurrency, reliability | no | yes |
 | UI E2E | browser against FastAPI | no | yes for Studio behavior |
 | Security | auth/rate-limit/secret boundaries | no | yes |
+| Docker Preprod | clean-room distribution/runtime proof | no | yes for installability, persistence, and private-site runtime |
 
 ### Required Baseline Commands
 
@@ -766,6 +941,38 @@ python3 scripts/run_mineru_chaos_batch.py /Users/luzi/aily_chaos --vault /tmp/ai
 ```
 
 The pressure gate is not accepted until it writes a run evidence manifest.
+
+Docker pre-production gate:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.preprod.yml build --no-cache
+python3 scripts/run_docker_preprod_e2e.py --compose-file docker-compose.yml --compose-file docker-compose.preprod.yml --exercise-url --exercise-retry
+```
+
+The Docker pre-production gate is not accepted until it writes a run evidence manifest with image digest, compose hash, mounted volume paths, container logs, browser screenshots, and restart-persistence proof.
+
+Docker real-LLM DIKIWI quality gate:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.preprod.yml up -d --build
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.preprod.yml exec -T aily-app \
+  python scripts/run_test_suite.py full-pipeline --max 2 --log-llm --vault /vault --report-dir /data/e2e --skip-business
+python3 scripts/audit_dikiwi_quality.py \
+  --vault logs/runs/<run_id>/docker-volumes/vault \
+  --graph-db logs/runs/<run_id>/docker-volumes/vault/.aily/graph.db \
+  --llm-log logs/runs/<run_id>/docker-volumes/data/e2e/<llm_calls>.jsonl \
+  --output logs/runs/<run_id>/dikiwi-quality-report.json
+```
+
+The latest accepted Docker real-LLM DIKIWI quality proof is `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`: 2 PDFs, 20 successful real Kimi calls, 47 Data notes, 43 Information notes, 20 Knowledge notes, 3 Insight notes, 4 Wisdom notes, 5 Impact notes, 191 graph edges, and zero audit failures.
+
+Docker full-flow pressure gate:
+
+```bash
+uv run python scripts/run_docker_full_flow_pressure.py --max 10 --build
+```
+
+This gate is not accepted unless it reaches 07-Proposal and 08-Entrepreneurship and passes strict audit with `--require-business --strict-graph --max-unresolved-wikilinks 0`. The 2026-05-03 10-PDF run failed before business execution; see `docs/DOCKER_FULL_FLOW_TEST_AND_IMPROVEMENT_PLAN.md`.
 
 ### Quality Rubrics
 

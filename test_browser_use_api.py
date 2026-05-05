@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 # API Configuration
-API_KEY = "bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso"
+API_KEY = os.environ.get("BROWSER_USE_API_KEY", "")
 BASE_URL = "https://api.browser-use.com/api/v3"
 
 # Test results collector
@@ -498,6 +498,9 @@ def print_summary():
 
 async def main():
     """Run all tests."""
+    if not API_KEY:
+        raise SystemExit("Set BROWSER_USE_API_KEY before running this real Browser Use connectivity test.")
+
     print("\n" + "=" * 60)
     print("Browser Use Commercial API Connectivity Test")
     print("=" * 60)

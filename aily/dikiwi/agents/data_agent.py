@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from aily.dikiwi.agents.base import DikiwiAgent
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.llm_tools import chat_json
+from aily.config import SETTINGS
 from aily.llm.prompt_registry import DikiwiPromptRegistry
 from aily.sessions.dikiwi_mind import DikiwiStage, StageResult
 
@@ -185,6 +186,17 @@ class DataAgent(DikiwiAgent):
             if url and url not in urls:
                 urls.append(url)
         if not urls:
+            return drop
+        if (
+            not SETTINGS.follow_external_links_for_uploads
+            and metadata.get("source_type") in {"pdf", "document"}
+            and str(getattr(drop, "source", "")).startswith("web_upload")
+        ):
+            logger.info(
+                "[DIKIWI] Treating %d external URLs as references for uploaded %s; enrichment disabled",
+                len(urls),
+                metadata.get("source_type"),
+            )
             return drop
 
         logger.info("[DIKIWI] Markdownizing %d URLs", len(urls))
@@ -408,6 +420,8 @@ class DataAgent(DikiwiAgent):
 
     def _data_point_rejection_reason(self, data_point: DataPoint) -> str | None:
         content = " ".join(data_point.content.split())
+        if self._is_generic_page_datapoint(data_point):
+            return "generic page/slide container"
         if data_point.modality == "visual":
             if len(content) < 20:
                 return "visual datapoint too short"
@@ -447,6 +461,26 @@ class DataAgent(DikiwiAgent):
             return "generic abstraction filler"
 
         return None
+
+    @staticmethod
+    def _is_generic_page_datapoint(data_point: DataPoint) -> bool:
+        import re
+
+        concept = " ".join(str(getattr(data_point, "concept", "") or "").split())
+        content = " ".join(str(getattr(data_point, "content", "") or "").split())
+        context = " ".join(str(getattr(data_point, "context", "") or "").split())
+        page_pattern = re.compile(r"^(page|slide)\s+\d{1,4}$", re.IGNORECASE)
+        if page_pattern.match(concept):
+            return True
+        if page_pattern.match(content):
+            return True
+        if page_pattern.match(context):
+            return True
+        if re.match(r"^(page|slide)\s+\d{1,4}\s*[:\-]", concept, re.IGNORECASE):
+            return True
+        if re.match(r"^(page|slide)\s+\d{1,4}\s*[:\-]\s*(figure|image|table|content|overview)?\s*$", content, re.IGNORECASE):
+            return True
+        return False
 
     def _build_visual_data_points(self, ctx: AgentContext) -> list[DataPoint]:
         from aily.sessions.dikiwi_mind import DataPoint

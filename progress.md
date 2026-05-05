@@ -1,0 +1,53 @@
+# Docker Full Flow Progress
+
+## 2026-05-04
+
+- Started Docker full-flow improvement work after the 10-PDF full-flow failure.
+- Initialized persistent planning files.
+- Confirmed the previous failure evidence is real and full-flow acceptance is currently failing.
+- Inspected extraction, network synthesis, batch orchestration, Wisdom, and Impact code.
+- Identified tag-anchored graph synthesis and unfiltered graph centers as immediate quality bugs.
+- Patched graph synthesis filtering, semantic tag persistence, semantic impact centers, stricter quality audit, and a repeatable Docker full-flow pressure runner.
+- Focused tests passed: `17 passed`.
+- Fast regression gate passed: `671 passed, 4 skipped`.
+- Strict audit correctly fails the previous 10-PDF evidence for missing business output, tag domination, generic page nodes, unresolved wikilinks, and cancelled LLM records.
+- Added bounded higher-order DIKIWI selection by graph-change score and exposed selected/candidate counts through batch bridge metadata.
+- Added extraction-method evidence to full-pipeline reports.
+- Added bounded Entrepreneur timeout configuration and Docker env wiring for higher-order contexts, Reactor method timeout, Entrepreneur timeout, and proposal count.
+- Added real LLM-backed Reactor context fallback proposals when every configured Reactor method returns no usable proposal.
+- Removed mandatory `docling` dependency from Docker/runtime requirements and made Docling optional for Office fallback.
+- Docker 2-PDF probe failed during image export before app startup because the old mandatory Docling dependency pulled Torch/CUDA and filled Docker Desktop storage.
+- Removed the failed generated evidence directory and recovered host free space from ~134 MiB to ~7.1 GiB, but Docker daemon remains unavailable.
+- Current fast regression gate passed: `672 passed, 4 skipped`.
+- After manual Docker start, CLI still cannot connect: `/Users/luzi/.docker/run/docker.sock` is not recreated.
+- Retried Docker Desktop launch/restart from shell; `open -a Docker` returns `LSOpenURLsWithCompletionHandler() failed ... error -1712`.
+- Host free space is now ~11 GiB, but Docker Desktop remains an external blocker for Docker full-flow rerun.
+- User freed local disk; Docker is back on local storage with roughly 59 GiB free.
+- NAS-backed Docker storage was abandoned after Docker Desktop crashed while using the SMB volume as `Docker.raw`.
+- A real 2-PDF Docker run was restarted, but the cold image build hit the old 1200-second wrapper timeout before the app started.
+- Patched `scripts/run_docker_full_flow_pressure.py` with explicit cold-build/up timeouts and removed the duplicate `compose up --build` after an explicit build.
+- Docker build then failed on a transient Debian `502 Bad Gateway` during `playwright install --with-deps chromium`.
+- Patched `Dockerfile` to pin Python to `3.11-slim-bookworm` and add apt/Playwright retry handling.
+- Patched the pressure runner so strict audit failure controls the process exit code instead of returning the pipeline exit code only.
+- Real Docker 2-PDF run `2026-05-04T08-12-05Z_docker_real_llm_full_flow_2pdf` proved 01-03 and 07-08 could run, but 04-06 were absent; strict audit failed.
+- Root cause: `NetworkSynthesisSelector` was only run per document during KNOWLEDGE, before the completed batch graph existed.
+- Patched `DikiwiMind` to run a post-KNOWLEDGE batch-level network assessment and patched `NetworkSynthesisSelector` to create semantic connected-component candidates from information-to-information links, not only shared tag neighborhoods.
+- Real Docker 2-PDF run `2026-05-04T08-58-05Z_docker_real_llm_full_flow_2pdf` produced 01-06, 07, and 08 from a graph-selected higher-order candidate: 04=3, 05=2, 06=3, 07=4, 08=5.
+- That run still failed strict audit for unresolved `info_*` wikilinks and failed/cancelled LLM calls. One selected PDF timed out in DATA, but the other completed through IMPACT.
+- Patched `DikiwiObsidianWriter` with an explicit ID-to-filename target map so raw information node IDs in Insight notes resolve to actual Information note files.
+- Focused writer/network/batch tests passed: `16 passed`.
+- Investigated the inert Studio during the 20-PDF Docker run and confirmed the architecture bug: full-pipeline work runs in a separate process, so in-memory `ui_event_hub` broadcasts never reach the FastAPI WebSocket process.
+- Patched `scripts/test_framework.py` so full-pipeline runs configure persistent UI event logging at `SETTINGS.ui_event_log_path`.
+- Patched `frontend/src/App.tsx` so Studio polls `/api/ui/events/query?limit=500`, merges persisted events with WebSocket events, and can animate/replay worker-process activity.
+- Verified UI focused tests: `uv run python -m pytest tests/test_ui_events.py tests/test_ui_router.py -q` -> `20 passed`.
+- Verified frontend build: `npm run build` in `frontend/` passes.
+- Stopped stale run `2026-05-04T11-29-25Z_docker_real_llm_full_flow_20pdf`; it had no `ui-events.jsonl`, so its UI screenshots were not valid animation evidence.
+- Started rebuilt 20-PDF Docker run `2026-05-04T12-37-49Z_docker_real_llm_full_flow_20pdf`; `ui-events.jsonl` is being written and browser screenshots/video show DATA-stage activity in Studio.
+- Patched Studio hero metrics to count event-backed pipelines/sources during CLI-driven Docker runs, because FastAPI queue status alone cannot see separate worker-process pipelines.
+- User identified the remaining architectural flaw correctly: the Docker pressure runner was still detached because it executed `scripts/run_test_suite.py full-pipeline` inside the container instead of driving the Studio upload API.
+- Patched `scripts/run_docker_full_flow_pressure.py` to select PDFs from `~/aily_chaos`, POST them to `/api/ui/uploads`, wait on `/api/ui/status`, `/api/ui/sources`, and vault stage counts, and write Studio API evidence files.
+- Patched `docker-compose.yml` to expose `UI_MAX_UPLOAD_FILES`, `UI_MAX_ACTIVE_UPLOADS`, and `UI_UPLOAD_CONCURRENCY` so pressure runs can submit one real Studio batch.
+- Ran UI-coupled Docker proof `2026-05-04T13-08-31Z_docker_real_llm_full_flow_2pdf`; there was no `run_test_suite.py full-pipeline` process, FastAPI reported `active_uploads`, sources were `processing`, and Studio showed SOURCE_UPLOADED -> SOURCE_STORED -> CHAOS -> DATA -> INFORMATION from the same upload batch.
+- Saved browser proof screenshots:
+  - `logs/runs/2026-05-04T13-08-31Z_docker_real_llm_full_flow_2pdf/screenshots/studio-hooked-upload-processing-full.png`
+  - `logs/runs/2026-05-04T13-08-31Z_docker_real_llm_full_flow_2pdf/screenshots/studio-hooked-information-full.png`

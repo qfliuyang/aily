@@ -1,7 +1,7 @@
 # Browser Use API - Kimi Chat Page Extraction Test Results
 
 **Date:** 2026-04-08 17:24:48
-**API Key:** bu_cr_lbyBviJBUvnw4b...
+**API Key:** supplied by `BROWSER_USE_API_KEY`; raw key removed.
 
 ## Summary
 

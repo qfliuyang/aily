@@ -2,7 +2,7 @@
 
 **Test Date:** 2026-04-08
 **API Base URL:** `https://api.browser-use.com/api/v3`
-**API Key:** `bu_cr_lbyB...` (valid and authenticated)
+**API Key:** supplied by `BROWSER_USE_API_KEY` during the historical test run; raw key removed.
 
 ---
 
@@ -45,7 +45,7 @@ For these tests, we used direct HTTP API calls as a fallback.
 **Latency:** 5,371ms (acceptable for initial connection)
 
 ### Verification
-- API key `bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso` is **valid and active**
+- `BROWSER_USE_API_KEY` authenticated successfully during the historical test run.
 - HTTP GET to `/sessions` returned HTTP 200
 - Response format is JSON with proper structure:
   ```json
@@ -60,7 +60,7 @@ For these tests, we used direct HTTP API calls as a fallback.
 ### Authentication Method
 ```python
 headers = {
-    "X-Browser-Use-API-Key": "bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso",
+    "X-Browser-Use-API-Key": os.environ["BROWSER_USE_API_KEY"],
     "Content-Type": "application/json"
 }
 ```
@@ -76,7 +76,7 @@ headers = {
 ```bash
 POST https://api.browser-use.com/api/v3/sessions
 Content-Type: application/json
-X-Browser-Use-API-Key: bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso
+X-Browser-Use-API-Key: $BROWSER_USE_API_KEY
 
 {
   "task": "Navigate to example.com and extract the page title and main heading"
@@ -180,8 +180,9 @@ Based on the API response structure, costs are tracked per:
 ```python
 import requests
 import asyncio
+import os
 
-API_KEY = "bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso"
+API_KEY = os.environ["BROWSER_USE_API_KEY"]
 BASE_URL = "https://api.browser-use.com/api/v3"
 
 async def browser_use_extract(url: str, task: str) -> dict:
@@ -229,7 +230,7 @@ async def browser_use_extract(url: str, task: str) -> dict:
 ```python
 from browser_use_sdk import AsyncBrowserUse
 
-client = AsyncBrowserUse(api_key="bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso")
+client = AsyncBrowserUse(api_key=os.environ["BROWSER_USE_API_KEY"])
 
 # Simple usage
 result = await client.run(
@@ -297,7 +298,7 @@ async def fetch_with_fallback(url: str, task: str) -> dict:
 ```json
 {
   "timestamp": "2026-04-08T17:24:07.233954",
-  "api_key_prefix": "bu_cr_lbyB...",
+  "api_key_prefix": "redacted",
   "base_url": "https://api.browser-use.com/api/v3",
   "tests": {
     "sdk_availability": {

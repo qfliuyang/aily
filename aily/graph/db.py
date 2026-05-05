@@ -519,6 +519,68 @@ class GraphDB:
             for row in rows
         ]
 
+    async def get_top_information_nodes_by_semantic_edge_count(
+        self,
+        hours: int | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Return information hubs using only information-to-information edges."""
+        if hours is not None:
+            cutoff = self._cutoff(hours)
+            sql = """
+                SELECT n.id, n.type, n.label, n.source, n.created_at,
+                       COUNT(e.id) AS edge_count,
+                       COALESCE(SUM(e.weight), 0) AS total_weight
+                FROM nodes n
+                JOIN edges e ON n.id = e.source_node_id OR n.id = e.target_node_id
+                JOIN nodes other ON other.id = CASE
+                    WHEN n.id = e.source_node_id THEN e.target_node_id
+                    ELSE e.source_node_id
+                END
+                WHERE e.created_at >= ?
+                  AND n.type = 'information'
+                  AND other.type = 'information'
+                  AND e.relation_type != 'has_tag'
+                  AND e.source_node_id != e.target_node_id
+                GROUP BY n.id
+                ORDER BY edge_count DESC, total_weight DESC
+                LIMIT ?
+            """
+            params = (cutoff, limit)
+        else:
+            sql = """
+                SELECT n.id, n.type, n.label, n.source, n.created_at,
+                       COUNT(e.id) AS edge_count,
+                       COALESCE(SUM(e.weight), 0) AS total_weight
+                FROM nodes n
+                JOIN edges e ON n.id = e.source_node_id OR n.id = e.target_node_id
+                JOIN nodes other ON other.id = CASE
+                    WHEN n.id = e.source_node_id THEN e.target_node_id
+                    ELSE e.source_node_id
+                END
+                WHERE n.type = 'information'
+                  AND other.type = 'information'
+                  AND e.relation_type != 'has_tag'
+                  AND e.source_node_id != e.target_node_id
+                GROUP BY n.id
+                ORDER BY edge_count DESC, total_weight DESC
+                LIMIT ?
+            """
+            params = (limit,)
+        rows = await self._fetchall(sql, params)
+        return [
+            {
+                "id": row[0],
+                "type": row[1],
+                "label": row[2],
+                "source": row[3],
+                "created_at": row[4],
+                "edge_count": row[5],
+                "total_weight": row[6],
+            }
+            for row in rows
+        ]
+
     async def get_collisions_within_hours(self, hours: int, min_occurrences: int = 2) -> list[dict]:
         cutoff = self._cutoff(hours)
         rows = await self._fetchall(

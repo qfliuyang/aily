@@ -255,13 +255,16 @@ class ChaosProcessor:
             if mineru_result:
                 return mineru_result
 
-            # Try Docling first for rich document understanding
-            from aily.chaos.processors.docling_processor import DoclingProcessor
+            # Try Docling when the optional dependency is installed.
+            try:
+                from aily.chaos.processors.docling_processor import DoclingProcessor
 
-            processor = DoclingProcessor(self.config, self.llm_client)
-            result = await processor.process(file_path)
-            if result:
-                return result
+                processor = DoclingProcessor(self.config, self.llm_client)
+                result = await processor.process(file_path)
+                if result:
+                    return result
+            except Exception as exc:
+                logger.warning("Docling extraction unavailable for %s: %s", file_path.name, exc)
 
             # Fallback to PPTX processor for presentations
             if mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":

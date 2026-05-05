@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+.env.docker
+.docker-data/
 .venv/
 venv/
 *.db

@@ -131,7 +131,9 @@ class Settings(BaseSettings):
     dikiwi_network_min_nodes: int = 3
     dikiwi_network_trigger_score: float = 4.0
     dikiwi_network_max_candidate_nodes: int = 18
+    dikiwi_higher_order_max_contexts: int = 3
     mineru_batch_extract_concurrency: int = 4
+    entrepreneur_evaluation_timeout_minutes: int = 3
     kimi_api_key: str = ""
     kimi_model: str = "kimi-k2.6"
     kimi_vision_model: str = "kimi-k2.6"
@@ -167,6 +169,13 @@ class Settings(BaseSettings):
     ui_max_upload_files: int = 8
     ui_max_active_uploads: int = 16
     ui_upload_concurrency: int = 2
+    source_worker_count: int = 1
+    source_job_max_pending: int = 500
+    source_max_retry_attempts: int = 5
+    source_retry_base_delay_seconds: float = 300.0
+    source_retry_max_delay_seconds: float = 3600.0
+    source_job_stale_lock_seconds: float = 1800.0
+    follow_external_links_for_uploads: bool = False
     ui_event_trace_limit: int = 200
     ui_auth_enabled: bool = False
     ui_auth_token: str = ""

@@ -1,3 +1,3 @@
-from aily.source_store.store import SourceStore
+from aily.source_store.store import SourceJobCapacityError, SourceStore
 
-__all__ = ["SourceStore"]
+__all__ = ["SourceStore", "SourceJobCapacityError"]

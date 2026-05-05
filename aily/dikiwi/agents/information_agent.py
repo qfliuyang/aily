@@ -16,6 +16,42 @@ from aily.sessions.dikiwi_mind import DataPoint, DikiwiStage, InformationNode, S
 
 logger = logging.getLogger(__name__)
 
+GRAPH_BOOKKEEPING_TAGS = {
+    "action",
+    "applies_to",
+    "contradicts",
+    "data",
+    "depends_on",
+    "dikiwi",
+    "eda",
+    "enables",
+    "example_of",
+    "fact",
+    "general",
+    "has_tag",
+    "impact",
+    "information",
+    "input",
+    "insight",
+    "knowledge",
+    "medium",
+    "mineru",
+    "page",
+    "part_of",
+    "pattern",
+    "pdf",
+    "pending",
+    "principle",
+    "proposal",
+    "relates_to",
+    "slide",
+    "supports",
+    "tradeoff_with",
+    "unclassified",
+    "visual",
+    "wisdom",
+}
+
 
 class InformationAgent(DikiwiAgent):
     """Stage 2: Cluster data points into classified information nodes."""
@@ -329,7 +365,7 @@ class InformationAgent(DikiwiAgent):
             await ctx.graph_db.set_node_property(node.id, "source_paths", source_paths)
             await ctx.graph_db.set_node_property(node.id, "pipeline_id", ctx.pipeline_id)
         except AttributeError: pass  # Property write unavailable on test GraphDB mocks
-        for tag in node.tags:
+        for tag in self._semantic_graph_tags(node.tags):
             await ctx.graph_db.insert_node(
                 node_id=f"tag_{tag}", node_type="tag", label=tag, source="dikiwi"
             )
@@ -353,6 +389,29 @@ class InformationAgent(DikiwiAgent):
     @staticmethod
     def _clean_domain(domain: str) -> str:
         return domain.split("|")[0].strip() if "|" in domain else domain.strip()
+
+    @staticmethod
+    def _semantic_graph_tags(tags: list[str]) -> list[str]:
+        """Only persist content-bearing tags as graph bridge nodes."""
+        semantic: list[str] = []
+        seen: set[str] = set()
+        for raw in tags:
+            tag = str(raw or "").strip().strip("#")
+            if not tag:
+                continue
+            normalized = tag.lower().replace(" ", "_").replace("-", "_")
+            if normalized in GRAPH_BOOKKEEPING_TAGS:
+                continue
+            if normalized.startswith(("page_", "slide_", "type:", "has:")):
+                continue
+            if "/" in tag or "\\" in tag or tag.endswith((".pdf", ".ppt", ".pptx", ".doc", ".docx")):
+                continue
+            if len(tag) < 3:
+                continue
+            if tag not in seen:
+                semantic.append(tag)
+                seen.add(tag)
+        return semantic[:6]
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

@@ -29,15 +29,13 @@ from browser_use.browser.cloud.cloud import CloudBrowserClient
 from browser_use.browser.cloud.views import CreateBrowserRequest
 
 
-# Test API key from task
-DEFAULT_API_KEY = "bu_cr_lbyBviJBUvnw4b1-hNQdLSEi3aALlTIjSYVE1Zso"
-
-
 class KimiBrowserTest:
     """Test Browser Use API with Kimi chat pages."""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.environ.get("BROWSER_USE_API_KEY") or DEFAULT_API_KEY
+        self.api_key = api_key or os.environ.get("BROWSER_USE_API_KEY") or ""
+        if not self.api_key:
+            raise RuntimeError("Set BROWSER_USE_API_KEY before running this real Browser Use test.")
         self.results: list[dict] = []
         self.client = CloudBrowserClient()
 

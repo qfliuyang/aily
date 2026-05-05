@@ -283,6 +283,8 @@ class DikiwiBatchRun:
     incremental_ratio: float = 0.0
     incremental_threshold: float = 0.05
     higher_order_triggered: bool = False
+    higher_order_candidates: int = 0
+    higher_order_selected: int = 0
 
 
 class DikiwiMind:
@@ -1010,7 +1012,10 @@ class DikiwiMind:
                     pipeline_ids=[ctx.pipeline_id for ctx in knowledge_contexts],
                 )
 
-            higher_order_contexts = [
+            if higher_order_triggered and knowledge_contexts:
+                await self._attach_batch_network_assessment(knowledge_contexts)
+
+            higher_order_candidates = [
                 ctx
                 for ctx in knowledge_contexts
                 if ctx.stage_results
@@ -1019,8 +1024,20 @@ class DikiwiMind:
                 and higher_order_triggered
                 and ctx.stage_results[-1].data.get("network_synthesis_triggered", False)
             ]
+            selected_higher_order_contexts = self._select_higher_order_contexts(higher_order_candidates)
 
-            if higher_order_contexts:
+            if higher_order_candidates:
+                await emit_ui_event(
+                    "higher_order_contexts_selected",
+                    stage=DikiwiStage.KNOWLEDGE.name,
+                    candidate_count=len(higher_order_candidates),
+                    selected_count=len(selected_higher_order_contexts),
+                    max_selected=SETTINGS.dikiwi_higher_order_max_contexts,
+                    selected_pipeline_ids=[ctx.pipeline_id for ctx in selected_higher_order_contexts],
+                )
+
+            if selected_higher_order_contexts:
+                higher_order_contexts = selected_higher_order_contexts
                 for stage in (DikiwiStage.INSIGHT, DikiwiStage.WISDOM, DikiwiStage.IMPACT):
                     if not higher_order_contexts:
                         break
@@ -1065,11 +1082,131 @@ class DikiwiMind:
                 incremental_ratio=incremental_ratio,
                 incremental_threshold=threshold,
                 higher_order_triggered=higher_order_triggered,
+                higher_order_candidates=len(higher_order_candidates),
+                higher_order_selected=len(selected_higher_order_contexts),
             )
         finally:
             for ctx in contexts:
                 self._cleanup_memory(ctx.pipeline_id)
                 self._llm_budgets.pop(ctx.pipeline_id, None)
+
+    def _select_higher_order_contexts(self, contexts: list[Any]) -> list[Any]:
+        """Select the strongest graph-change contexts for expensive upper DIKIWI stages."""
+        if not contexts:
+            return []
+
+        max_contexts = max(1, int(SETTINGS.dikiwi_higher_order_max_contexts or 1))
+
+        def score(ctx: Any) -> tuple[float, int, str]:
+            result = ctx.stage_results[-1] if getattr(ctx, "stage_results", None) else None
+            data = result.data if result else {}
+            graph_score = float(data.get("graph_change_score") or 0.0)
+            semantic_edges = int(data.get("graph_semantic_edges") or data.get("semantic_edges") or 0)
+            return (graph_score, semantic_edges, getattr(ctx, "pipeline_id", ""))
+
+        return sorted(contexts, key=score, reverse=True)[:max_contexts]
+
+    async def _attach_batch_network_assessment(self, contexts: list[Any]) -> None:
+        """Assess the completed batch graph, not only per-document partial graphs.
+
+        Knowledge stages run per input. During a cold batch, each individual
+        document can be too small to satisfy network synthesis thresholds even
+        though the completed batch creates a synthesis-grade subgraph. This
+        method runs one batch-level assessment after all KNOWLEDGE stages have
+        persisted their information nodes and semantic links.
+        """
+        if not contexts:
+            return
+        if any(
+            ctx.stage_results
+            and ctx.stage_results[-1].stage == DikiwiStage.KNOWLEDGE
+            and ctx.stage_results[-1].data.get("network_synthesis_triggered", False)
+            for ctx in contexts
+        ):
+            return
+
+        try:
+            from aily.dikiwi.network_synthesis import (
+                NetworkSynthesisSelector,
+                candidate_nodes_to_information,
+            )
+
+            all_info_nodes: list[InformationNode] = []
+            all_links: list[KnowledgeLink] = []
+            seen_nodes: set[str] = set()
+            seen_links: set[tuple[str, str, str]] = set()
+
+            for ctx in contexts:
+                info_result = next(
+                    (
+                        result
+                        for result in ctx.stage_results
+                        if result.stage == DikiwiStage.INFORMATION and result.success
+                    ),
+                    None,
+                )
+                knowledge_result = ctx.stage_results[-1] if ctx.stage_results else None
+                if info_result:
+                    for node in info_result.data.get("information_nodes", []):
+                        if getattr(node, "id", "") and node.id not in seen_nodes:
+                            all_info_nodes.append(node)
+                            seen_nodes.add(node.id)
+                if knowledge_result and knowledge_result.stage == DikiwiStage.KNOWLEDGE:
+                    for link in knowledge_result.data.get("links", []):
+                        key = (
+                            getattr(link, "source_id", ""),
+                            getattr(link, "target_id", ""),
+                            getattr(link, "relation_type", ""),
+                        )
+                        if all(key) and key not in seen_links:
+                            all_links.append(link)
+                            seen_links.add(key)
+
+            if not all_info_nodes:
+                return
+
+            assessment = await NetworkSynthesisSelector().assess(contexts[0], all_info_nodes, all_links)
+            if not assessment.triggered:
+                logger.info(
+                    "[DIKIWI] Batch-level network synthesis not triggered: %s",
+                    assessment.reason,
+                )
+                return
+
+            network_nodes = candidate_nodes_to_information(assessment.candidates)
+            network_context = assessment.to_prompt_context()
+            target_ctx = contexts[0]
+            knowledge_result = target_ctx.stage_results[-1]
+            knowledge_result.data.update(
+                {
+                    "links": all_links,
+                    "local_links": all_links,
+                    "network_synthesis_triggered": True,
+                    "graph_change_assessment": assessment,
+                    "graph_change_score": assessment.score,
+                    "graph_semantic_edges": sum(
+                        int(candidate.metrics.get("semantic_edge_count", 0))
+                        for candidate in assessment.candidates
+                    ),
+                    "subgraph_candidates": assessment.candidates,
+                    "network_nodes": network_nodes,
+                    "network_context": network_context,
+                }
+            )
+            if target_ctx.memory:
+                target_ctx.memory.add_system(
+                    "Batch-level network synthesis trigger:\n"
+                    f"{assessment.reason}\n\n{network_context[:3000]}"
+                )
+            await emit_ui_event(
+                "batch_network_synthesis_triggered",
+                stage=DikiwiStage.KNOWLEDGE.name,
+                candidate_count=len(assessment.candidates),
+                graph_change_score=assessment.score,
+                selected_pipeline_id=target_ctx.pipeline_id,
+            )
+        except Exception as exc:
+            logger.warning("[DIKIWI] Batch-level network synthesis assessment failed: %s", exc)
 
     async def process_input_incremental(
         self,

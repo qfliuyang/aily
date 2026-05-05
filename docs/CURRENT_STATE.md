@@ -77,11 +77,13 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Some older queue-based jobs still exist in `aily/main.py` for URL fetch, digest, voice, file, and session processing.
 - The passive capture scheduler exists, but its browser tab detection remains incomplete and should not be treated as the core ingestion path.
 - Full-pipeline test runs can now emit durable evidence folders under `logs/runs/` through `scripts/run_test_suite.py full-pipeline --seed ...`.
-- Aily Studio Operations can list persisted source records and evidence run manifests through `/api/ui/sources` and `/api/ui/runs`; links can be submitted through `/api/ui/sources/urls`.
+- Aily Studio Operations can list persisted source records and evidence run manifests through `/api/ui/sources` and `/api/ui/runs`; links submitted through `/api/ui/sources/urls` are durably stored, fetched, extracted, and routed into the DIKIWI processing path.
 - Aily Studio Judgment Room reads real proposal and entrepreneurship notes through `/api/ui/proposals` and `/api/ui/entrepreneurship`.
-- Aily Studio controls can cancel active uploads and mark failed sources for retry through `/api/ui/control`.
+- Aily Studio controls can cancel active uploads and retry failed stored uploads through `/api/ui/control`.
+- Retry now reloads the persisted upload object, re-enters the Studio processing path, and emits `source_retry_started` plus `source_retry_completed` or `source_retry_failed`.
 - DIKIWI batch runs emit explicit `batch_stage_started` and `batch_stage_completed` barrier events.
 - Aily Studio HTTP APIs and websocket can be protected with `UI_AUTH_ENABLED=true` and `UI_AUTH_TOKEN=...`; auth is disabled by default for local development.
+- Hosted/private mode supports frontend token entry/storage and `/?token=...` cookie bootstrap so a normal browser can load the static Studio page, call APIs, and keep the websocket connected.
 - Studio uploads have file-count and size checks at the router boundary; backend processing also enforces configured max file size.
 - Provider timeout and retry behavior is configurable through `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES`, and workload-specific `llm_workload_routes_json` fields `timeout` and `max_retries`.
 - Provider switching is documented and queryable through `PrimaryLLMRoute.describe_routes()` and `docs/PROVIDER_ROUTING_MATRIX.md`; active providers are Kimi and DeepSeek only.
@@ -127,6 +129,26 @@ This file is the shortest trustworthy map of the codebase as it exists now.
   - The after-upload snapshot captures the redesigned Gapingvoid-inspired DIKIWI theater glyphs for Chaos, Data, Information, Knowledge, Insight, Wisdom, Impact, Proposal, and Entrepreneurship.
   - Proved a human-style file input upload writes persisted `source_uploaded`, `source_stored`, `chaos_note_created`, and `source_ingest_completed` events.
   - Proved the visible Operations controls can be clicked and persisted as `retry_failed_sources_requested`.
+  - Scope correction: this is UI/control evidence, not full DIKIWI/product evidence. The run disables DIKIWI, Innovation, and Entrepreneur minds, so it must not be used to prove LLM quality, graph synthesis, proposal generation, or real retry execution.
+- `logs/runs/2026-05-02T16-38-24Z_studio_agent_browser_e2e/manifest.json`
+  - Real `agent-browser` session against the updated Studio and FastAPI backend.
+  - Writes the standard evidence folder shape: manifest, command, environment, source manifest, graph/vault snapshots, failures, samples, screenshots, stdout/stderr, and UI events.
+  - Confirms the truth-gated theater in a UI/control scenario where DIKIWI, Innovation, and Entrepreneur are disabled.
+- `logs/runs/2026-05-02T17-12-50Z_studio_agent_browser_hosted_auth_retry_url_e2e/manifest.json`
+  - Real hosted-auth browser run with `HOSTED_MODE=true`, `UI_AUTH_ENABLED=true`, and a temporary token.
+  - Proved first-page token bootstrap, authenticated API calls, authenticated websocket continuity, and source upload from the actual frontend.
+  - Seeded the persisted upload record into failed status, clicked the Studio retry control, and proved actual retry processing through `source_retry_started` and `source_retry_completed`.
+  - Submitted a locally served HTTP article through the Studio URL form and proved `url_fetch_started`, URL-scoped `chaos_note_created`, and URL-scoped `source_ingest_completed` events.
+- `logs/runs/2026-05-03T00-26-50Z_docker_preprod_retry_url_e2e/manifest.json`
+  - Real Docker Compose pre-production run with built image, hosted auth, mounted data/vault/chaos volumes, and standard evidence output.
+  - Proved unauthenticated API rejection, authenticated browser Studio load, websocket continuity, real upload, real URL fetch, failed URL retry lifecycle, restart persistence, and backup/restore dry run.
+  - Docker image digest: `sha256:ff76a6fe409cd3e68e21b9c24b8c2d7685ac54c6af5d977eca07e5cbde39ebc5`.
+- `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`
+  - Real Docker DIKIWI quality run with mounted corpus, mounted vault, mounted evidence, real graph DB, and real LLM calls.
+  - Proved 2 PDFs through 00-06: 47 Data, 43 Information, 20 Knowledge, 3 Insight, 4 Wisdom, and 5 Impact notes.
+  - LLM trace: 20 successful `kimi-k2.6` calls, 0 failures, 68,395 total tokens.
+  - Graph proof: 43 information nodes, 100 tag nodes, 191 edges.
+  - Quality audit passed with zero failures.
 - `logs/provider_smoke_report.json`
   - Real provider smoke report with no mocked providers.
   - Kimi passed on `kimi-k2.6`.
@@ -134,9 +156,16 @@ This file is the shortest trustworthy map of the codebase as it exists now.
   - Active provider set is now Kimi and DeepSeek only.
 - `logs/project_health_report.json`
   - Real repository health scan covering skipped tests, stale doc links, dead-code candidates, syntax errors, and generated artifacts.
+- Fast regression gate after the Studio URL/retry/auth work:
+  - `uv run python -m pytest -q --ignore=tests/e2e --ignore=tests/integration`
+  - Result: `669 passed, 4 skipped`.
+  - Default `pytest -q` was interrupted after `130 passed, 3 skipped` in 8:30 because it entered real E2E/LLM tests; those should remain separate evidence-producing gates, not the fast default gate.
 
 ## Current Gaps
 
+- 2026-05-03 review blockers are closed for the scoped Studio control plane: truth-gated visuals, retry lifecycle events, hosted auth token flow, standard evidence shape, and URL fetch/extract/routing are implemented and tested.
+- Docker pre-production/distribution now has a passing clean-room control-plane run and a separate real-LLM DIKIWI quality run with explicit volumes, real provider calls, vault artifacts, graph artifacts, and audit output.
+- The remaining Studio product gaps are full real-LLM browser evidence and richer media processing beyond files and URLs.
 - The full Impact-to-07/08 path is now proven in one fresh real run, but it remains slow and expensive: the final two-PDF acceptance pass took about 34.7 minutes and 109,025 tokens.
 - The latest low-timeout real run was intentionally configured to fail early; it is evidence for failure handling, not evidence of DIKIWI quality.
-- Phase 0 through Phase 9 now have implementation and test evidence. Zhipu is intentionally quarantined; active provider work continues with Kimi and DeepSeek.
+- Phase 0 through Phase 10 have implementation/test evidence for the scoped control-plane paths. Full real-LLM browser E2E and richer media processing remain future product hardening. Zhipu is intentionally quarantined; active provider work continues with Kimi and DeepSeek.

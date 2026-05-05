@@ -18,16 +18,24 @@ class FakeGraphDB:
 
 
 class FakeAgent:
-    def __init__(self, stage: DikiwiStage, log: list[tuple[str, str]], trigger_map: dict[str, bool] | None = None):
+    def __init__(
+        self,
+        stage: DikiwiStage,
+        log: list[tuple[str, str]],
+        trigger_map: dict[str, bool] | None = None,
+        score_map: dict[str, float] | None = None,
+    ):
         self.stage = stage
         self.log = log
         self.trigger_map = trigger_map or {}
+        self.score_map = score_map or {}
 
     async def execute(self, ctx) -> StageResult:
         self.log.append((self.stage.name, ctx.pipeline_id))
         data = {}
         if self.stage == DikiwiStage.KNOWLEDGE:
             data["network_synthesis_triggered"] = self.trigger_map.get(ctx.drop.id, False)
+            data["graph_change_score"] = self.score_map.get(ctx.drop.id, 0.0)
         return StageResult(stage=self.stage, success=True, data=data)
 
 
@@ -147,6 +155,47 @@ async def test_batch_mode_runs_higher_order_only_for_affected_contexts(monkeypat
     impact_calls = [pipeline_id for stage, pipeline_id in log if stage == "IMPACT"]
     assert len(insight_calls) == 1
     assert insight_calls == wisdom_calls == impact_calls
+
+
+async def test_batch_mode_selects_highest_scored_higher_order_contexts(monkeypatch):
+    original_max = SETTINGS.dikiwi_higher_order_max_contexts
+    log: list[tuple[str, str]] = []
+    mind = DikiwiMind(graph_db=FakeGraphDB([100, 120]), llm_client=object())
+    trigger_map = {"drop_a": True, "drop_b": True, "drop_c": True}
+    score_map = {"drop_a": 1.0, "drop_b": 9.0, "drop_c": 4.0}
+
+    def fake_registry():
+        return {
+            DikiwiStage.DATA: FakeAgent(DikiwiStage.DATA, log),
+            DikiwiStage.INFORMATION: FakeAgent(DikiwiStage.INFORMATION, log),
+            DikiwiStage.KNOWLEDGE: FakeAgent(
+                DikiwiStage.KNOWLEDGE,
+                log,
+                trigger_map=trigger_map,
+                score_map=score_map,
+            ),
+            DikiwiStage.INSIGHT: FakeAgent(DikiwiStage.INSIGHT, log),
+            DikiwiStage.WISDOM: FakeAgent(DikiwiStage.WISDOM, log),
+            DikiwiStage.IMPACT: FakeAgent(DikiwiStage.IMPACT, log),
+        }
+
+    try:
+        SETTINGS.dikiwi_higher_order_max_contexts = 2
+        monkeypatch.setattr(mind, "_build_agent_registry", fake_registry)
+        batch = await mind.process_inputs_batched(
+            [_drop("a"), _drop("b"), _drop("c")],
+            incremental_threshold=0.05,
+        )
+    finally:
+        SETTINGS.dikiwi_higher_order_max_contexts = original_max
+
+    assert batch.higher_order_candidates == 3
+    assert batch.higher_order_selected == 2
+    insight_calls = [pipeline_id for stage, pipeline_id in log if stage == "INSIGHT"]
+    assert len(insight_calls) == 2
+    assert any("drop_b" in pipeline_id for pipeline_id in insight_calls)
+    assert any("drop_c" in pipeline_id for pipeline_id in insight_calls)
+    assert not any("drop_a" in pipeline_id for pipeline_id in insight_calls)
 
 
 async def test_batch_stage_timeout_records_stage_failure(monkeypatch):

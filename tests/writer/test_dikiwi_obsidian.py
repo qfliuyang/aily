@@ -81,6 +81,40 @@ async def test_relation_labels_do_not_become_graph_topic_nodes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_raw_information_node_ids_resolve_to_information_note_files(tmp_path):
+    writer = DikiwiObsidianWriter(vault_path=tmp_path, zettelkasten_only=True)
+
+    class InfoNode:
+        id = "info_raw1234"
+        content = "Case-statement decoder fanout creates placement congestion at advanced nodes."
+        concept = "Case-Statement Decoder Congestion"
+        domain = "eda"
+        info_type = "finding"
+        tags = ["decoder-congestion"]
+        confidence = 0.9
+        source_evidence = ["case statement decoder"]
+        data_point_ids = ["dp1"]
+        data_point_id = "dp1"
+
+    class Insight:
+        id = "insight_raw1234"
+        description = "Decoder congestion is a reusable early-warning signal for RTL physical risk."
+        insight_type = "pattern"
+        confidence = 0.88
+        related_nodes = ["info_raw1234"]
+
+    await writer.write_information_note(InfoNode(), "data_abcd1234", "test")
+    await writer.write_insight_note(Insight(), [], object())
+
+    insight_note = next((tmp_path / "04-Insight").glob("**/*.md"))
+    text = insight_note.read_text(encoding="utf-8")
+
+    assert "[[info_raw1234]]" not in text
+    assert "[[information_" in text
+    assert "Case-Statement_Decoder_Congestion" in text
+
+
+@pytest.mark.asyncio
 async def test_human_titles_are_not_truncated_in_written_notes(tmp_path):
     writer = DikiwiObsidianWriter(vault_path=tmp_path, zettelkasten_only=False)
 
