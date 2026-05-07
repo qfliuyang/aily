@@ -357,3 +357,13 @@ Plan update:
 - Use a 1200s provider-gate phase timeout for the one-PDF RC0 provider gate.
 - Preserve the 240s failure artifact as a negative control; do not reinterpret
   it as success.
+
+### Final Clean Timeout-Budget Verification
+
+After increasing DIKIWI stage timeout and provider-gate timeout budgets, a clean
+pushed commit provider rerun passed at
+`logs/runs/2026-05-07T_post_timeout_clean_provider_dikiwi_goal_audit/` with the
+underlying evidence manifest on `c45bb3a9e8877b379926a2169b6b86ebf46e725b` and
+`dirty_worktree=false`. Docker and practical gates also passed on the same clean
+commit. This closes the timeout-budget follow-up unless a broader soak uncovers
+new provider-specific limits.

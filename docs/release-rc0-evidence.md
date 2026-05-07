@@ -1376,3 +1376,49 @@ Follow-up fix:
   full RC0 gate provider command timeout increased accordingly.
 - The failure remains preserved as evidence that partial DIKIWI runs now fail
   visibly instead of cheating acceptance.
+
+### Final Clean Timeout-Budget Provider/Docker Evidence: 2026-05-07
+
+Commands:
+
+```bash
+LLM_MAX_RETRIES=2 LLM_MIN_INTERVAL_SECONDS=6 \
+python3 scripts/run_rc0_provider_dikiwi_gate.py \
+  --output-dir logs/runs/2026-05-07T_post_timeout_clean_provider_dikiwi_goal_audit \
+  --max 1
+
+python3 scripts/run_docker_preprod_e2e.py --build --exercise-url --exercise-retry
+
+python3 scripts/run_rc0_release_gate.py --mode practical \
+  --run-id 2026-05-07T_post_timeout_clean_practical_goal_audit
+```
+
+Result:
+
+- Provider DIKIWI gate exit code: 0.
+- Provider evidence manifest:
+  `logs/runs/2026-05-07T_post_timeout_clean_provider_dikiwi_goal_audit/provider-dikiwi-gate-manifest.json`.
+- Underlying full-pipeline evidence manifest:
+  `logs/runs/2026-05-07T10-47-37Z_full_pipeline_1pdf/manifest.json`,
+  `git_sha=c45bb3a9e8877b379926a2169b6b86ebf46e725b`,
+  `dirty_worktree=false`, `exit_code=0`.
+- DIKIWI traceability passed with `failures=[]`.
+- Stage counts: 01-Data 28, 02-Information 28, 03-Knowledge 12,
+  04-Insight 4, 05-Wisdom 3, 06-Impact 3.
+- LLM trace: 15 calls, 12 successes, 3 failed attempts, 12/12 successful calls
+  provider-verified, 0 unverified successful calls, model `kimi-k2.6`.
+- Note quality, vault graph-safety, and strict DIKIWI quality audits all passed.
+- Docker preprod rerun exit code: 0, manifest
+  `logs/runs/2026-05-07T11-05-08Z_docker_preprod_retry_url_e2e/manifest.json`,
+  `git_sha=c45bb3a9e8877b379926a2169b6b86ebf46e725b`,
+  `dirty_worktree=false`, with real Docker/FastAPI/browser/vault/graph flags.
+- Practical gate rerun exit code: 0, manifest
+  `logs/runs/2026-05-07T_post_timeout_clean_practical_goal_audit/manifest.json`,
+  `git_sha=c45bb3a9e8877b379926a2169b6b86ebf46e725b`,
+  `dirty_worktree=false`.
+
+Completion impact:
+
+- The current pushed code now has clean-commit evidence for the objective's
+  highest-risk claims: provider-backed DIKIWI, Docker deployment, and practical
+  release/test/doc gates.
