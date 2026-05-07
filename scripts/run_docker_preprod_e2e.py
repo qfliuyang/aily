@@ -22,11 +22,77 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aily.verify.evidence import environment_snapshot, git_state, graph_snapshot, source_manifest, utc_timestamp, vault_counts
 
 
+IMPACT_OR_LATER_STAGES = {"IMPACT", "RESIDUAL", "PROPOSAL", "ENTREPRENEURSHIP"}
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 
+
+
+def _dotenv_value(key: str, default: str = "") -> str:
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return default
+    for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() == key:
+            return value.strip().strip("\"").strip("'")
+    return default
+
+
+def _env_or_dotenv(env_key: str, dotenv_key: str | None = None, default: str = "") -> str:
+    value = os.getenv(env_key, "")
+    if value:
+        return value
+    return _dotenv_value(dotenv_key or env_key, default)
+
+
+
+def _is_impact_or_later(stage: str) -> bool:
+    return stage.strip().upper() in IMPACT_OR_LATER_STAGES
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def _llm_receipt_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    successes = [record for record in records if record.get("success") is True]
+    failures = [record for record in records if record.get("success") is False]
+    verified_successes = [
+        record
+        for record in successes
+        if record.get("provider")
+        and record.get("base_url")
+        and int(record.get("status_code") or 0) == 200
+        and (record.get("provider_response_id") or record.get("provider_request_id"))
+    ]
+    return {
+        "exists": bool(records),
+        "calls": len(records),
+        "successes": len(successes),
+        "failures": len(failures),
+        "models": sorted({str(record.get("model")) for record in records if record.get("model")}),
+        "provider_verified_successes": len(verified_successes),
+        "unverified_successes": len(successes) - len(verified_successes),
+    }
 
 def _sha256_files(paths: list[Path]) -> str:
     digest = hashlib.sha256()
@@ -102,6 +168,39 @@ async def _wait_for_events(
     return []
 
 
+async def _wait_for_dikiwi_completion(
+    base_url: str,
+    token: str,
+    source_id: str,
+    upload_id: str,
+    *,
+    timeout: float = 1500.0,
+) -> dict[str, Any]:
+    """Wait until the browser-submitted source reaches IMPACT.
+
+    The source worker may continue into Residual/Proposal after IMPACT. Customer
+    CSHIP-004 needs Docker+browser+provider proof through DIKIWI IMPACT, so this
+    returns as soon as the IMPACT stage is durably completed instead of waiting
+    for slower post-pipeline proposal work.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        impact_events = await _query_events(base_url, "stage_completed", token)
+        for event in impact_events:
+            if (
+                str(event.get("upload_id") or "") == upload_id
+                and str(event.get("stage") or "") == "IMPACT"
+                and event.get("success") is True
+            ):
+                return {**event, "final_stage": "IMPACT"}
+        failed = await _query_events(base_url, "pipeline_failed", token)
+        for event in failed:
+            if str(event.get("source_id") or "") == source_id or str(event.get("upload_id") or "") == upload_id:
+                raise AssertionError(f"Docker DIKIWI pipeline failed: {event}")
+        await asyncio.sleep(5.0)
+    raise TimeoutError(f"Timed out waiting for Docker DIKIWI IMPACT for source_id={source_id}")
+
+
 async def _post_control(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -169,6 +268,8 @@ async def main() -> int:
         scenario_parts.append("retry")
     if args.exercise_url:
         scenario_parts.append("url")
+    if args.require_real_llm:
+        scenario_parts.append("real_llm")
     scenario_parts.append("e2e")
     scenario = "_".join(scenario_parts)
     run_id = datetime.now(timezone.utc).strftime(f"%Y-%m-%dT%H-%M-%SZ_{scenario}")
@@ -189,10 +290,20 @@ async def main() -> int:
         directory.mkdir(parents=True, exist_ok=True)
 
     sample_file = source_dir / "docker-upload.txt"
-    sample_file.write_text(
-        "Aily Docker pre-production upload. This file proves real mounted-volume ingestion.",
-        encoding="utf-8",
-    )
+    sample_text = "Aily Docker pre-production upload. This file proves real mounted-volume ingestion."
+    if args.require_real_llm:
+        sample_text = (
+            "Aily customer-readiness real LLM Docker evidence document.\n\n"
+            "This document describes a private second-brain system that captures customer research, "
+            "turns raw notes into structured claims, links them into an Obsidian knowledge graph, "
+            "and asks the DIKIWI pipeline to produce impact-oriented decisions.\n\n"
+            "Important facts: the deployment must use Docker Compose, the browser must submit this file "
+            "through Aily Studio, the backend must write real vault notes and graph nodes, and provider "
+            "LLM receipts must prove that the content was processed by Kimi or DeepSeek rather than a mock.\n\n"
+            "The resulting analysis should identify deployment confidence, operational risk, retry visibility, "
+            "traceability from source to note, and customer-shipping blockers.\n"
+        )
+    sample_file.write_text(sample_text, encoding="utf-8")
     web_dir = source_dir / "web"
     web_dir.mkdir()
     article = web_dir / "article.html"
@@ -232,17 +343,18 @@ async def main() -> int:
         "AILY_DOCKER_UI_RATE_LIMIT_REQUESTS": "200",
         "AILY_DOCKER_UI_RATE_LIMIT_WINDOW_SECONDS": "60",
         "AILY_DOCKER_URL_INTAKE_ALLOW_PRIVATE_NETWORK": "true",
-        "AILY_DOCKER_DIKIWI_ENABLED": os.getenv("AILY_DOCKER_REAL_LLM", "false"),
+        "AILY_DOCKER_DIKIWI_ENABLED": "true" if args.require_real_llm else os.getenv("AILY_DOCKER_REAL_LLM", "false"),
         "AILY_DOCKER_INNOVATION_ENABLED": "false",
         "AILY_DOCKER_ENTREPRENEUR_ENABLED": "false",
         "AILY_DOCKER_MAC_ENABLED": "false",
         "AILY_DOCKER_LLM_PROVIDER": os.getenv("AILY_DOCKER_LLM_PROVIDER", "kimi"),
-        "AILY_DOCKER_LLM_API_KEY": os.getenv("AILY_DOCKER_LLM_API_KEY", ""),
-        "AILY_DOCKER_KIMI_API_KEY": os.getenv("AILY_DOCKER_KIMI_API_KEY", ""),
-        "AILY_DOCKER_DEEPSEEK_API_KEY": os.getenv("AILY_DOCKER_DEEPSEEK_API_KEY", ""),
+        "AILY_DOCKER_LLM_API_KEY": _env_or_dotenv("AILY_DOCKER_LLM_API_KEY", "LLM_API_KEY"),
+        "AILY_DOCKER_KIMI_API_KEY": _env_or_dotenv("AILY_DOCKER_KIMI_API_KEY", "KIMI_API_KEY"),
+        "AILY_DOCKER_DEEPSEEK_API_KEY": _env_or_dotenv("AILY_DOCKER_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
         "AILY_DOCKER_LLM_TIMEOUT_SECONDS": os.getenv("AILY_DOCKER_LLM_TIMEOUT_SECONDS", "120"),
         "AILY_DOCKER_LLM_MAX_RETRIES": os.getenv("AILY_DOCKER_LLM_MAX_RETRIES", "2"),
         "AILY_DOCKER_LLM_MIN_INTERVAL_SECONDS": os.getenv("AILY_DOCKER_LLM_MIN_INTERVAL_SECONDS", "6"),
+        "AILY_DOCKER_LLM_TRACE_LOG_PATH": "/data/llm-calls.jsonl",
     }
     env_file.write_text("\n".join(f"{key}={value}" for key, value in env_values.items()) + "\n", encoding="utf-8")
 
@@ -259,6 +371,7 @@ async def main() -> int:
     retry_started_events: list[dict[str, Any]] = []
     retry_terminal_events: list[dict[str, Any]] = []
     retry_seeded_source_id = ""
+    dikiwi_completed_event: dict[str, Any] = {}
     url_fetch_events: list[dict[str, Any]] = []
     url_extract_events: list[dict[str, Any]] = []
     before_graph = graph_snapshot(data_dir / "aily_graph.db")
@@ -268,12 +381,15 @@ async def main() -> int:
 
     compose = _compose_base(compose_files, env_file, project_name)
     try:
-        if args.require_real_llm and not real_llm_requested:
-            raise AssertionError("--require-real-llm requires AILY_DOCKER_REAL_LLM=true and injected provider credentials")
         if args.require_real_llm:
-            raise AssertionError(
-                "Docker provider-verified DIKIWI evidence is not implemented yet: the script can run the control plane, but it does not capture provider receipts or wait for DATA→IMPACT from the browser-submitted input."
-            )
+            selected_provider = env_values["AILY_DOCKER_LLM_PROVIDER"].strip().lower()
+            selected_key = env_values["AILY_DOCKER_LLM_API_KEY"]
+            if selected_provider in {"kimi", "moonshot"}:
+                selected_key = env_values["AILY_DOCKER_KIMI_API_KEY"] or selected_key
+            elif selected_provider == "deepseek":
+                selected_key = env_values["AILY_DOCKER_DEEPSEEK_API_KEY"] or selected_key
+            if not selected_key.strip():
+                raise AssertionError("--require-real-llm requires a provider key from env or .env")
 
         if args.exercise_url:
             fixture_process = subprocess.Popen(
@@ -323,6 +439,21 @@ async def main() -> int:
         stored_events = await _wait_for_events(base_url, "source_stored", token)
         if not stored_events:
             raise AssertionError("No source_stored events after Docker upload")
+        uploaded_source_id = str(stored_events[-1].get("source_id") or "")
+        if args.require_real_llm:
+            if not uploaded_source_id:
+                raise AssertionError("source_stored event did not include source_id for real-LLM wait")
+            dikiwi_completed_event = await _wait_for_dikiwi_completion(
+                base_url,
+                token,
+                uploaded_source_id,
+                str(stored_events[-1].get("upload_id") or ""),
+                timeout=float(os.getenv("AILY_DOCKER_REAL_LLM_TIMEOUT_SECONDS", "1500")),
+            )
+            final_stage = str(dikiwi_completed_event.get("final_stage") or "")
+            if not _is_impact_or_later(final_stage):
+                raise AssertionError(f"Docker DIKIWI final_stage did not reach IMPACT or later: {dikiwi_completed_event}")
+            _run_browser("screenshot", "--full", str(screenshots_dir / "03-after-real-llm-dikiwi.png"), cwd=repo_root, command_log=command_log)
 
         if args.exercise_url:
             _run_browser("fill", 'input[type="url"]', fixture_url, cwd=repo_root, command_log=command_log)
@@ -441,7 +572,28 @@ async def main() -> int:
     )
     (evidence_dir / "vault-counts-after.json").write_text(json.dumps(after_vault, ensure_ascii=False, indent=2), encoding="utf-8")
     (evidence_dir / "failures.json").write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
-    (evidence_dir / "llm-calls.jsonl").write_text("", encoding="utf-8")
+    llm_trace_path = data_dir / "llm-calls.jsonl"
+    evidence_llm_trace_path = evidence_dir / "llm-calls.jsonl"
+    if llm_trace_path.exists():
+        shutil.copy2(llm_trace_path, evidence_llm_trace_path)
+    else:
+        evidence_llm_trace_path.write_text("", encoding="utf-8")
+    llm_receipts = _llm_receipt_summary(_read_jsonl(evidence_llm_trace_path))
+    provider_verified_dikiwi = (
+        real_llm_requested
+        and dikiwi_full_outputs
+        and int(llm_receipts.get("provider_verified_successes", 0) or 0) > 0
+        and int(llm_receipts.get("unverified_successes", 1) or 0) == 0
+    )
+    if args.require_real_llm and not provider_verified_dikiwi and exit_code == 0:
+        failures.append({
+            "type": "AssertionError",
+            "error": "Real LLM Docker run did not produce provider-verified DATA→IMPACT evidence",
+            "llm_receipts": llm_receipts,
+            "vault_counts_after": after_vault,
+            "dikiwi_completed_event": dikiwi_completed_event,
+        })
+        exit_code = 1
     samples_dir = evidence_dir / "samples"
     for name in ["chaos", "data", "information", "knowledge", "insight", "wisdom", "impact", "proposal", "entrepreneurship"]:
         (samples_dir / name).mkdir(parents=True, exist_ok=True)
@@ -451,7 +603,7 @@ async def main() -> int:
         "run_id": run_id,
         **git_state(repo_root),
         "scenario": scenario,
-        "evidence_scope": "docker_preprod_ui_control",
+        "evidence_scope": "docker_preprod_real_llm_customer_path" if args.require_real_llm else "docker_preprod_ui_control",
         "source_count": len(source_records),
         "source_selector": "explicit",
         "vault_path": str(vault_dir),
@@ -474,6 +626,8 @@ async def main() -> int:
             "ready": ready_response,
         },
         "vault_counts_after": after_vault,
+        "llm_receipts": llm_receipts,
+        "dikiwi_completed_event": dikiwi_completed_event,
         "acceptance": {
             "mocked": False,
             "fake_components": [],
@@ -486,7 +640,11 @@ async def main() -> int:
             "real_fastapi": True,
             "real_docker": True,
             "hosted_auth": True,
-            "scope_note": "Docker pre-production UI/control evidence. Real LLM acceptance stays false until this script captures provider receipts and verifies DATA→IMPACT outputs from the Docker/browser-submitted input.",
+            "scope_note": (
+                "Docker/browser/provider customer-path evidence with provider receipts and DATA→IMPACT-or-later outputs."
+                if provider_verified_dikiwi
+                else "Docker pre-production UI/control evidence. Real LLM acceptance stays false until this script captures provider receipts and verifies DATA→IMPACT outputs from the Docker/browser-submitted input."
+            ),
         },
         "checks": {
             "unauthenticated_api_rejected": True,
@@ -504,6 +662,7 @@ async def main() -> int:
             "require_real_llm": bool(args.require_real_llm),
             "dikiwi_full_outputs": dikiwi_full_outputs,
             "provider_verified_dikiwi": provider_verified_dikiwi,
+            "dikiwi_final_stage": str(dikiwi_completed_event.get("final_stage") or ""),
         },
         "screenshots": sorted(str(path.relative_to(evidence_dir)) for path in screenshots_dir.glob("*.png")),
         "failures_count": len(failures),

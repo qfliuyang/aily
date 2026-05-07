@@ -153,6 +153,32 @@ class LLMClient:
             "error_type": error_type,
         }
 
+    def _append_trace_log(self, metadata: dict[str, Any], context: dict[str, Any]) -> None:
+        """Append non-secret provider receipt metadata for real-run audits."""
+        try:
+            from aily.config import SETTINGS
+
+            trace_path = SETTINGS.llm_trace_log_path
+        except Exception:
+            trace_path = None
+        if not trace_path:
+            return
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            **metadata,
+            "pipeline_id": context.get("pipeline_id"),
+            "upload_id": context.get("upload_id"),
+            "stage": context.get("stage"),
+            "workload": context.get("workload"),
+        }
+        try:
+            path = trace_path.expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.exception("Failed to append LLM trace log")
+
     async def _wait_for_rate_window(self) -> None:
         """Ensure request starts are spaced out to avoid bursty imports."""
         if self.min_interval_seconds <= 0:
@@ -299,6 +325,7 @@ class LLMClient:
                 error=str(exc) or repr(exc),
                 error_type=exc.__class__.__name__,
             )
+            self._append_trace_log(self.last_response_metadata, context)
             await emit_ui_event(
                 "llm_request_failed",
                 request_id=request_id,
@@ -326,6 +353,7 @@ class LLMClient:
                 error="Empty response from LLM",
                 error_type="LLMError",
             )
+            self._append_trace_log(self.last_response_metadata, context)
             await emit_ui_event(
                 "llm_request_failed",
                 request_id=request_id,
@@ -354,6 +382,7 @@ class LLMClient:
             response_data=data,
             response_headers=resp.headers,
         )
+        self._append_trace_log(self.last_response_metadata, context)
         await emit_ui_event(
             "llm_request_completed",
             request_id=request_id,

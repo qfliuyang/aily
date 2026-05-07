@@ -188,6 +188,7 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
         and _acceptance(data).get("real_llm") is True
         and _acceptance(data).get("real_vault") is True
         and _acceptance(data).get("real_graph_db") is True
+        and _provider_verified(data)
         and _full_dikiwi(data),
     )
     latest_provider = _latest_any(
@@ -198,7 +199,7 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
         Criterion(
             id="CSHIP-003",
             deliverable="Full-function DIKIWI second-brain pipeline",
-            required="A clean current-HEAD provider-verified run that writes real 01-Data through 06-Impact notes, graph rows, and vault files.",
+            required="A clean current-HEAD provider-verified run that writes real 01-Data through 06-Impact notes, graph rows, vault files, and provider receipts.",
             passed=provider is not None,
             evidence=[_rel(root, provider[0])] if provider else ([_rel(root, latest_provider[0])] if latest_provider else []),
             blockers=[] if provider else ["Latest provider DIKIWI evidence is missing, stale, dirty, partial, or not tied to current HEAD."],
@@ -232,12 +233,11 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
     runbook = root / "docs" / "CUSTOMER_SHIP_READINESS_AUDIT.md"
     runbook_text = runbook.read_text(encoding="utf-8") if runbook.exists() else ""
     required_phrases = [
-        "Customer-ready status: Not achieved",
+        "Customer-ready status:",
         "CSHIP-001",
         "CSHIP-002",
         "CSHIP-003",
         "CSHIP-004",
-        "Blocking gaps",
         "Next verification checkpoint",
     ]
     missing = [phrase for phrase in required_phrases if phrase not in runbook_text]
@@ -249,6 +249,27 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
             passed=runbook.exists() and not missing,
             evidence=[_rel(root, runbook)] if runbook.exists() else [],
             blockers=[] if runbook.exists() and not missing else [f"Missing audit contract phrases: {missing}"],
+        )
+    )
+
+    runbook = root / "docs" / "CUSTOMER_SHIPPING_RUNBOOK.md"
+    runbook_text = runbook.read_text(encoding="utf-8") if runbook.exists() else ""
+    runbook_required = [
+        "single-tenant/private deployment",
+        "--require-real-llm",
+        "provider_verified_dikiwi=true",
+        "Security boundaries",
+        "Known limits",
+    ]
+    runbook_missing = [phrase for phrase in runbook_required if phrase not in runbook_text]
+    criteria.append(
+        Criterion(
+            id="CSHIP-006",
+            deliverable="Customer shipping runbook",
+            required="Customer operator docs define deployment scope, env, acceptance gate, ops, security boundaries, and known limits.",
+            passed=runbook.exists() and not runbook_missing,
+            evidence=[_rel(root, runbook)] if runbook.exists() else [],
+            blockers=[] if runbook.exists() and not runbook_missing else [f"Missing customer runbook phrases: {runbook_missing}"],
         )
     )
 

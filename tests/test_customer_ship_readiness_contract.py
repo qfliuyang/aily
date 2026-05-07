@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts.audit_customer_ship_readiness import audit
+from scripts.run_docker_preprod_e2e import _is_impact_or_later, _llm_receipt_summary
 
 
 pytestmark = pytest.mark.contract
@@ -22,9 +23,14 @@ def test_customer_ship_audit_rejects_split_ui_docker_and_provider_proof(tmp_path
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "CUSTOMER_SHIP_READINESS_AUDIT.md").write_text(
-        "Customer-ready status: Not achieved\n"
+        "Customer-ready status: Achieved\n"
         "CSHIP-001\nCSHIP-002\nCSHIP-003\nCSHIP-004\n"
-        "Blocking gaps\nNext verification checkpoint\n",
+        "Next verification checkpoint\n",
+        encoding="utf-8",
+    )
+    (docs / "CUSTOMER_SHIPPING_RUNBOOK.md").write_text(
+        "single-tenant/private deployment\n--require-real-llm\n"
+        "provider_verified_dikiwi=true\nSecurity boundaries\nKnown limits\n",
         encoding="utf-8",
     )
     _write_manifest(
@@ -95,9 +101,14 @@ def test_customer_ship_audit_requires_a_single_current_clean_combined_customer_r
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "CUSTOMER_SHIP_READINESS_AUDIT.md").write_text(
-        "Customer-ready status: Not achieved\n"
+        "Customer-ready status: Achieved\n"
         "CSHIP-001\nCSHIP-002\nCSHIP-003\nCSHIP-004\n"
-        "Blocking gaps\nNext verification checkpoint\n",
+        "Next verification checkpoint\n",
+        encoding="utf-8",
+    )
+    (docs / "CUSTOMER_SHIPPING_RUNBOOK.md").write_text(
+        "single-tenant/private deployment\n--require-real-llm\n"
+        "provider_verified_dikiwi=true\nSecurity boundaries\nKnown limits\n",
         encoding="utf-8",
     )
     _write_manifest(
@@ -136,9 +147,14 @@ def test_customer_ship_audit_rejects_combined_run_without_provider_receipts(tmp_
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "CUSTOMER_SHIP_READINESS_AUDIT.md").write_text(
-        "Customer-ready status: Not achieved\n"
+        "Customer-ready status: Achieved\n"
         "CSHIP-001\nCSHIP-002\nCSHIP-003\nCSHIP-004\n"
-        "Blocking gaps\nNext verification checkpoint\n",
+        "Next verification checkpoint\n",
+        encoding="utf-8",
+    )
+    (docs / "CUSTOMER_SHIPPING_RUNBOOK.md").write_text(
+        "single-tenant/private deployment\n--require-real-llm\n"
+        "provider_verified_dikiwi=true\nSecurity boundaries\nKnown limits\n",
         encoding="utf-8",
     )
     _write_manifest(
@@ -170,3 +186,28 @@ def test_customer_ship_audit_rejects_combined_run_without_provider_receipts(tmp_
 
     assert by_id["CSHIP-004"]["passed"] is False
     assert result["ready_to_ship_customers"] is False
+
+
+def test_docker_llm_receipt_summary_rejects_unverified_successes() -> None:
+    summary = _llm_receipt_summary([
+        {
+            "success": True,
+            "provider": "kimi",
+            "base_url": "https://api.moonshot.cn/v1",
+            "model": "kimi-k2.6",
+            "status_code": 200,
+            "provider_response_id": "chatcmpl-real",
+            "usage": {"total_tokens": 10},
+        },
+        {"success": True, "model": "kimi-k2.6", "status_code": 200},
+    ])
+
+    assert summary["successes"] == 2
+    assert summary["provider_verified_successes"] == 1
+    assert summary["unverified_successes"] == 1
+
+
+def test_docker_real_llm_gate_accepts_impact_or_downstream_final_stage() -> None:
+    assert _is_impact_or_later("IMPACT") is True
+    assert _is_impact_or_later("RESIDUAL") is True
+    assert _is_impact_or_later("KNOWLEDGE") is False

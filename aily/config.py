@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_max_concurrency: int = 1
     llm_min_interval_seconds: float = 6.0
+    llm_trace_log_path: Path | None = None
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
     dikiwi_stage_timeout_seconds: float = 600.0
