@@ -71,6 +71,7 @@ def test_primary_route_supports_workload_timeout_and_retry_overrides():
 def test_primary_route_defaults_are_provider_pressure_safe():
     assert Settings.model_fields["llm_max_retries"].default >= 2
     assert Settings.model_fields["llm_min_interval_seconds"].default >= 6.0
+    assert Settings.model_fields["dikiwi_stage_timeout_seconds"].default >= 600.0
 
     settings = Settings(llm_provider="kimi", kimi_api_key="test-kimi-key", llm_min_interval_seconds=6.0)
 

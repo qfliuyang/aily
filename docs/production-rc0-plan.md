@@ -341,3 +341,19 @@ Rollback note:
 - If provider cost or latency becomes unacceptable, tune the explicit env knobs;
   do not lower release gates to accept partial DIKIWI or provider-unverified
   traces.
+
+### Clean-Commit Provider Timeout Follow-Up
+
+A clean pushed-commit provider run at
+`logs/runs/2026-05-07T_post_commit_clean_provider_dikiwi_goal_audit/` failed
+because INFORMATION exceeded the old 240s DIKIWI stage timeout under real Kimi
+latency/retry pressure. The failure was correctly terminal and visible after the
+full-pipeline acceptance hardening.
+
+Plan update:
+
+- Use `DIKIWI_STAGE_TIMEOUT_SECONDS=600` as the default production/release
+  timeout.
+- Use a 1200s provider-gate phase timeout for the one-PDF RC0 provider gate.
+- Preserve the 240s failure artifact as a negative control; do not reinterpret
+  it as success.

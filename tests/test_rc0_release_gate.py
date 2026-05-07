@@ -52,10 +52,11 @@ def test_full_gate_extends_practical_gate_with_expensive_release_checks(tmp_path
     } <= set(names)
     provider_gate = next(command for command in commands if command.name == "provider_verified_dikiwi_e2e")
     assert "scripts/run_rc0_provider_dikiwi_gate.py" in provider_gate.argv
+    assert "1200" in provider_gate.argv
     assert "AILY-RC0-005" in provider_gate.target_ids
     assert "AILY-RC0-006" in provider_gate.target_ids
     assert any(command.expensive for command in commands if command.name == "docker_preprod_e2e")
-    assert all(command.timeout_seconds <= 1200 for command in commands)
+    assert provider_gate.timeout_seconds >= 1500
     assert any("tests/chaos/test_failure_readiness.py" in command.argv for command in commands)
 
 

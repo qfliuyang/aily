@@ -66,7 +66,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run real provider DIKIWI RC0 gate.")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--max", type=int, default=1)
-    parser.add_argument("--phase-timeout", type=int, default=900)
+    parser.add_argument("--phase-timeout", type=int, default=1200)
     parser.add_argument("--min-eval-notes", type=int, default=25)
     args = parser.parse_args()
 

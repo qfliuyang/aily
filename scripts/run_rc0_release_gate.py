@@ -130,11 +130,11 @@ def _commands(mode: str, run_dir: Path) -> list[GateCommand]:
                 "--max",
                 "1",
                 "--phase-timeout",
-                "900",
+                "1200",
             ],
             target_ids=["AILY-RC0-001", "AILY-RC0-005", "AILY-RC0-006", "AILY-RC0-007"],
             expensive=True,
-            timeout_seconds=1200,
+            timeout_seconds=1500,
         ),
         GateCommand(
             name="fast_local_pytest",

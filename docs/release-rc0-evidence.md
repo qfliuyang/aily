@@ -1346,3 +1346,33 @@ Remaining risk:
 - The post-hardening provider gate is still one real PDF plus the representative
   sample ledger. Broader multi-document/provider soak remains a post-RC0
   hardening lane, not a reason to accept mocked evidence.
+
+### Clean-Commit Provider Timeout Control: 2026-05-07
+
+Command:
+
+```bash
+LLM_MAX_RETRIES=2 LLM_MIN_INTERVAL_SECONDS=6 \
+python3 scripts/run_rc0_provider_dikiwi_gate.py \
+  --output-dir logs/runs/2026-05-07T_post_commit_clean_provider_dikiwi_goal_audit \
+  --max 1 --phase-timeout 900
+```
+
+Result:
+
+- Exit code: 1.
+- This was useful negative evidence, not a command to ignore.
+- The run was on clean pushed commit `2314eea` and made real Kimi calls with
+  provider receipts: 5 successes, then timeout pressure during INFORMATION.
+- The newly hardened full-pipeline scenario correctly returned non-zero because
+  DIKIWI stopped at DATA/INFORMATION and no Knowledge/Insight/Wisdom/Impact
+  vault notes existed.
+
+Follow-up fix:
+
+- Default `DIKIWI_STAGE_TIMEOUT_SECONDS` increased to 600 seconds so real
+  provider retry/backoff and long PDF batches have enough time to complete.
+- Provider RC0 gate default phase timeout increased to 1200 seconds, and the
+  full RC0 gate provider command timeout increased accordingly.
+- The failure remains preserved as evidence that partial DIKIWI runs now fail
+  visibly instead of cheating acceptance.

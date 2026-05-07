@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     llm_min_interval_seconds: float = 6.0
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
-    dikiwi_stage_timeout_seconds: float = 240.0
+    dikiwi_stage_timeout_seconds: float = 600.0
     dikiwi_wisdom_review_enabled: bool = False
     dikiwi_batch_stage_concurrency: int = 4
     reactor_method_timeout_seconds: float = 180.0
