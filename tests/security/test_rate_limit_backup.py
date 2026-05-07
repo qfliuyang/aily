@@ -46,3 +46,37 @@ def test_backup_restore_reconstructs_vault_graph_and_sources(tmp_path: Path) -> 
     assert (restore_dir / "vault" / "00-Chaos" / "note.md").read_text(encoding="utf-8") == "# Note"
     assert (restore_dir / "graph" / "graph.db").read_bytes() == b"graph"
     assert restored["manifest"]["vault_files"] == 1
+
+
+def test_restore_backup_rejects_path_traversal_member(tmp_path: Path) -> None:
+    import pytest
+    import zipfile
+
+    backup_path = tmp_path / "evil.zip"
+    restore_dir = tmp_path / "restore"
+    outside = tmp_path / "evil.txt"
+    with zipfile.ZipFile(backup_path, "w") as archive:
+        archive.writestr("../evil.txt", "owned")
+
+    with pytest.raises(ValueError):
+        restore_backup(backup_path=backup_path, restore_dir=restore_dir)
+
+    assert not outside.exists()
+
+
+def test_restore_backup_rejects_unsafe_archive_without_deleting_existing_target(tmp_path: Path) -> None:
+    import pytest
+    import zipfile
+
+    backup_path = tmp_path / "evil.zip"
+    restore_dir = tmp_path / "restore"
+    restore_dir.mkdir()
+    sentinel = restore_dir / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    with zipfile.ZipFile(backup_path, "w") as archive:
+        archive.writestr("../evil.txt", "owned")
+
+    with pytest.raises(ValueError):
+        restore_backup(backup_path=backup_path, restore_dir=restore_dir)
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"

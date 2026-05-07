@@ -44,10 +44,11 @@ class ImpactAgent(DikiwiAgent):
 
             # Write impact notes
             if ctx.dikiwi_obsidian_writer and impacts:
+                source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
                 for impact_item in impacts:
                     try:
                         await ctx.dikiwi_obsidian_writer.write_impact_note(
-                            impact_item, wisdom_note_ids, ctx.drop, None
+                            impact_item, wisdom_note_ids, ctx.drop, source_paths
                         )
                     except Exception as e:
                         logger.warning("[DIKIWI] Failed to write impact note: %s", e)

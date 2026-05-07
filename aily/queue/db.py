@@ -26,13 +26,19 @@ class QueueDB:
                 status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed')),
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
+                locked_by TEXT,
+                locked_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        await self._ensure_jobs_columns()
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_running_locked ON jobs(status, locked_at)"
         )
         await self._db.execute(
             """
@@ -65,6 +71,15 @@ class QueueDB:
             "CREATE INDEX IF NOT EXISTS idx_snapshots_path ON note_snapshots(vault_path)"
         )
         await self._db.commit()
+
+    async def _ensure_jobs_columns(self) -> None:
+        self._check_db()
+        cursor = await self._db.execute("PRAGMA table_info(jobs)")
+        columns = {str(row[1]) for row in await cursor.fetchall()}
+        if "locked_by" not in columns:
+            await self._db.execute("ALTER TABLE jobs ADD COLUMN locked_by TEXT")
+        if "locked_at" not in columns:
+            await self._db.execute("ALTER TABLE jobs ADD COLUMN locked_at TIMESTAMP")
 
     async def close(self) -> None:
         if self._db:
@@ -116,8 +131,12 @@ class QueueDB:
             return None
         job_id, job_type, payload, retry_count = row
         await self._db.execute(
-            "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            ("running", job_id),
+            """
+            UPDATE jobs
+            SET status = ?, locked_by = ?, locked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            ("running", "primary-worker", job_id),
         )
         await self._db.commit()
         return {
@@ -132,8 +151,16 @@ class QueueDB:
         self._check_db()
         status = "completed" if success else "failed"
         await self._db.execute(
-            "UPDATE jobs SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (status, error_message, job_id),
+            """
+            UPDATE jobs
+            SET status = ?,
+                error_message = CASE WHEN ? IS NULL THEN error_message ELSE ? END,
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, error_message, error_message, job_id),
         )
         await self._db.commit()
 
@@ -155,7 +182,12 @@ class QueueDB:
             "error_message": row[5],
         }
 
-    async def retry_job(self, job_id: str, max_retries: int = 3) -> bool:
+    async def retry_job(
+        self,
+        job_id: str,
+        max_retries: int = 3,
+        error_message: Optional[str] = None,
+    ) -> bool:
         self._check_db()
         cursor = await self._db.execute(
             "SELECT retry_count FROM jobs WHERE id = ?", (job_id,)
@@ -166,13 +198,31 @@ class QueueDB:
         retry_count = row[0] + 1
         if retry_count >= max_retries:
             await self._db.execute(
-                "UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                ("failed", job_id),
+                """
+                UPDATE jobs
+                SET retry_count = ?,
+                    status = ?,
+                    error_message = COALESCE(?, error_message),
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (retry_count, "failed", error_message, job_id),
             )
         else:
             await self._db.execute(
-                "UPDATE jobs SET retry_count = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (retry_count, "pending", job_id),
+                """
+                UPDATE jobs
+                SET retry_count = ?,
+                    status = ?,
+                    error_message = COALESCE(?, error_message),
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (retry_count, "pending", error_message, job_id),
             )
         await self._db.commit()
         return retry_count < max_retries
@@ -254,6 +304,24 @@ class QueueDB:
             "original_markdown": row["original_markdown"],
             "created_at": row["created_at"],
         }
+
+    async def requeue_stale_running_jobs(self, *, stale_after_seconds: float) -> int:
+        self._check_db()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(0.0, stale_after_seconds))).strftime("%Y-%m-%d %H:%M:%S")
+        cursor = await self._db.execute(
+            """
+            UPDATE jobs
+            SET status = 'pending',
+                locked_by = NULL,
+                locked_at = NULL,
+                error_message = COALESCE(error_message, 'stale worker lock recovered'),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'running' AND (locked_at IS NULL OR locked_at <= ?)
+            """,
+            (cutoff,),
+        )
+        await self._db.commit()
+        return int(cursor.rowcount or 0)
 
     async def get_job_counts(self) -> dict[str, int]:
         self._check_db()

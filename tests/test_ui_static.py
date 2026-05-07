@@ -21,3 +21,15 @@ def test_frontend_static_serves_index_and_spa_fallback(tmp_path: Path) -> None:
     assert "Aily Studio" in client.get("/").text
     assert "Aily Studio" in client.get("/studio/graph").text
     assert client.get("/api/missing").status_code == 404
+
+
+def test_ui_logout_clears_httponly_cookie() -> None:
+    from fastapi.testclient import TestClient
+    import aily.main as main
+
+    client = TestClient(main.app)
+    response = client.post("/api/ui/logout")
+
+    assert response.status_code == 200
+    assert "aily_ui_token" in response.headers.get("set-cookie", "")
+    assert "HttpOnly" in response.headers.get("set-cookie", "")

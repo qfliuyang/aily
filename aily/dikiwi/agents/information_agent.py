@@ -411,7 +411,10 @@ class InformationAgent(DikiwiAgent):
             if tag not in seen:
                 semantic.append(tag)
                 seen.add(tag)
-        return semantic[:6]
+        # Keep rich tags as node properties, but only materialize one tag bridge
+        # edge per information node. High-volume tag fanout made the persistent
+        # graph look connected while drowning out actual DIKIWI knowledge links.
+        return semantic[:1]
 
     def _find_stage_result(self, ctx: AgentContext, stage: DikiwiStage) -> StageResult | None:
         for result in ctx.stage_results:

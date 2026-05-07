@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import stat
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -76,12 +78,35 @@ def create_backup(
     return manifest
 
 
+def _safe_zip_members(archive: zipfile.ZipFile, restore_dir: Path) -> list[zipfile.ZipInfo]:
+    restore_root = restore_dir.resolve()
+    safe_members: list[zipfile.ZipInfo] = []
+    for member in archive.infolist():
+        member_path = Path(member.filename)
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise ValueError(f"Unsafe backup member path: {member.filename}")
+        mode = member.external_attr >> 16
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"Unsafe backup member symlink: {member.filename}")
+        target = (restore_root / member.filename).resolve()
+        if target != restore_root and restore_root not in target.parents:
+            raise ValueError(f"Backup member escapes restore dir: {member.filename}")
+        safe_members.append(member)
+    return safe_members
+
+
 def restore_backup(*, backup_path: Path, restore_dir: Path) -> dict[str, Any]:
-    if restore_dir.exists():
-        shutil.rmtree(restore_dir)
-    restore_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(backup_path, "r") as archive:
-        archive.extractall(restore_dir)
+    restore_parent = restore_dir.parent
+    restore_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{restore_dir.name}-", dir=restore_parent) as temp_name:
+        temp_restore = Path(temp_name)
+        with zipfile.ZipFile(backup_path, "r") as archive:
+            safe_members = _safe_zip_members(archive, temp_restore)
+            for member in safe_members:
+                archive.extract(member, temp_restore)
+        if restore_dir.exists():
+            shutil.rmtree(restore_dir)
+        shutil.move(str(temp_restore), str(restore_dir))
     manifest_path = restore_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     return {

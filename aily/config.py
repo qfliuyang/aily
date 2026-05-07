@@ -176,9 +176,11 @@ class Settings(BaseSettings):
     source_retry_max_delay_seconds: float = 3600.0
     source_job_stale_lock_seconds: float = 1800.0
     follow_external_links_for_uploads: bool = False
+    url_intake_allow_private_network: bool = False
     ui_event_trace_limit: int = 200
     ui_auth_enabled: bool = False
     ui_auth_token: str = ""
+    trusted_proxy_headers: bool = False
     hosted_mode: bool = False
     ui_rate_limit_requests: int = 20
     ui_rate_limit_window_seconds: float = 60.0
@@ -262,6 +264,41 @@ class Settings(BaseSettings):
             import logging
             for error in errors:
                 logging.getLogger(__name__).warning("MindsConfig validation: %s", error)
+
+
+
+    def validate_runtime_security(self) -> list[str]:
+        errors: list[str] = []
+        if self.hosted_mode or self.ui_auth_enabled:
+            token = self.ui_auth_token.strip()
+            placeholders = {"", "change-me", "changeme", "secret", "secret-token", "password", "token"}
+            if token.lower() in placeholders or len(token) < 16:
+                errors.append(
+                    "UI_AUTH_TOKEN must be set to a non-placeholder value of at least 16 characters "
+                    "when HOSTED_MODE or UI_AUTH_ENABLED is true"
+                )
+
+        if self.hosted_mode and self.minds.dikiwi_enabled:
+            provider = self.llm_provider.lower().strip()
+            provider_keys = {
+                "kimi": self.kimi_api_key or self.llm_api_key,
+                "moonshot": self.kimi_api_key or self.llm_api_key,
+                "deepseek": self.deepseek_api_key or self.llm_api_key,
+                "zhipu": self.zhipu_api_key or self.llm_api_key,
+            }
+            key = provider_keys.get(provider, self.llm_api_key)
+            if not str(key or "").strip():
+                errors.append(
+                    "A real LLM provider key is required when HOSTED_MODE=true and AILY_DIKIWI_ENABLED=true; "
+                    "set LLM_API_KEY or the provider-specific API key"
+                )
+            vault_path = str(self.dikiwi_vault_path or self.obsidian_vault_path or "").strip()
+            if not vault_path:
+                errors.append(
+                    "DIKIWI_VAULT_PATH or OBSIDIAN_VAULT_PATH is required when HOSTED_MODE=true "
+                    "and AILY_DIKIWI_ENABLED=true"
+                )
+        return errors
 
 
 SETTINGS = Settings()

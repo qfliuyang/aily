@@ -107,3 +107,23 @@ async def test_get_urls_for_raw_logs(queue_db: QueueDB):
 async def test_get_urls_for_raw_logs_empty(queue_db: QueueDB):
     urls = await queue_db.get_urls_for_raw_logs([])
     assert urls == {}
+
+
+@pytest.mark.asyncio
+async def test_requeue_stale_running_primary_jobs(queue_db: QueueDB):
+    job_id = await queue_db.enqueue("url_fetch", {"url": "https://example.com"})
+    job = await queue_db.dequeue()
+    assert job is not None
+
+    await queue_db._db.execute(
+        "UPDATE jobs SET locked_at = '2000-01-01 00:00:00' WHERE id = ?",
+        (job_id,),
+    )
+    await queue_db._db.commit()
+
+    recovered = await queue_db.requeue_stale_running_jobs(stale_after_seconds=60)
+    next_job = await queue_db.dequeue()
+
+    assert recovered == 1
+    assert next_job is not None
+    assert next_job["id"] == job_id

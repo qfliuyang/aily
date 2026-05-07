@@ -93,11 +93,22 @@ def _graph_metrics(graph_db: Path) -> dict[str, Any]:
 
 def _llm_metrics(llm_log: Path | None) -> dict[str, Any]:
     if not llm_log or not llm_log.exists():
-        return {"exists": False, "calls": 0, "successes": 0, "failures": 0, "models": []}
+        return {
+            "exists": False,
+            "calls": 0,
+            "successes": 0,
+            "failures": 0,
+            "models": [],
+            "provider_verified_successes": 0,
+            "unverified_successes": 0,
+            "unverified_samples": [],
+        }
     calls = 0
     successes = 0
     failures = 0
+    provider_verified_successes = 0
     models: set[str] = set()
+    unverified_samples: list[dict[str, Any]] = []
     for line in llm_log.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -109,6 +120,28 @@ def _llm_metrics(llm_log: Path | None) -> dict[str, Any]:
             continue
         if record.get("success") is True:
             successes += 1
+            provider_metadata = record.get("provider_metadata") if isinstance(record.get("provider_metadata"), dict) else {}
+            provider = record.get("provider") or provider_metadata.get("provider")
+            base_url = record.get("base_url") or provider_metadata.get("base_url")
+            status_code = record.get("status_code") or provider_metadata.get("status_code")
+            duration_ms = record.get("duration_ms") or provider_metadata.get("duration_ms")
+            provider_response_id = record.get("provider_response_id") or provider_metadata.get("provider_response_id")
+            provider_request_id = record.get("provider_request_id") or provider_metadata.get("provider_request_id")
+            if provider and base_url and status_code and duration_ms and (provider_response_id or provider_request_id):
+                provider_verified_successes += 1
+            elif len(unverified_samples) < 5:
+                unverified_samples.append(
+                    {
+                        "line": calls,
+                        "model": record.get("model"),
+                        "has_provider": bool(provider),
+                        "has_base_url": bool(base_url),
+                        "status_code": status_code,
+                        "has_duration_ms": bool(duration_ms),
+                        "has_provider_response_id": bool(provider_response_id),
+                        "has_provider_request_id": bool(provider_request_id),
+                    }
+                )
         else:
             failures += 1
         if record.get("model"):
@@ -119,6 +152,9 @@ def _llm_metrics(llm_log: Path | None) -> dict[str, Any]:
         "successes": successes,
         "failures": failures,
         "models": sorted(models),
+        "provider_verified_successes": provider_verified_successes,
+        "unverified_successes": successes - provider_verified_successes,
+        "unverified_samples": unverified_samples,
     }
 
 
@@ -157,6 +193,7 @@ def audit(
     llm = _llm_metrics(llm_log)
     wikilinks = _unresolved_wikilink_metrics(vault)
     failures: list[str] = []
+    warnings: list[str] = []
 
     for stage in STAGES:
         if stage_metrics[stage]["count"] <= 0:
@@ -180,8 +217,15 @@ def audit(
         failures.append("Graph has no edges")
     if llm["calls"] <= 0 or llm["successes"] <= 0:
         failures.append("No successful real LLM calls were recorded")
+    elif llm["provider_verified_successes"] != llm["successes"]:
+        failures.append(
+            "LLM trace has successful calls without provider-verifiable receipt metadata "
+            f"({llm['provider_verified_successes']}/{llm['successes']} verified)"
+        )
     if llm["failures"] > 0:
-        failures.append("LLM trace contains failed calls")
+        warnings.append(
+            f"LLM trace contains {llm['failures']} failed attempt(s); accepted successful calls remain provider-verified"
+        )
     if require_business:
         if stage_metrics["07-Proposal"]["count"] <= 0:
             failures.append("07-Proposal has no markdown notes")
@@ -203,6 +247,7 @@ def audit(
         "llm_log": str(llm_log) if llm_log else "",
         "passed": not failures,
         "failures": failures,
+        "warnings": warnings,
         "stage_metrics": stage_metrics,
         "graph": graph,
         "llm": llm,

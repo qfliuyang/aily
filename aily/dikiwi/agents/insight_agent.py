@@ -52,10 +52,11 @@ class InsightAgent(DikiwiAgent):
             # Write insight notes
             insight_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer and insights:
+                source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
                 for insight_item in insights:
                     try:
                         iid = await ctx.dikiwi_obsidian_writer.write_insight_note(
-                            insight_item, knowledge_note_ids, ctx.drop, None
+                            insight_item, knowledge_note_ids, ctx.drop, source_paths
                         )
                         insight_note_ids.append(iid)
                     except Exception as e:

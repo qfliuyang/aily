@@ -468,25 +468,147 @@ class ProblemExposure:
     this framework actively hunts for failures.
     """
 
-    def __init__(self) -> None:
-        self.problems: list[dict] = []
+    BLOCKING_CATEGORIES = {
+        "API_ERROR",
+        "CONCURRENT_DB_FAILURE",
+        "DATA_CORRUPTION",
+        "FETCH_FAILURE",
+        "HTTP_ERROR",
+        "INTEGRITY",
+        "JOB_TIMEOUT",
+        "MISSING_DATA",
+        "NOTE_MISSING",
+        "OBSIDIAN_VERIFICATION_FAILED",
+        "TIMEOUT",
+        "WEBHOOK_FAILED",
+        "WRITE_FAILURE",
+    }
+    FAILURE_CATEGORY_TOKENS = (
+        "CORRUPTION",
+        "DOWN",
+        "ERROR",
+        "INTEGRITY",
+        "FAIL",
+        "FAILED",
+        "FAILURE",
+        "MISMATCH",
+        "MISSING",
+        "SLOW",
+        "TIMEOUT",
+        "UNAVAILABLE",
+        "UNEXPECTED",
+    )
 
-    def expose(self, category: str, description: str, details: dict | None = None) -> None:
-        """Record a problem that was exposed."""
-        problem = {
+    def __init__(self, *, fail_on_exposure: bool = True) -> None:
+        self.problems: list[dict] = []
+        self.fail_on_exposure = fail_on_exposure
+
+    def _record(
+        self,
+        category: str,
+        description: str,
+        details: dict | None,
+        *,
+        severity: str,
+        blocking: bool,
+    ) -> None:
+        entry = {
             "category": category,
             "description": description,
             "details": details or {},
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "severity": severity,
+            "blocking": blocking,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.problems.append(problem)
+        self.problems.append(entry)
 
-        # Print immediately so we see it even if test passes
-        print(f"\n🔴 EXPOSED: {category}")
+        marker = "🔴 PROBLEM" if blocking else "🟡 OBSERVATION"
+        print(f"\n{marker}: {category}")
         print(f"   {description}")
         if details:
             for key, value in details.items():
                 print(f"   {key}: {value}")
+
+    def record_observation(
+        self,
+        category: str,
+        description: str,
+        details: dict | None = None,
+        *,
+        severity: str = "info",
+    ) -> None:
+        """Record non-blocking telemetry with a non-failure-shaped category."""
+
+        if self.is_failure_category(category):
+            raise ValueError(
+                f"Cannot record failure-shaped category as an observation: {category}. "
+                "Use expose_problem() for production problems or choose a neutral observation category."
+            )
+        self._record(category, description, details, severity=severity, blocking=False)
+
+    def expose_problem(
+        self,
+        category: str,
+        description: str,
+        details: dict | None = None,
+        *,
+        severity: str = "error",
+    ) -> None:
+        """Record a production-blocking problem exposed by the test.
+
+        This is deliberately fail-closed: if ``fail_on_exposure`` is enabled,
+        every problem recorded through this method fails the test at teardown.
+        """
+
+        self._record(category, description, details, severity=severity, blocking=True)
+
+    def expose(
+        self,
+        category: str,
+        description: str,
+        details: dict | None = None,
+        *,
+        severity: str | None = None,
+        blocking: bool | None = None,
+    ) -> None:
+        """Backward-compatible exposure API.
+
+        New tests should use ``record_observation`` or ``expose_problem`` so the
+        contract is explicit. Existing integration tests are classified by
+        category: known failure/problem categories remain blocking, while
+        success/diagnostic observations remain non-blocking. Unknown categories
+        still fail closed when called as explicit problems via
+        ``expose_problem``.
+        """
+
+        failure_category = self.is_failure_category(category)
+        if blocking is False and failure_category:
+            raise ValueError(
+                f"Cannot mark failure-shaped exposure category as non-blocking: {category}. "
+                "Use record_observation() with a non-failure observation category for expected diagnostics."
+            )
+        if blocking is None:
+            blocking = failure_category
+        self._record(
+            category,
+            description,
+            details,
+            severity=severity or ("error" if blocking else "info"),
+            blocking=blocking,
+        )
+
+    @classmethod
+    def is_failure_category(cls, category: str) -> bool:
+        """Return whether a legacy exposure category should fail closed.
+
+        Legacy tests still call ``expose(...)`` directly. Treat explicit known
+        problem categories and failure-shaped names as blocking unless the
+        callers migrate expected diagnostics to ``record_observation`` with
+        non-failure-shaped observation categories.
+        """
+
+        normalized = category.upper()
+        return normalized in cls.BLOCKING_CATEGORIES or any(token in normalized for token in cls.FAILURE_CATEGORY_TOKENS)
 
     def report(self) -> str:
         """Generate a report of all exposed problems."""
@@ -500,11 +622,24 @@ class ProblemExposure:
         lines.append(f"{'='*60}")
         return "\n".join(lines)
 
+    def blocking_problems(self) -> list[dict]:
+        """Return exposed problems that should fail production acceptance."""
+        return [problem for problem in self.problems if problem.get("blocking")]
+
+    def assert_no_blocking_problems(self) -> None:
+        """Fail the test if production-blocking problems were exposed."""
+        blocking = self.blocking_problems()
+        if blocking:
+            summary = "; ".join(f"{p['category']}: {p['description']}" for p in blocking)
+            pytest.fail(f"Blocking production problems exposed: {summary}")
+
 
 @pytest.fixture
-def exposure() -> ProblemExposure:
-    """Problem exposure helper for tests."""
-    return ProblemExposure()
+def exposure() -> Generator[ProblemExposure, None, None]:
+    """Fail-closed problem exposure helper for merge-gated tests."""
+    helper = ProblemExposure(fail_on_exposure=True)
+    yield helper
+    helper.assert_no_blocking_problems()
 
 
 # =============================================================================

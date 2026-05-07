@@ -194,6 +194,7 @@ def llm_trace_logging(log_path: Path | None) -> Iterator[Path | None]:
     original = LLMClient._chat_once
 
     async def patched(self, messages, temperature, response_format):
+        started = time.monotonic()
         call_record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "model": self.model,
@@ -206,10 +207,20 @@ def llm_trace_logging(log_path: Path | None) -> Iterator[Path | None]:
             call_record["response"] = result
             call_record["success"] = True
         except Exception as exc:
-            call_record["error"] = str(exc)
+            call_record["error"] = str(exc) or repr(exc)
             call_record["success"] = False
             raise
         finally:
+            provider_metadata = dict(getattr(self, "last_response_metadata", {}) or {})
+            call_record["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
+            if provider_metadata:
+                call_record["provider_metadata"] = provider_metadata
+                call_record["provider"] = provider_metadata.get("provider")
+                call_record["base_url"] = provider_metadata.get("base_url")
+                call_record["status_code"] = provider_metadata.get("status_code")
+                call_record["provider_response_id"] = provider_metadata.get("provider_response_id")
+                call_record["provider_request_id"] = provider_metadata.get("provider_request_id")
+                call_record["usage"] = provider_metadata.get("usage")
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(call_record, ensure_ascii=False) + "\n")
         return result

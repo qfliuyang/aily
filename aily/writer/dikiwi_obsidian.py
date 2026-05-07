@@ -855,6 +855,30 @@ LIMIT 10
             return f"[[{target}|{display}]]"
         return f"[[{target}]]"
 
+    def _source_trace_section(self, source_paths: list[str] | None, source: str = "") -> str:
+        """Build a source-trace section with at least one stable vault link.
+
+        When a Chaos transcript exists in ``00-Chaos`` for the original source
+        file, link to it directly. Always include the main Zettelkasten index so
+        even source-only/data notes have a resolvable graph-friendly anchor.
+        """
+        lines: list[str] = ["## Source Trace"]
+        if source:
+            lines.append(f"- Source: `{source}`")
+        linked_any = False
+        for raw_path in source_paths or []:
+            source_path = Path(str(raw_path))
+            transcript = self.vault_path / "00-Chaos" / f"{source_path.stem}.md"
+            if transcript.exists():
+                lines.append(f"- Transcript: [[{transcript.stem}|{source_path.name}]]")
+                linked_any = True
+            else:
+                lines.append(f"- Source Path: `{raw_path}`")
+        lines.append("- Vault Index: [[00 Zettelkasten Index|Zettelkasten Index]]")
+        if not linked_any and not source_paths and not source:
+            lines.append("- Source: recorded through upstream DIKIWI links and metadata.")
+        return "\n".join(lines)
+
     def _write_dikiwi_note(
         self,
         stage_folder: str,
@@ -887,6 +911,11 @@ LIMIT 10
             fm["semantic_topics"] = semantic_tags
             if concept_section and "## Concept Neighborhood" not in body:
                 body = f"{body.rstrip()}\n\n{concept_section}"
+
+        if "## Source Trace" not in body:
+            body = f"{body.rstrip()}\n\n{self._source_trace_section(source_paths, str(fm.get('source') or ''))}"
+        elif "[[" not in body:
+            body = f"{body.rstrip()}\n\n## Navigation\n- [[00 Zettelkasten Index|Zettelkasten Index]]"
 
         heading = h1_title if h1_title else title
         note_content = f"{self._format_frontmatter(fm)}\n\n# {heading}\n\n{body}\n"
@@ -1068,6 +1097,7 @@ LIMIT 10
         src_info_id: str,
         tgt_info_id: str,
         source: str,
+        source_paths: list[str] | None = None,
     ) -> str:
         """Write KNOWLEDGE stage note recording a meaningful relationship. Returns dikiwi_id."""
         src_id = getattr(link, "source_id", "")
@@ -1090,6 +1120,7 @@ LIMIT 10
         fm: dict[str, Any] = {
             "type": "knowledge",
             "nodes": nodes_list,
+            "source": source,
             "relation": relation,
             "strength": round(strength, 2),
             "tags": ["knowledge"],
@@ -1108,7 +1139,7 @@ LIMIT 10
         if nodes_list:
             body_lines += ["", "## Related", *[f"- {n}" for n in nodes_list]]
 
-        return self._write_dikiwi_note("03-Knowledge", dikiwi_id, title, fm, "\n".join(body_lines))
+        return self._write_dikiwi_note("03-Knowledge", dikiwi_id, title, fm, "\n".join(body_lines), source_paths)
 
     async def write_insight_note(
         self,
@@ -1244,6 +1275,8 @@ LIMIT 10
                 "```",
                 "",
             ]
+        if "## Source Trace" not in "\n".join(body_lines):
+            body_lines += [self._source_trace_section(source_paths, source), ""]
         body_lines += ["---", "", f"*Source: {source}*"]
 
         path.write_text("\n".join(body_lines), encoding="utf-8")

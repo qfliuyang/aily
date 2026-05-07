@@ -18,6 +18,36 @@ from aily.sessions.dikiwi_mind import DikiwiMind
 logger = logging.getLogger(__name__)
 
 
+def _stage_result_summary(result: Any) -> list[dict[str, Any]]:
+    """Return JSON-safe per-stage traceability data for evidence manifests."""
+    summaries: list[dict[str, Any]] = []
+    for sr in getattr(result, "stage_results", []) or []:
+        stage = getattr(sr, "stage", None)
+        data = getattr(sr, "data", {}) or {}
+        summaries.append(
+            {
+                "stage": getattr(stage, "name", str(stage)),
+                "success": bool(getattr(sr, "success", False)),
+                "items_processed": int(getattr(sr, "items_processed", 0) or 0),
+                "items_output": int(getattr(sr, "items_output", 0) or 0),
+                "processing_time_ms": round(float(getattr(sr, "processing_time_ms", 0.0) or 0.0), 2),
+                "error_message": getattr(sr, "error_message", None),
+                "persisted_note_counts": {
+                    key: len(data.get(key, []) or [])
+                    for key in [
+                        "data_note_ids",
+                        "info_note_ids",
+                        "knowledge_note_ids",
+                        "insight_note_ids",
+                        "wisdom_note_ids",
+                    ]
+                    if key in data
+                },
+            }
+        )
+    return summaries
+
+
 class ChaosDikiwiBridge:
     """Bridge between Chaos extracted content and DIKIWI Zettelkasten."""
 
@@ -73,6 +103,7 @@ class ChaosDikiwiBridge:
                 "zettels_created": zettels_created,
                 "insights": insights_count,
                 "pipeline_id": result.pipeline_id,
+                "stage_results": _stage_result_summary(result),
             }
 
         except Exception as e:
@@ -128,6 +159,7 @@ class ChaosDikiwiBridge:
                 "zettels_created": zettels_created,
                 "insights": insights_count,
                 "source_path": str(content.source_path) if content.source_path else None,
+                "stage_results": _stage_result_summary(pipeline_result),
             }
             if stage_error:
                 item["error"] = stage_error
@@ -209,6 +241,7 @@ class ChaosDikiwiBridge:
                 "zettels_created": zettels_created,
                 "insights": insights_count,
                 "chaos_note_path": str(note_path),
+                "stage_results": _stage_result_summary(pipeline_result),
             }
             if stage_error:
                 item["error"] = stage_error

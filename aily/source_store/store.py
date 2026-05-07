@@ -242,6 +242,72 @@ class SourceStore:
             "duplicate": duplicate,
         }
 
+    async def store_text(
+        self,
+        *,
+        text: str,
+        title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        db = self._check_db()
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise ValueError("Text source is empty")
+        safe_title = title.strip() or "Text Source"
+        data = normalized_text.encode("utf-8")
+        digest = _sha256_bytes(b"text\x00" + data)
+        source_id = f"text:{digest}"
+        object_path = self.object_dir / digest[:2] / digest
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        if not object_path.exists():
+            object_path.write_bytes(data)
+
+        now = _utc_now()
+        existing = await self.get_source(source_id)
+        if existing is None:
+            merged_metadata = {"title": safe_title, **(metadata or {})}
+            await db.execute(
+                """
+                INSERT INTO sources (
+                    source_id, kind, sha256, normalized_source, storage_path,
+                    filename, content_type, size_bytes, status, metadata,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_id,
+                    "text",
+                    digest,
+                    normalized_text[:500],
+                    str(object_path),
+                    f"{safe_title}.txt",
+                    "text/plain; charset=utf-8",
+                    len(data),
+                    "stored",
+                    json.dumps(merged_metadata, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+            duplicate = False
+            status = "stored"
+        else:
+            duplicate = True
+            status = str(existing["status"])
+        return {
+            "source_id": source_id,
+            "title": safe_title,
+            "sha256": digest,
+            "storage_path": str(object_path),
+            "filename": f"{safe_title}.txt",
+            "content_type": "text/plain; charset=utf-8",
+            "size_bytes": len(data),
+            "status": status,
+            "duplicate": duplicate,
+        }
+
     async def update_status(self, source_id: str, status: str, metadata: dict[str, Any] | None = None) -> None:
         db = self._check_db()
         existing = await self.get_source(source_id)
@@ -485,10 +551,27 @@ class SourceStore:
         recovered = int(cursor.rowcount or 0)
         if source_ids:
             placeholders = ",".join("?" for _ in source_ids)
-            await db.execute(
-                f"UPDATE sources SET status = 'retry_pending', updated_at = ? WHERE source_id IN ({placeholders})",
-                (now, *source_ids),
+            source_cursor = await db.execute(
+                f"SELECT source_id, metadata FROM sources WHERE source_id IN ({placeholders})",
+                source_ids,
             )
+            source_rows = await source_cursor.fetchall()
+            for row in source_rows:
+                try:
+                    metadata = json.loads(row["metadata"] or "{}")
+                except json.JSONDecodeError:
+                    metadata = {}
+                metadata.setdefault("last_error", "stale worker lock recovered")
+                await db.execute(
+                    """
+                    UPDATE sources
+                    SET status = 'retry_pending',
+                        metadata = ?,
+                        updated_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (json.dumps(metadata, ensure_ascii=False), now, row["source_id"]),
+                )
         await db.commit()
         return recovered
 

@@ -83,10 +83,11 @@ class WisdomAgent(DikiwiAgent):
             # Write wisdom notes
             wisdom_note_ids: list[str] = []
             if ctx.dikiwi_obsidian_writer and zettels:
+                source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
                 for zettel in zettels:
                     try:
                         wid = await ctx.dikiwi_obsidian_writer.write_wisdom_note(
-                            zettel, insight_note_ids, ctx.drop, None, link_map=title_map
+                            zettel, insight_note_ids, ctx.drop, source_paths, link_map=title_map
                         )
                         wisdom_note_ids.append(wid)
                         logger.info(

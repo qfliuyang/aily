@@ -65,6 +65,7 @@ class KnowledgeAgent(DikiwiAgent):
             knowledge_note_ids: list[str] = []
             node_map = {n.id: n for n in [*info_nodes, *network_nodes]}
             write_source = "dikiwi_network" if assessment.triggered else source
+            source_paths = ctx.drop.metadata.get("source_paths", []) if getattr(ctx.drop, "metadata", None) else []
             if ctx.dikiwi_obsidian_writer and links:
                 for link in links:
                     src_node = node_map.get(link.source_id)
@@ -78,6 +79,7 @@ class KnowledgeAgent(DikiwiAgent):
                                 info_note_ids.get(link.source_id, ""),
                                 info_note_ids.get(link.target_id, ""),
                                 write_source,
+                                source_paths,
                             )
                             knowledge_note_ids.append(kid)
                         except Exception as e:

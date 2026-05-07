@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.contract
+
 from aily.dikiwi.agents.context import AgentContext
 from aily.dikiwi.agents.impact_agent import ImpactAgent
 from aily.dikiwi.agents.insight_agent import InsightAgent
@@ -242,7 +244,7 @@ async def test_network_synthesis_does_not_bootstrap_from_current_drop_without_gr
 
 
 @pytest.mark.asyncio
-async def test_insight_is_written_from_graph_paths_without_source_paths(monkeypatch):
+async def test_insight_is_written_with_source_paths_for_traceability(monkeypatch):
     writer = FakeDikiwiWriter()
     candidate = _candidate()
     ctx = _ctx(writer=writer)
@@ -279,7 +281,7 @@ async def test_insight_is_written_from_graph_paths_without_source_paths(monkeypa
 
     assert result.success is True
     assert result.items_output == 1
-    assert writer.insight_calls[0].source_paths is None
+    assert writer.insight_calls[0].source_paths == ["/tmp/original.pdf"]
     insight = writer.insight_calls[0].item
     assert insight.related_nodes == ["info_a", "info_b"]
     assert insight.graph_provenance["mode"] == "short_information_paths"
@@ -336,7 +338,7 @@ async def test_wisdom_requires_graph_candidates_and_writes_graph_provenance(monk
 
     assert result.success is True
     assert result.items_output == 1
-    assert writer.wisdom_calls[0].source_paths is None
+    assert writer.wisdom_calls[0].source_paths == ["/tmp/original.pdf"]
     zettel = writer.wisdom_calls[0].item
     assert zettel.source == "dikiwi_graph"
     assert zettel.graph_provenance["mode"] == "long_information_paths"
@@ -382,7 +384,7 @@ async def test_impact_requires_information_center_nodes_and_writes_graph_provena
 
     assert result.success is True
     assert result.items_output == 1
-    assert writer.impact_calls[0].source_paths is None
+    assert writer.impact_calls[0].source_paths == ["/tmp/original.pdf"]
     impact = writer.impact_calls[0].item
     assert impact["graph_provenance"]["mode"] == "high_connectivity_center_nodes"
     assert impact["graph_provenance"]["center_node_ids"] == ["info_center"]

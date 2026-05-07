@@ -132,17 +132,37 @@ class TestProcessingRouterProcess:
         assert "File too large" in result.text
 
 
+async def _aiter_bytes(chunks):
+    for chunk in chunks:
+        yield chunk
+
+
+class _PublicPeerStream:
+    def get_extra_info(self, name):
+        if name == "server_addr":
+            return ("93.184.216.34", 443)
+        return None
+
+
 class TestProcessingRouterProcessUrl:
     @pytest.mark.asyncio
+    @patch("aily.processing.router._validate_public_http_url", new_callable=AsyncMock)
     @patch("httpx.AsyncClient")
-    async def test_fetches_and_processes_url(self, mock_client_cls):
+    async def test_fetches_and_processes_url(self, mock_client_cls, _mock_validate_url):
         mock_response = AsyncMock()
-        mock_response.content = b"# Markdown content"
-        mock_response.headers = {"content-type": "text/markdown"}
+        mock_response.headers = {"content-type": "text/markdown", "content-length": "18"}
+        mock_response.extensions = {"network_stream": _PublicPeerStream()}
+        mock_response.is_redirect = False
+        mock_response.url = "https://example.com/doc.md"
         mock_response.raise_for_status = MagicMock()
+        mock_response.aiter_bytes = lambda: _aiter_bytes([b"# Markdown content"])
+
+        mock_stream = AsyncMock()
+        mock_stream.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_stream.__aexit__ = AsyncMock(return_value=False)
 
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.stream = MagicMock(return_value=mock_stream)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client_cls.return_value = mock_client
@@ -153,10 +173,11 @@ class TestProcessingRouterProcessUrl:
         assert "Markdown content" in result.text
 
     @pytest.mark.asyncio
+    @patch("aily.processing.router._validate_public_http_url", new_callable=AsyncMock)
     @patch("httpx.AsyncClient")
-    async def test_handles_fetch_failure(self, mock_client_cls):
+    async def test_handles_fetch_failure(self, mock_client_cls, _mock_validate_url):
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=Exception("Connection error"))
+        mock_client.stream = MagicMock(side_effect=Exception("Connection error"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client_cls.return_value = mock_client

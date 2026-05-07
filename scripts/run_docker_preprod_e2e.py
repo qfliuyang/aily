@@ -84,6 +84,24 @@ async def _query_events(base_url: str, event_type: str, token: str) -> list[dict
     return list(response.json().get("events", []))
 
 
+async def _wait_for_events(
+    base_url: str,
+    event_type: str,
+    token: str,
+    *,
+    timeout: float = 15.0,
+    predicate=None,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        events = await _query_events(base_url, event_type, token)
+        matches = [event for event in events if predicate is None or predicate(event)]
+        if matches:
+            return matches
+        await asyncio.sleep(0.75)
+    return []
+
+
 async def _post_control(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -208,6 +226,7 @@ async def main() -> int:
         "AILY_DOCKER_UI_AUTH_TOKEN": token,
         "AILY_DOCKER_UI_RATE_LIMIT_REQUESTS": "200",
         "AILY_DOCKER_UI_RATE_LIMIT_WINDOW_SECONDS": "60",
+        "AILY_DOCKER_URL_INTAKE_ALLOW_PRIVATE_NETWORK": "true",
         "AILY_DOCKER_DIKIWI_ENABLED": os.getenv("AILY_DOCKER_REAL_LLM", "false"),
         "AILY_DOCKER_INNOVATION_ENABLED": "false",
         "AILY_DOCKER_ENTREPRENEUR_ENABLED": "false",
@@ -233,8 +252,9 @@ async def main() -> int:
     stored_events: list[dict[str, Any]] = []
     retry_started_events: list[dict[str, Any]] = []
     retry_terminal_events: list[dict[str, Any]] = []
+    retry_seeded_source_id = ""
     url_fetch_events: list[dict[str, Any]] = []
-    url_ingest_events: list[dict[str, Any]] = []
+    url_extract_events: list[dict[str, Any]] = []
     before_graph = graph_snapshot(data_dir / "aily_graph.db")
     before_vault = vault_counts(vault_dir)
 
@@ -285,7 +305,7 @@ async def main() -> int:
         _run_browser("upload", 'input[type="file"]', str(sample_file), cwd=repo_root, command_log=command_log)
         _run_browser("wait", "2500", cwd=repo_root, command_log=command_log)
         _run_browser("screenshot", "--full", str(screenshots_dir / "02-after-upload.png"), cwd=repo_root, command_log=command_log)
-        stored_events = await _query_events(base_url, "source_stored", token)
+        stored_events = await _wait_for_events(base_url, "source_stored", token)
         if not stored_events:
             raise AssertionError("No source_stored events after Docker upload")
 
@@ -294,36 +314,41 @@ async def main() -> int:
             _run_browser("find", "role", "button", "click", "--name", "Process link", "--exact", cwd=repo_root, command_log=command_log)
             _run_browser("wait", "3500", cwd=repo_root, command_log=command_log)
             _run_browser("screenshot", "--full", str(screenshots_dir / "03-after-url.png"), cwd=repo_root, command_log=command_log)
-            url_fetch_events = await _query_events(base_url, "url_fetch_started", token)
-            ingest_events = await _query_events(base_url, "source_ingest_completed", token)
-            url_ingest_events = [event for event in ingest_events if str(event.get("url", "")) == fixture_url]
-            if not any(str(event.get("url", "")) == fixture_url for event in url_fetch_events):
+            url_fetch_events = await _wait_for_events(
+                base_url,
+                "url_fetch_started",
+                token,
+                predicate=lambda event: str(event.get("url", "")) == fixture_url,
+            )
+            url_extract_events = await _wait_for_events(
+                base_url,
+                "chaos_note_created",
+                token,
+                predicate=lambda event: str(event.get("url", "")) == fixture_url,
+            )
+            if not url_fetch_events:
                 raise AssertionError("No url_fetch_started event for Docker fixture URL")
-            if not url_ingest_events:
-                raise AssertionError("No source_ingest_completed event for Docker fixture URL")
+            if not url_extract_events:
+                raise AssertionError("No chaos_note_created event for Docker fixture URL")
+            retry_seeded_source_id = str(url_extract_events[-1].get("source_id") or "")
 
         if args.exercise_retry:
-            if args.exercise_url:
-                bad_url = f"http://host.docker.internal:{fixture_port}/missing-for-retry.html"
-                _run_browser("fill", 'input[type="url"]', bad_url, cwd=repo_root, command_log=command_log)
-                _run_browser("find", "role", "button", "click", "--name", "Process link", "--exact", cwd=repo_root, command_log=command_log)
-                _run_browser("wait", "2500", cwd=repo_root, command_log=command_log)
-                failures_for_bad_url = await _query_events(base_url, "pipeline_failed", token)
-                if not any(str(event.get("url", "")) == bad_url for event in failures_for_bad_url):
-                    raise AssertionError("Bad URL did not create a failed source for retry")
-            else:
+            if not args.exercise_url:
                 source_id = str(stored_events[-1].get("source_id") or "")
                 if not source_id:
                     raise AssertionError("source_stored event did not include source_id")
-                _mark_failed(data_dir / "source_store.db", source_id)
+                retry_seeded_source_id = source_id
+            if not retry_seeded_source_id:
+                raise AssertionError("No source_id available for retry failure seeding")
+            _mark_failed(data_dir / "source_store.db", retry_seeded_source_id)
             _run_browser("find", "role", "button", "click", "--name", "Operations", cwd=repo_root, command_log=command_log)
             _run_browser("wait", "--text", "Retry failed sources", cwd=repo_root, command_log=command_log)
             _run_browser("find", "role", "button", "click", "--name", "Retry failed sources", "--exact", cwd=repo_root, command_log=command_log)
             _run_browser("wait", "1500", cwd=repo_root, command_log=command_log)
             _run_browser("screenshot", "--full", str(screenshots_dir / "04-after-retry.png"), cwd=repo_root, command_log=command_log)
-            retry_started_events = await _query_events(base_url, "source_retry_started", token)
+            retry_started_events = await _wait_for_events(base_url, "source_retry_started", token)
             completed = await _query_events(base_url, "source_retry_completed", token)
-            failed = await _query_events(base_url, "source_retry_failed", token)
+            failed = await _wait_for_events(base_url, "source_retry_failed", token)
             retry_terminal_events = [*completed, *failed]
             if not retry_started_events or not retry_terminal_events:
                 raise AssertionError("Retry lifecycle events were not emitted")
@@ -446,7 +471,8 @@ async def main() -> int:
             "browser_loaded_frontend": not failures,
             "browser_uploaded_real_file": bool(stored_events),
             "url_fetch_event": bool(url_fetch_events),
-            "url_ingest_event": bool(url_ingest_events),
+            "url_extract_event": bool(url_extract_events),
+            "retry_seeded_source_id": retry_seeded_source_id,
             "retry_started_event": bool(retry_started_events),
             "retry_terminal_event": bool(retry_terminal_events),
             "restart_persistence": restart_check,

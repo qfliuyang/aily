@@ -15,10 +15,34 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator, Generator
+from typing import AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
+
+
+from tests.support.acceptance import AcceptanceBoundaryManifest, assert_acceptance_boundary_ready
+
+
+@pytest.fixture
+def acceptance_boundary_manifest() -> AcceptanceBoundaryManifest:
+    """Default local E2E boundary declaration.
+
+    This suite uses real local GraphDB and real LLM, but the writer fixture below
+    substitutes direct filesystem writes for the production Obsidian REST API.
+    Treat these tests as local integration unless a test supplies a stricter
+    manifest with all required boundaries real.
+    """
+
+    return AcceptanceBoundaryManifest(
+        real_llm=True,
+        real_graph_db=True,
+        real_queue_worker=False,
+        real_writer_api=False,
+        real_http=False,
+        fake_components=["obsidian_writer", "queue_worker", "http_fetch"],
+    )
+
 
 # =============================================================================
 # TEST ISOLATION HELPERS

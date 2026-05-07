@@ -260,10 +260,10 @@ const MAX_STUDIO_EVENTS = 2000;
 function initialAuthToken() {
   const urlToken = new URLSearchParams(window.location.search).get("token")?.trim();
   if (urlToken) {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, urlToken);
+    window.sessionStorage.setItem(AUTH_STORAGE_KEY, urlToken);
     return urlToken;
   }
-  return window.localStorage.getItem(AUTH_STORAGE_KEY) ?? "";
+  return window.sessionStorage.getItem(AUTH_STORAGE_KEY) ?? "";
 }
 
 function responseError(response: Response, fallback: string): Promise<Error> {
@@ -296,6 +296,7 @@ function App() {
   const [sourceJobs, setSourceJobs] = useState<SourceJobListResponse>(emptySourceJobs);
   const [proposals, setProposals] = useState<VaultNoteListResponse>(emptyVaultNotes);
   const [entrepreneurship, setEntrepreneurship] = useState<VaultNoteListResponse>(emptyVaultNotes);
+  const [vaultNotes, setVaultNotes] = useState<VaultNoteListResponse>(emptyVaultNotes);
   const [mode, setMode] = useState<"live" | "replay">("live");
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -327,6 +328,7 @@ function App() {
     void refreshSources();
     void refreshSourceJobs();
     void refreshJudgmentArtifacts();
+    void refreshVaultNotes();
     void refreshRecentEvents();
 
     const interval = window.setInterval(() => {
@@ -336,6 +338,7 @@ function App() {
       void refreshSources();
       void refreshSourceJobs();
       void refreshJudgmentArtifacts();
+      void refreshVaultNotes();
       void refreshRecentEvents();
     }, 5000);
 
@@ -367,6 +370,7 @@ function App() {
         ) {
           void refreshGraph();
           void refreshJudgmentArtifacts();
+          void refreshVaultNotes();
         }
       };
       ws.onerror = () => {
@@ -407,11 +411,24 @@ function App() {
   function saveAuthToken() {
     const token = pendingAuthToken.trim();
     if (token) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+      window.sessionStorage.setItem(AUTH_STORAGE_KEY, token);
     } else {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
     }
     setAuthToken(token);
+    setApiError(null);
+    setStreamError(null);
+  }
+
+  async function clearAuthToken() {
+    window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    try {
+      await fetch("/api/ui/logout", { method: "POST" });
+    } catch {
+      // Local state is still cleared; the server endpoint clears HttpOnly cookies when reachable.
+    }
+    setAuthToken("");
+    setPendingAuthToken("");
     setApiError(null);
     setStreamError(null);
   }
@@ -522,6 +539,19 @@ function App() {
       setApiError(null);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Failed to fetch judgment artifacts.");
+    }
+  }
+
+  async function refreshVaultNotes() {
+    try {
+      const response = await apiFetch("/api/ui/vault-notes/05-Wisdom?limit=8");
+      if (!response.ok) {
+        throw await responseError(response, "Failed to fetch vault notes.");
+      }
+      setVaultNotes((await response.json()) as VaultNoteListResponse);
+      setApiError(null);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Failed to fetch vault notes.");
     }
   }
 
@@ -726,10 +756,7 @@ function App() {
               type="button"
               className="control-button ghost"
               onClick={() => {
-                setPendingAuthToken("");
-                window.localStorage.removeItem(AUTH_STORAGE_KEY);
-                document.cookie = "aily_ui_token=; Max-Age=0; path=/; SameSite=Lax";
-                setAuthToken("");
+                void clearAuthToken();
               }}
             >
               Clear
@@ -967,6 +994,20 @@ function App() {
                     </div>
                   </article>
                 ))}
+                {vaultNotes.items.map((note) => (
+                  <article key={note.note_path} className="judgment-card state-processing">
+                    <div className="judgment-head">
+                      <span className="pill">wisdom note</span>
+                      <span>{new Date(note.updated_at * 1000).toLocaleTimeString()}</span>
+                    </div>
+                    <h3>{note.title}</h3>
+                    <p>{note.preview}</p>
+                    <div className="judgment-meta">
+                      <span className="mono">{note.relative_path}</span>
+                      <span>{formatBytes(note.size_bytes)}</span>
+                    </div>
+                  </article>
+                ))}
                 {judgmentSignals.map((signal) => (
                   <article key={signal.id} className={`judgment-card state-${signal.state}`}>
                     <div className="judgment-head">
@@ -982,9 +1023,9 @@ function App() {
                     </div>
                   </article>
                 ))}
-                {!judgmentSignals.length && !proposals.items.length && !entrepreneurship.items.length && (
+                {!judgmentSignals.length && !proposals.items.length && !entrepreneurship.items.length && !vaultNotes.items.length && (
                   <p className="empty-state">
-                    No proposal or entrepreneur artifacts found. Cards here are loaded from vault/API artifacts, not demo data.
+                    No proposal, entrepreneur, or wisdom artifacts found. Cards here are loaded from vault/API artifacts, not demo data.
                   </p>
                 )}
               </div>

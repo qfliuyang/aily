@@ -22,11 +22,13 @@ def create_ui_router(
     graph_provider: Callable[[], Awaitable[dict[str, Any]]],
     pipeline_provider: Callable[[str], Awaitable[dict[str, Any] | None]],
     url_handler: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    text_handler: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
     source_provider: Callable[[int, int], Awaitable[dict[str, Any]]] | None = None,
     source_detail_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
     source_jobs_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
     proposal_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     entrepreneurship_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
+    vault_notes_provider: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
     control_handler: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     rate_limiter: FixedWindowRateLimiter | None = None,
     run_registry: RunRegistry | None = None,
@@ -34,6 +36,7 @@ def create_ui_router(
     max_files_per_request: int = 8,
     max_upload_bytes: int | None = None,
     auth_token: str = "",
+    trust_proxy_headers: bool = False,
 ) -> APIRouter:
     def _request_authorized(request: HTTPConnection) -> bool:
         if not auth_token:
@@ -70,9 +73,10 @@ def create_ui_router(
     router = APIRouter(prefix="/api/ui", tags=["ui"], dependencies=[Depends(_require_auth)])
 
     def _client_key(request: HTTPConnection) -> str:
-        forwarded_for = request.headers.get("x-forwarded-for", "")
-        if forwarded_for:
-            return forwarded_for.split(",", 1)[0].strip()
+        if trust_proxy_headers:
+            forwarded_for = request.headers.get("x-forwarded-for", "")
+            if forwarded_for:
+                return forwarded_for.split(",", 1)[0].strip()
         return request.client.host if request.client else "unknown"
 
     def _check_rate_limit(request: HTTPConnection) -> None:
@@ -163,6 +167,26 @@ def create_ui_router(
         )
         return source
 
+    @router.post("/sources/texts")
+    async def submit_text(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        _check_rate_limit(request)
+        if text_handler is None:
+            raise HTTPException(status_code=503, detail="Text intake unavailable")
+        title = str(payload.get("title", "")).strip()
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        source = await text_handler(title, text)
+        await emit_ui_event(
+            "source_stored",
+            source_id=source.get("source_id"),
+            source_type="text",
+            title=title or source.get("title") or "Text Source",
+            duplicate=source.get("duplicate"),
+            sha256=source.get("sha256"),
+        )
+        return source
+
     @router.get("/status")
     async def ui_status() -> dict[str, Any]:
         return await status_provider()
@@ -247,6 +271,25 @@ def create_ui_router(
         if entrepreneurship_provider is None:
             return {"total": 0, "items": []}
         return await entrepreneurship_provider(limit)
+
+    @router.get("/vault-notes/{stage}")
+    async def list_vault_notes(stage: str, limit: int = 25) -> dict[str, Any]:
+        if vault_notes_provider is None:
+            return {"stage": stage, "total": 0, "items": []}
+        allowed = {
+            "00-Chaos",
+            "01-Data",
+            "02-Information",
+            "03-Knowledge",
+            "04-Insight",
+            "05-Wisdom",
+            "06-Impact",
+            "07-Proposal",
+            "08-Entrepreneurship",
+        }
+        if stage not in allowed:
+            raise HTTPException(status_code=400, detail="Unsupported vault stage")
+        return await vault_notes_provider(stage, limit)
 
     @router.post("/control")
     async def control(request: Request, payload: dict[str, Any]) -> dict[str, Any]:

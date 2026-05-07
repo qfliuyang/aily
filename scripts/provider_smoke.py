@@ -57,13 +57,23 @@ async def smoke_provider(provider: str, settings: Settings, timeout: float) -> d
             ],
             temperature=0.2,
         )
-        status = "passed" if isinstance(payload, dict) and "innovation_angle" in payload else "failed"
+        provider_metadata = dict(getattr(client, "last_response_metadata", {}) or {})
+        provider_verified = bool(
+            provider_metadata.get("provider")
+            and provider_metadata.get("base_url")
+            and provider_metadata.get("status_code")
+            and provider_metadata.get("duration_ms")
+            and (provider_metadata.get("provider_response_id") or provider_metadata.get("provider_request_id"))
+        )
+        status = "passed" if isinstance(payload, dict) and "innovation_angle" in payload and provider_verified else "failed"
         return {
             "provider": provider,
             "model": route.model,
             "status": status,
+            "provider_verified": provider_verified,
             "started_at": started.isoformat(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "provider_metadata": provider_metadata,
             "usage": client.get_usage_stats(),
             "output": payload,
         }
@@ -76,6 +86,7 @@ async def smoke_provider(provider: str, settings: Settings, timeout: float) -> d
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "error": str(exc),
             "error_type": exc.__class__.__name__,
+            "provider_metadata": dict(getattr(client, "last_response_metadata", {}) or {}),
             "usage": client.get_usage_stats(),
         }
 
@@ -85,6 +96,11 @@ async def main() -> int:
     parser.add_argument("--providers", nargs="+", default=["kimi", "deepseek"])
     parser.add_argument("--output", type=Path, default=Path("logs/provider_smoke_report.json"))
     parser.add_argument("--timeout", type=float, default=float(os.getenv("PROVIDER_SMOKE_TIMEOUT", "45")))
+    parser.add_argument(
+        "--allow-skips",
+        action="store_true",
+        help="Return zero when providers are skipped for missing credentials. Never use for release acceptance.",
+    )
     args = parser.parse_args()
 
     settings = Settings()
@@ -99,7 +115,8 @@ async def main() -> int:
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     failed = [item for item in results if item["status"] == "failed"]
-    return 1 if failed else 0
+    skipped = [item for item in results if item["status"] == "skipped"]
+    return 1 if failed or (skipped and not args.allow_skips) else 0
 
 
 if __name__ == "__main__":

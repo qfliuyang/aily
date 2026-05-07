@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 import time
@@ -72,6 +71,46 @@ async def _query_events(base_url: str, event_type: str, auth_token: str = "") ->
     return list(response.json().get("events", []))
 
 
+async def _wait_for_events(
+    base_url: str,
+    event_type: str,
+    auth_token: str = "",
+    *,
+    timeout: float = 12.0,
+    predicate=None,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        events = await _query_events(base_url, event_type, auth_token=auth_token)
+        matches = [event for event in events if predicate is None or predicate(event)]
+        if matches:
+            return matches
+        await asyncio.sleep(0.5)
+    return []
+
+
+async def _get_source_detail(base_url: str, source_id: str, auth_token: str = "") -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(
+            f"{base_url}/api/ui/sources/{source_id}",
+            headers=_auth_headers(auth_token),
+        )
+    response.raise_for_status()
+    return dict(response.json())
+
+
+async def _first_vault_note_title(base_url: str, auth_token: str = "") -> str:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(
+            f"{base_url}/api/ui/vault-notes/05-Wisdom",
+            params={"limit": 1},
+            headers=_auth_headers(auth_token),
+        )
+    response.raise_for_status()
+    items = list(response.json().get("items", []))
+    return str(items[0].get("title") or "") if items else ""
+
+
 def _run_browser_command(*args: str, cwd: Path, command_log: list[str]) -> str:
     command = ["agent-browser", "--session", "aily-studio-e2e", *args]
     command_log.append(" ".join(command))
@@ -81,21 +120,6 @@ def _run_browser_command(*args: str, cwd: Path, command_log: list[str]) -> str:
             f"agent-browser command failed: {' '.join(command)}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
     return result.stdout.strip()
-
-
-def _mark_source_failed_for_retry_evidence(source_store_db: Path, source_id: str) -> None:
-    with sqlite3.connect(source_store_db, timeout=10) as conn:
-        conn.execute(
-            """
-            UPDATE sources
-            SET status = 'failed',
-                metadata = '{"retry_e2e_seeded_failure": true}',
-                updated_at = datetime('now')
-            WHERE source_id = ?
-            """,
-            (source_id,),
-        )
-        conn.commit()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -114,6 +138,11 @@ def _parse_args() -> argparse.Namespace:
         "--exercise-url",
         action="store_true",
         help="Submit a real local HTTP URL through Studio and require URL fetch/extract/ingest events.",
+    )
+    parser.add_argument(
+        "--inspect-vault",
+        type=Path,
+        help="Point Studio at an existing real DIKIWI vault and require browser inspection of a produced wisdom-note summary.",
     )
     return parser.parse_args()
 
@@ -140,10 +169,10 @@ async def main() -> int:
     with TemporaryDirectory(prefix="aily-agent-browser-") as temp_root_raw:
         temp_root = Path(temp_root_raw)
         data_dir = temp_root / "data"
-        vault = temp_root / "vault"
+        vault = args.inspect_vault.expanduser().resolve() if args.inspect_vault else temp_root / "vault"
         screenshots_dir = evidence_dir / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
-        vault.mkdir(parents=True)
+        vault.mkdir(parents=True, exist_ok=True)
         sample_file = temp_root / "human-style-upload.txt"
         sample_file.write_text(
             "Aily agent-browser E2E real upload. This verifies the private Studio as a human-facing website.",
@@ -183,6 +212,7 @@ async def main() -> int:
                 "AILY_INNOVATION_ENABLED": "false",
                 "AILY_ENTREPRENEUR_ENABLED": "false",
                 "AILY_MAC_ENABLED": "false",
+                "URL_INTAKE_ALLOW_PRIVATE_NETWORK": "true",
             }
         )
         if args.hosted_auth:
@@ -238,8 +268,11 @@ async def main() -> int:
         retry_started_events: list[dict[str, Any]] = []
         retry_terminal_events: list[dict[str, Any]] = []
         retry_seeded_source_id = ""
+        uploaded_source_id = ""
+        retry_worker_failure_events: list[dict[str, Any]] = []
+        inspected_vault_note_title = ""
         url_fetch_events: list[dict[str, Any]] = []
-        url_ingest_events: list[dict[str, Any]] = []
+        url_extract_events: list[dict[str, Any]] = []
         before_graph = graph_snapshot(data_dir / "aily_graph.db")
         before_vault = vault_counts(vault)
         try:
@@ -257,29 +290,51 @@ async def main() -> int:
             _run_browser_command("upload", 'input[type="file"]', str(sample_file), cwd=repo_root, command_log=command_log)
             _run_browser_command("wait", "2000", cwd=repo_root, command_log=command_log)
             _run_browser_command("screenshot", "--full", str(screenshots_dir / "02-after-upload.png"), cwd=repo_root, command_log=command_log)
-            stored_events = await _query_events(base_url, "source_stored", auth_token=auth_token)
+            stored_events = await _wait_for_events(base_url, "source_stored", auth_token=auth_token)
             if not stored_events:
                 raise AssertionError("No source_stored event persisted")
+            uploaded_source_id = str(stored_events[-1].get("source_id") or "")
+            if args.exercise_retry:
+                if not uploaded_source_id:
+                    raise AssertionError("source_stored event did not include source_id")
+                retry_worker_failure_events = await _wait_for_events(
+                    base_url,
+                    "pipeline_failed",
+                    auth_token=auth_token,
+                    timeout=25.0,
+                    predicate=lambda event: str(event.get("source_id", "")) == uploaded_source_id,
+                )
+                detail = await _get_source_detail(base_url, uploaded_source_id, auth_token=auth_token)
+                if not retry_worker_failure_events or str(detail.get("status")) not in {"failed", "failed_retry_exhausted"}:
+                    raise AssertionError("Uploaded source did not reach a real production failure before retry")
             if args.exercise_url:
                 _run_browser_command("fill", 'input[type="url"]', fixture_url, cwd=repo_root, command_log=command_log)
                 _run_browser_command("find", "role", "button", "click", "--name", "Process link", "--exact", cwd=repo_root, command_log=command_log)
-                _run_browser_command("wait", "2500", cwd=repo_root, command_log=command_log)
+                _run_browser_command("wait", "1000", cwd=repo_root, command_log=command_log)
                 _run_browser_command("screenshot", "--full", str(screenshots_dir / "02b-after-url.png"), cwd=repo_root, command_log=command_log)
-                url_fetch_events = await _query_events(base_url, "url_fetch_started", auth_token=auth_token)
-                chaos_events = await _query_events(base_url, "chaos_note_created", auth_token=auth_token)
-                ingest_events = await _query_events(base_url, "source_ingest_completed", auth_token=auth_token)
-                url_ingest_events = [event for event in ingest_events if str(event.get("url", "")) == fixture_url]
-                if not any(str(event.get("url", "")) == fixture_url for event in url_fetch_events):
+                url_fetch_events = await _wait_for_events(
+                    base_url,
+                    "url_fetch_started",
+                    auth_token=auth_token,
+                    predicate=lambda event: str(event.get("url", "")) == fixture_url,
+                )
+                url_extract_events = await _wait_for_events(
+                    base_url,
+                    "chaos_note_created",
+                    auth_token=auth_token,
+                    predicate=lambda event: str(event.get("url", "")) == fixture_url,
+                )
+                if not url_fetch_events:
                     raise AssertionError("URL exercise did not emit url_fetch_started for fixture URL")
-                if not any(str(event.get("url", "")) == fixture_url for event in chaos_events):
+                if not url_extract_events:
                     raise AssertionError("URL exercise did not emit chaos_note_created for fixture URL")
-                if not url_ingest_events:
-                    raise AssertionError("URL exercise did not emit source_ingest_completed for fixture URL")
-            if args.exercise_retry:
-                retry_seeded_source_id = str(stored_events[-1].get("source_id") or "")
-                if not retry_seeded_source_id:
-                    raise AssertionError("source_stored event did not include source_id")
-                _mark_source_failed_for_retry_evidence(data_dir / "source_store.db", retry_seeded_source_id)
+            if args.inspect_vault:
+                inspected_vault_note_title = await _first_vault_note_title(base_url, auth_token=auth_token)
+                if not inspected_vault_note_title:
+                    raise AssertionError("Inspect-vault mode found no wisdom note through the real API")
+                _run_browser_command("find", "role", "button", "click", "--name", "Judgment", cwd=repo_root, command_log=command_log)
+                _run_browser_command("wait", "--text", inspected_vault_note_title[:80], cwd=repo_root, command_log=command_log)
+                _run_browser_command("screenshot", "--full", str(screenshots_dir / "02c-vault-note-summary.png"), cwd=repo_root, command_log=command_log)
 
             _run_browser_command("find", "role", "button", "click", "--name", "Operations", cwd=repo_root, command_log=command_log)
             _run_browser_command("wait", "--text", sample_file.name, cwd=repo_root, command_log=command_log)
@@ -290,12 +345,12 @@ async def main() -> int:
             _run_browser_command("wait", "1000", cwd=repo_root, command_log=command_log)
             _run_browser_command("screenshot", "--full", str(screenshots_dir / "04-retry-control.png"), cwd=repo_root, command_log=command_log)
 
-            retry_events = await _query_events(base_url, "retry_failed_sources_requested", auth_token=auth_token)
+            retry_events = await _wait_for_events(base_url, "retry_failed_sources_requested", auth_token=auth_token)
             if not retry_events:
                 raise AssertionError("No retry_failed_sources_requested event persisted")
-            retry_started_events = await _query_events(base_url, "source_retry_started", auth_token=auth_token)
+            retry_started_events = await _wait_for_events(base_url, "source_retry_started", auth_token=auth_token)
             retry_completed_events = await _query_events(base_url, "source_retry_completed", auth_token=auth_token)
-            retry_failed_events = await _query_events(base_url, "source_retry_failed", auth_token=auth_token)
+            retry_failed_events = await _wait_for_events(base_url, "source_retry_failed", auth_token=auth_token)
             retry_terminal_events = [*retry_completed_events, *retry_failed_events]
             if args.exercise_retry and not retry_started_events:
                 raise AssertionError("Retry exercise did not emit source_retry_started")
@@ -373,8 +428,10 @@ async def main() -> int:
                 "real_browser": True,
                 "real_fastapi": True,
                 "hosted_auth": bool(args.hosted_auth),
-                "retry_e2e_seeded_failure": bool(args.exercise_retry),
+                "retry_e2e_seeded_failure": False,
+                "retry_failure_from_production_worker": bool(retry_worker_failure_events),
                 "url_e2e_local_http_fixture": bool(args.exercise_url),
+                "inspect_vault": str(args.inspect_vault or ""),
                 "browser_tool": "agent-browser",
                 "scope_note": "UI/control evidence only: DIKIWI, Innovation, and Entrepreneur are disabled in this scenario.",
             },
@@ -391,11 +448,15 @@ async def main() -> int:
                 "browser_opened_operations_view": not failures,
                 "browser_clicked_retry_control": bool(retry_events),
                 "retry_seeded_source_id": retry_seeded_source_id,
+                "retry_failed_source_id": uploaded_source_id if args.exercise_retry else "",
+                "retry_worker_failure_event": bool(retry_worker_failure_events),
                 "retry_started_event": bool(retry_started_events),
                 "retry_terminal_event": bool(retry_terminal_events),
                 "url_fixture": fixture_url if args.exercise_url else "",
                 "url_fetch_event": bool(url_fetch_events),
-                "url_ingest_event": bool(url_ingest_events),
+                "url_extract_event": bool(url_extract_events),
+                "inspected_vault_note_summary": bool(inspected_vault_note_title),
+                "inspected_vault_note_title": inspected_vault_note_title,
                 "persisted_events_queryable": True,
                 "hosted_auth_enabled": bool(args.hosted_auth),
             },

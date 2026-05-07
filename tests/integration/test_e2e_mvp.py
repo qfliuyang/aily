@@ -1,23 +1,20 @@
 """
-E2E MVP Test: Aily's Core Value Proposition
+MVP integration tests for Aily's core value proposition.
 
-Send a link → Get structured knowledge in Obsidian.
+These tests validate durable queue-level product behavior: a URL job enters
+Aily's queue, processing completes, and structured knowledge appears in
+Obsidian. They intentionally do not claim Feishu/webhook ingress evidence;
+release acceptance must add an `acceptance`-marked ingress test that exercises
+the real webhook/signature boundary.
 
-This test validates the complete user journey:
-1. User sends a URL via Feishu message
-2. Aily fetches and parses the content
-3. Structured note appears in Obsidian vault
-4. User receives confirmation
-
-NO MOCKS - hits real services, exposes real problems.
+NO MOCKS - hits real services where configured and exposes real problems.
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import json
 import os
+import socket
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,39 +23,40 @@ from pathlib import Path
 import httpx
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 class TestAilyCoreFlowMVP:
     """
-    MVP E2E test: Link sharing → Knowledge capture.
+    MVP integration test: queued URL → knowledge capture.
 
-    This is the "happy path" that validates Aily's reason for existing.
-    If this test fails, Aily is not delivering its core value.
+    This is the local product-path contract below external ingress. It validates
+    queue processing and Obsidian output without pretending to prove Feishu
+    webhook/signature behavior.
     """
 
-    async def test_send_url_receive_note_in_obsidian(
+    async def test_queue_url_job_creates_note_in_obsidian(
         self,
         exposure,
         test_id: str,
     ) -> None:
         """
-        Full flow: URL in Feishu webhook → Note in Obsidian.
+        Full queue-level flow: URL job → Note in Obsidian.
 
         EXPOSES: Broken parsers, fetch failures, Obsidian API issues,
-                 message delivery problems, race conditions.
+                 queue processing problems, race conditions.
         """
         # Prerequisites check
-        feishu_ready = bool(os.getenv("FEISHU_APP_ID") and os.getenv("FEISHU_APP_SECRET"))
         obsidian_ready = bool(os.getenv("OBSIDIAN_VAULT_PATH") and os.getenv("OBSIDIAN_REST_API_KEY"))
-        open_id = os.getenv("FEISHU_TEST_OPEN_ID")
+        open_id = os.getenv("FEISHU_TEST_OPEN_ID") or "test_user_open_id"
 
-        if not feishu_ready or not obsidian_ready:
-            pytest.skip("Real services not configured")
+        if not obsidian_ready:
+            pytest.skip("Obsidian service not configured")
 
-        if not open_id:
-            exposure.expose("CONFIG_MISSING", "FEISHU_TEST_OPEN_ID not set - using dummy", {
-                "consequence": "Cannot verify message delivery confirmation",
+        if open_id == "test_user_open_id":
+            exposure.record_observation("CONFIGURATION_NOTICE", "FEISHU_TEST_OPEN_ID not set - using dummy", {
+                "consequence": "Queue-level test cannot verify message delivery confirmation",
             })
-            open_id = "test_user_open_id"
 
         # Use a reliable test URL that should always work
         test_url = "https://httpbin.org/html"
@@ -66,19 +64,19 @@ class TestAilyCoreFlowMVP:
 
         start_time = datetime.now(timezone.utc)
 
-        # Step 1: Simulate Feishu webhook with URL
+        # Step 1: enqueue the URL job through the durable queue boundary.
         try:
-            job_id = await self._send_feishu_webhook(test_url, open_id, test_id)
-            exposure.expose("WEBHOOK_ACCEPTED", f"Job enqueued: {job_id}", {
+            job_id = await self._enqueue_url_job(test_url, open_id, test_id)
+            exposure.record_observation("QUEUE_JOB_ACCEPTED", f"Job enqueued: {job_id}", {
                 "url": test_url,
                 "open_id": open_id[:10] + "..." if len(open_id) > 10 else open_id,
             })
         except Exception as e:
-            exposure.expose("WEBHOOK_FAILED", "Could not send Feishu webhook", {
+            exposure.expose_problem("QUEUE_JOB_ENQUEUE_FAILURE", "Could not enqueue URL job", {
                 "error": str(e),
                 "this_blocks_everything": True,
             })
-            pytest.fail(f"Webhook failed: {e}")
+            pytest.fail(f"Queue enqueue failed: {e}")
 
         # Step 2: Wait for job processing (with timeout)
         try:
@@ -115,26 +113,26 @@ class TestAilyCoreFlowMVP:
             })
             raise
 
-        # Step 4: Check for confirmation message (if real open_id used)
+        # Feishu confirmation is outside this queue-level contract.
         if open_id != "test_user_open_id":
-            exposure.expose("CONFIRMATION_CHECK", "Confirmation message check skipped", {
-                "reason": "Manual verification needed - check Feishu",
+            exposure.record_observation("FEISHU_CONFIRMATION_OUT_OF_SCOPE", "Confirmation message not checked here", {
+                "reason": "Ingress/confirmation belongs in acceptance-marked release evidence",
                 "test_id": test_id,
             })
 
-    async def _send_feishu_webhook(self, url: str, open_id: str, test_id: str) -> str:
-        """Simulate Feishu webhook sending a URL to Aily."""
-        from tests.integration.conftest import QueueDB
+    async def _enqueue_url_job(self, url: str, open_id: str, test_id: str) -> str:
+        """Enqueue a URL job through the durable queue boundary."""
+        from aily.queue.db import QueueDB
         from aily.config import SETTINGS
 
-        # Directly enqueue via QueueDB (simulating webhook handler)
         db = QueueDB(SETTINGS.queue_db_path)
         await db.initialize()
 
         # Create a unique test job
         job_id = f"e2e-{test_id}"
 
-        # Directly insert to test the flow without HTTP signature complexity
+        # Queue-level integration: ingress/webhook signature is covered by
+        # acceptance-marked release evidence, not this local MVP test.
         import aiosqlite
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute(
@@ -232,18 +230,14 @@ class TestAilyCoreFlowMVP:
         job1 = await db.enqueue_url(test_url, open_id="", source="test")
         job2 = await db.enqueue_url(test_url, open_id="", source="test")
 
-        exposure.expose("DEDUP_TEST", "Same URL enqueued twice", {
-            "first_enqueued": job1 is not None,
-            "second_enqueued": job2 is not None,
-            "deduplication_worked": job2 is None,  # Second should be None (deduped)
+        exposure.record_observation("DEDUP_CHECK", "Same URL enqueued twice", {
+            "first_enqueued": bool(job1),
+            "second_enqueued": bool(job2),
+            "deduplication_worked": job2 is False,
         })
 
-        if job1 and job2:
-            exposure.expose("DEDUP_FAILURE", "Duplicate URLs were enqueued", {
-                "url": test_url,
-                "job1": job1,
-                "job2": job2,
-            })
+        assert job1 is True
+        assert job2 is False
 
 
 class TestAilyFailureModesMVP:
@@ -253,102 +247,75 @@ class TestAilyFailureModesMVP:
     These tests verify Aily fails gracefully and informs the user.
     """
 
-    async def test_bad_url_results_in_failure_notification(
+    async def test_bad_url_worker_failure_reaches_failed_state(
+        self,
+        test_id: str,
+        tmp_path: Path,
+    ) -> None:
+        """Worker processor failures should persist failed queue state and error details.
+
+        This is a deterministic worker-path contract for URL failure handling: the
+        production worker owns the status transition, not the test itself.
+        """
+        from aily.queue.db import QueueDB
+        from aily.queue.worker import JobWorker
+
+        db = QueueDB(tmp_path / f"bad-url-{test_id}.db")
+        await db.initialize()
+        job_id = await db.enqueue("url_fetch", {"url": "https://invalid.test", "open_id": "test_user"})
+
+        async def failing_processor(job: dict) -> None:
+            assert job["id"] == job_id
+            assert job["type"] == "url_fetch"
+            raise RuntimeError("DNS resolution failed for test URL")
+
+        worker = JobWorker(db, failing_processor, poll_interval=0.01)
+        try:
+            await worker.start()
+            deadline = time.monotonic() + 2.0
+            row = await db.get_job(job_id)
+            while time.monotonic() < deadline:
+                row = await db.get_job(job_id)
+                if row is not None and row["status"] == "failed":
+                    break
+                await asyncio.sleep(0.01)
+
+            assert row is not None
+            assert row["status"] == "failed"
+            # QueueDB stores retry_count as completed retry transitions after the
+            # initial attempt; max_retries=3 therefore fails closed at count 2.
+            assert row["retry_count"] == 2
+            assert row["error_message"]
+            assert "DNS resolution failed" in row["error_message"]
+        finally:
+            await worker.stop()
+            await db.close()
+
+    async def test_obsidian_down_probe_uses_controlled_unreachable_endpoint(
         self,
         exposure,
-        test_id: str,
     ) -> None:
-        """
-        Sending a bad URL should result in a failure message to user.
+        """Obsidian-down precondition checks must not depend on ambient services."""
 
-        EXPOSES: Silent failures, missing error notifications.
-        """
-        from aily.config import SETTINGS
-        from aily.queue.db import QueueDB
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            unused_port = sock.getsockname()[1]
 
-        if not os.getenv("FEISHU_APP_ID"):
-            pytest.skip("Feishu not configured")
+        obsidian_running = await self._probe_obsidian_running(unused_port)
 
-        db = QueueDB(SETTINGS.queue_db_path)
-        await db.initialize()
-
-        # Use a URL that will definitely fail
-        bad_url = "https://this-domain-does-not-exist-12345.xyz"
-
-        # Enqueue directly to avoid webhook complexity
-        import aiosqlite
-        job_id = f"e2e-fail-{test_id}"
-
-        async with aiosqlite.connect(db.db_path) as conn:
-            await conn.execute(
-                """
-                INSERT OR REPLACE INTO jobs (id, type, payload, status, retry_count)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    "url_fetch",
-                    json.dumps({"url": bad_url, "open_id": "test_user"}),
-                    "pending",
-                    0,
-                ),
-            )
-            await conn.commit()
-
-        exposure.expose("BAD_URL_ENQUEUED", f"Testing failure handling: {bad_url}", {
-            "job_id": job_id,
+        assert obsidian_running is False
+        exposure.record_observation("OBSIDIAN_OFFLINE_SCENARIO", "Controlled Obsidian endpoint is unreachable", {
+            "port": unused_port,
+            "expected_behavior": "release failure checks can use deterministic offline endpoint",
         })
 
-        # Wait for failure (should be quick)
-        await asyncio.sleep(2)
-
-        async with aiosqlite.connect(db.db_path) as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.execute(
-                "SELECT status, error_message FROM jobs WHERE id = ?",
-                (job_id,)
-            )
-            row = await cursor.fetchone()
-
-            if row:
-                exposure.expose("JOB_STATUS", f"Job ended with status: {row['status']}", {
-                    "status": row["status"],
-                    "error": row["error_message"],
-                    "expected": "failed",
-                })
-
-    async def test_obsidian_down_graceful_failure(
-        self,
-        exposure,
-        test_id: str,
-    ) -> None:
-        """
-        If Obsidian is not running, Aily should fail gracefully.
-
-        EXPOSES: Crash loops, unhandled connection errors.
-        """
-        from aily.config import SETTINGS
-
-        # Check if Obsidian is running
-        obsidian_port = SETTINGS.obsidian_rest_api_port
-
+    async def _probe_obsidian_running(self, port: int) -> bool:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"http://127.0.0.1:{obsidian_port}/",
-                    timeout=2.0,
-                )
-                obsidian_running = resp.status_code < 500
+                resp = await client.get(f"http://127.0.0.1:{port}/", timeout=0.25)
+                return resp.status_code < 500
         except Exception:
-            obsidian_running = False
-
-        if obsidian_running:
-            pytest.skip("Obsidian is running - cannot test 'down' scenario")
-
-        exposure.expose("OBSIDIAN_DOWN", "Obsidian REST API not accessible", {
-            "port": obsidian_port,
-            "expected_behavior": "Jobs should fail with clear error message",
-        })
+            return False
 
 
 class TestAilyObsidianIntegrationMVP:
@@ -459,12 +426,16 @@ https://example.com/test-{test_id}
             failures = [r for r in results if isinstance(r, dict) and not r.get("success")]
             exceptions = [r for r in results if isinstance(r, Exception)]
 
-            exposure.expose("CONCURRENT_TEST", f"Created {successes}/5 notes", {
+            details = {
                 "successes": successes,
                 "failures": len(failures),
                 "exceptions": len(exceptions),
                 "details": failures + [str(e) for e in exceptions],
-            })
+            }
+            if successes == 5 and not failures and not exceptions:
+                exposure.record_observation("CONCURRENT_NOTES_CREATED", "Created 5/5 notes", details)
+            else:
+                exposure.expose_problem("CONCURRENT_NOTE_FAILURE", f"Created {successes}/5 notes", details)
 
         finally:
             await client.close()

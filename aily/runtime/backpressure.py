@@ -10,6 +10,7 @@ from typing import AsyncIterator
 class _LimiterState:
     provider: str
     max_concurrency: int
+    loop: asyncio.AbstractEventLoop
     semaphore: asyncio.Semaphore
     in_flight: int = 0
     queued: int = 0
@@ -28,17 +29,27 @@ class ProviderBackpressure:
 
     def __init__(self) -> None:
         self._states: dict[str, _LimiterState] = {}
-        self._registry_lock = asyncio.Lock()
+        self._registry_lock: asyncio.Lock | None = None
+        self._registry_loop: asyncio.AbstractEventLoop | None = None
+
+    def _lock_for_current_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._registry_lock is None or self._registry_loop is not loop:
+            self._registry_lock = asyncio.Lock()
+            self._registry_loop = loop
+        return self._registry_lock
 
     async def _state_for(self, provider: str, max_concurrency: int) -> _LimiterState:
         normalized = (provider or "unknown").strip().lower() or "unknown"
         safe_max = max(1, int(max_concurrency))
-        async with self._registry_lock:
+        loop = asyncio.get_running_loop()
+        async with self._lock_for_current_loop():
             state = self._states.get(normalized)
-            if state is None:
+            if state is None or state.loop is not loop or state.max_concurrency != safe_max:
                 state = _LimiterState(
                     provider=normalized,
                     max_concurrency=safe_max,
+                    loop=loop,
                     semaphore=asyncio.Semaphore(safe_max),
                 )
                 self._states[normalized] = state
@@ -68,7 +79,7 @@ class ProviderBackpressure:
             state.semaphore.release()
 
     async def snapshot(self) -> dict[str, dict[str, int]]:
-        async with self._registry_lock:
+        async with self._lock_for_current_loop():
             states = list(self._states.values())
         payload: dict[str, dict[str, int]] = {}
         for state in states:

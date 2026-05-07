@@ -514,3 +514,50 @@ async def _entrepreneurship_provider(limit: int):
 
 async def _control_handler(action: str, payload: dict):
     return {"action": action, "payload": payload}
+
+
+def test_ui_router_rate_limit_ignores_spoofed_forwarded_for_by_default() -> None:
+    from aily.security.rate_limit import FixedWindowRateLimiter
+
+    app = FastAPI()
+    app.include_router(
+        create_ui_router(
+            upload_handler=None,
+            status_provider=_status_provider,
+            graph_provider=_graph_provider,
+            pipeline_provider=_pipeline_provider,
+            enable_uploads=False,
+            rate_limiter=FixedWindowRateLimiter(max_requests=1, window_seconds=60),
+        )
+    )
+    client = TestClient(app)
+
+    first = client.post("/api/ui/uploads", headers={"x-forwarded-for": "1.1.1.1"})
+    second = client.post("/api/ui/uploads", headers={"x-forwarded-for": "2.2.2.2"})
+
+    assert first.status_code == 503
+    assert second.status_code == 429
+
+
+def test_ui_router_rate_limit_can_trust_forwarded_for_when_enabled() -> None:
+    from aily.security.rate_limit import FixedWindowRateLimiter
+
+    app = FastAPI()
+    app.include_router(
+        create_ui_router(
+            upload_handler=None,
+            status_provider=_status_provider,
+            graph_provider=_graph_provider,
+            pipeline_provider=_pipeline_provider,
+            enable_uploads=False,
+            rate_limiter=FixedWindowRateLimiter(max_requests=1, window_seconds=60),
+            trust_proxy_headers=True,
+        )
+    )
+    client = TestClient(app)
+
+    first = client.post("/api/ui/uploads", headers={"x-forwarded-for": "1.1.1.1"})
+    second = client.post("/api/ui/uploads", headers={"x-forwarded-for": "2.2.2.2"})
+
+    assert first.status_code == 503
+    assert second.status_code == 503

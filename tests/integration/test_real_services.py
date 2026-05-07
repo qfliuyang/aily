@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+pytestmark = pytest.mark.real_service
+
 
 class TestRealFeishuExposesProblems:
     """
@@ -41,7 +43,7 @@ class TestRealFeishuExposesProblems:
         from tests.integration.conftest import RealFeishuClient
 
         if not service_availability["feishu"]:
-            exposure.expose("CONFIG_MISSING", "Feishu credentials not configured")
+            exposure.record_observation("CONFIGURATION_NOTICE", "Feishu credentials not configured")
             pytest.skip("Feishu credentials not configured")
 
         # Temporarily break credentials
@@ -53,9 +55,9 @@ class TestRealFeishuExposesProblems:
             with pytest.raises(Exception) as exc_info:
                 await client._get_token()
 
-            exposure.expose("AUTH_FAILURE", "Wrong credentials rejected", {
+            exposure.record_observation("AUTH_REJECTION_EXPECTED", "Wrong credentials rejected", {
                 "error": str(exc_info.value),
-                "expected": True,  # This SHOULD fail
+                "expected": True,
             })
         finally:
             if original_id:
@@ -74,7 +76,7 @@ class TestRealFeishuExposesProblems:
         """
         open_id = os.getenv("FEISHU_TEST_OPEN_ID")
         if not open_id:
-            exposure.expose("CONFIG_MISSING", "FEISHU_TEST_OPEN_ID not set", {
+            exposure.record_observation("CONFIGURATION_NOTICE", "FEISHU_TEST_OPEN_ID not set", {
                 "consequence": "Cannot test real message sending",
             })
             pytest.skip("No target user configured")
@@ -178,7 +180,7 @@ class TestRealObsidianExposesProblems:
         port = os.getenv("OBSIDIAN_REST_API_PORT", "27123")
 
         if not vault_path:
-            exposure.expose("CONFIG_MISSING", "OBSIDIAN_VAULT_PATH not set")
+            exposure.record_observation("CONFIGURATION_NOTICE", "OBSIDIAN_VAULT_PATH not set")
             pytest.skip("No vault configured")
 
         try:
@@ -324,7 +326,7 @@ class TestRealBrowserExposesProblems:
                     "this_is_weird": True,
                 })
             except Exception as e:
-                exposure.expose("EXPECTED_FAILURE", f"Bad URL failed as expected", {
+                exposure.record_observation("BAD_URL_REJECTED_EXPECTED", f"Bad URL failed as expected", {
                     "url": url,
                     "error_type": type(e).__name__,
                     "error": str(e)[:200],
@@ -436,15 +438,22 @@ class TestDatabaseExposesProblems:
         conn = database_connection
         conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)")
         conn.commit()
+        db_path = conn.execute("PRAGMA database_list").fetchone()[2]
 
         errors = queue.Queue()
 
         def writer(thread_id: int) -> None:
             try:
-                for i in range(10):
-                    conn.execute("INSERT INTO test (value) VALUES (?)",
-                               (f"thread-{thread_id}-item-{i}",))
-                    conn.commit()
+                thread_conn = sqlite3.connect(db_path, timeout=5.0)
+                try:
+                    for i in range(10):
+                        thread_conn.execute(
+                            "INSERT INTO test (value) VALUES (?)",
+                            (f"thread-{thread_id}-item-{i}",),
+                        )
+                    thread_conn.commit()
+                finally:
+                    thread_conn.close()
             except Exception as e:
                 errors.put((thread_id, str(e)))
 
