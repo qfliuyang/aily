@@ -122,6 +122,18 @@ def _full_dikiwi(data: dict[str, Any]) -> bool:
     return all(int(counts.get(stage, 0) or 0) > 0 for stage in STAGES)
 
 
+def _provider_verified(data: dict[str, Any]) -> bool:
+    acceptance = _acceptance(data)
+    if acceptance.get("provider_verified_dikiwi") is True:
+        return True
+    receipts = data.get("llm_receipts") or data.get("llm_call_receipts") or {}
+    if isinstance(receipts, dict):
+        provider_successes = int(receipts.get("provider_verified_successes", 0) or 0)
+        unverified_successes = int(receipts.get("unverified_successes", 1) or 0)
+        return provider_successes > 0 and unverified_successes == 0
+    return False
+
+
 def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
     head = head_sha or _git_sha(root)
     manifests = _load_manifests(root)
@@ -199,6 +211,7 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
         and _acceptance(data).get("real_docker") is True
         and _acceptance(data).get("real_browser") is True
         and _acceptance(data).get("real_llm") is True
+        and _provider_verified(data)
         and _full_dikiwi(data),
     )
     latest_combined = _latest_any(
@@ -209,7 +222,7 @@ def audit(root: Path = ROOT, *, head_sha: str | None = None) -> dict[str, Any]:
         Criterion(
             id="CSHIP-004",
             deliverable="No split-brain customer proof",
-            required="One clean current-HEAD customer scenario must combine Docker + real browser + real provider LLM + real DIKIWI outputs, not separate control-plane and backend-only proofs.",
+            required="One clean current-HEAD customer scenario must combine Docker + real browser + provider-verified real LLM + real DIKIWI outputs, not separate control-plane and backend-only proofs.",
             passed=combined is not None,
             evidence=[_rel(root, combined[0])] if combined else ([_rel(root, latest_combined[0])] if latest_combined else []),
             blockers=[] if combined else ["Customer acceptance is split across separate Docker/UI and provider runs; no single run proves the shipped customer path end to end."],

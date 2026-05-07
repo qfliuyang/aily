@@ -72,7 +72,10 @@ def test_customer_ship_audit_rejects_split_ui_docker_and_provider_proof(tmp_path
             "dirty_worktree": False,
             "exit_code": 0,
             "scenario": "full_pipeline_1pdf",
-            "vault_counts_after": {stage: 1 for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]},
+            "vault_counts_after": {
+                stage: 1
+                for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]
+            },
             "acceptance": {"mocked": False, "real_llm": True, "real_vault": True, "real_graph_db": True},
         },
     )
@@ -105,7 +108,51 @@ def test_customer_ship_audit_requires_a_single_current_clean_combined_customer_r
             "dirty_worktree": False,
             "exit_code": 0,
             "scenario": "docker_customer_real_llm_browser_e2e",
-            "vault_counts_after": {stage: 1 for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]},
+            "vault_counts_after": {
+                stage: 1
+                for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]
+            },
+            "acceptance": {
+                "mocked": False,
+                "real_docker": True,
+                "real_browser": True,
+                "real_fastapi": True,
+                "real_vault": True,
+                "real_graph_db": True,
+                "real_llm": True,
+                "provider_verified_dikiwi": True,
+            },
+        },
+    )
+
+    result = audit(tmp_path, head_sha=head)
+
+    assert result["blocking_gaps"] == []
+    assert result["ready_to_ship_customers"] is True
+
+
+def test_customer_ship_audit_rejects_combined_run_without_provider_receipts(tmp_path: Path) -> None:
+    head = "HEADSHA"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CUSTOMER_SHIP_READINESS_AUDIT.md").write_text(
+        "Customer-ready status: Not achieved\n"
+        "CSHIP-001\nCSHIP-002\nCSHIP-003\nCSHIP-004\n"
+        "Blocking gaps\nNext verification checkpoint\n",
+        encoding="utf-8",
+    )
+    _write_manifest(
+        tmp_path,
+        "combined-unverified",
+        {
+            "git_sha": head,
+            "dirty_worktree": False,
+            "exit_code": 0,
+            "scenario": "docker_customer_real_llm_browser_e2e",
+            "vault_counts_after": {
+                stage: 1
+                for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]
+            },
             "acceptance": {
                 "mocked": False,
                 "real_docker": True,
@@ -119,6 +166,7 @@ def test_customer_ship_audit_requires_a_single_current_clean_combined_customer_r
     )
 
     result = audit(tmp_path, head_sha=head)
+    by_id = {criterion["id"]: criterion for criterion in result["criteria"]}
 
-    assert result["blocking_gaps"] == []
-    assert result["ready_to_ship_customers"] is True
+    assert by_id["CSHIP-004"]["passed"] is False
+    assert result["ready_to_ship_customers"] is False

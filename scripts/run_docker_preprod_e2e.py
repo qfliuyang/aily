@@ -147,6 +147,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--exercise-url", action="store_true", help="Submit a real local HTTP URL through Studio.")
     parser.add_argument("--exercise-retry", action="store_true", help="Seed a failed source and retry it through Studio.")
     parser.add_argument("--keep-running", action="store_true", help="Leave the Docker stack running after the test.")
+    parser.add_argument(
+        "--require-real-llm",
+        action="store_true",
+        help="Fail unless the Docker scenario captures provider-verified real-LLM DIKIWI evidence. Currently this is a customer-readiness blocker until receipt capture is implemented.",
+    )
     return parser.parse_args()
 
 
@@ -258,9 +263,18 @@ async def main() -> int:
     url_extract_events: list[dict[str, Any]] = []
     before_graph = graph_snapshot(data_dir / "aily_graph.db")
     before_vault = vault_counts(vault_dir)
+    real_llm_requested = env_values["AILY_DOCKER_DIKIWI_ENABLED"].lower() == "true"
+    provider_verified_dikiwi = False
 
     compose = _compose_base(compose_files, env_file, project_name)
     try:
+        if args.require_real_llm and not real_llm_requested:
+            raise AssertionError("--require-real-llm requires AILY_DOCKER_REAL_LLM=true and injected provider credentials")
+        if args.require_real_llm:
+            raise AssertionError(
+                "Docker provider-verified DIKIWI evidence is not implemented yet: the script can run the control plane, but it does not capture provider receipts or wait for DATA→IMPACT from the browser-submitted input."
+            )
+
         if args.exercise_url:
             fixture_process = subprocess.Popen(
                 [
@@ -420,7 +434,12 @@ async def main() -> int:
     (evidence_dir / "graph-before.json").write_text(json.dumps(before_graph, ensure_ascii=False, indent=2), encoding="utf-8")
     (evidence_dir / "graph-after.json").write_text(json.dumps(graph_snapshot(data_dir / "aily_graph.db"), ensure_ascii=False, indent=2), encoding="utf-8")
     (evidence_dir / "vault-counts-before.json").write_text(json.dumps(before_vault, ensure_ascii=False, indent=2), encoding="utf-8")
-    (evidence_dir / "vault-counts-after.json").write_text(json.dumps(vault_counts(vault_dir), ensure_ascii=False, indent=2), encoding="utf-8")
+    after_vault = vault_counts(vault_dir)
+    dikiwi_full_outputs = all(
+        int(after_vault.get(stage, 0) or 0) > 0
+        for stage in ["01-Data", "02-Information", "03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact"]
+    )
+    (evidence_dir / "vault-counts-after.json").write_text(json.dumps(after_vault, ensure_ascii=False, indent=2), encoding="utf-8")
     (evidence_dir / "failures.json").write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
     (evidence_dir / "llm-calls.jsonl").write_text("", encoding="utf-8")
     samples_dir = evidence_dir / "samples"
@@ -454,18 +473,20 @@ async def main() -> int:
             "health": health_response,
             "ready": ready_response,
         },
+        "vault_counts_after": after_vault,
         "acceptance": {
             "mocked": False,
             "fake_components": [],
             "real_files": True,
             "real_graph_db": True,
             "real_vault": True,
-            "real_llm": env_values["AILY_DOCKER_DIKIWI_ENABLED"].lower() == "true",
+            "real_llm": provider_verified_dikiwi and dikiwi_full_outputs,
+            "provider_verified_dikiwi": provider_verified_dikiwi,
             "real_browser": True,
             "real_fastapi": True,
             "real_docker": True,
             "hosted_auth": True,
-            "scope_note": "Docker pre-production UI/control evidence; real LLM only when AILY_DOCKER_REAL_LLM=true and provider keys are injected.",
+            "scope_note": "Docker pre-production UI/control evidence. Real LLM acceptance stays false until this script captures provider receipts and verifies DATA→IMPACT outputs from the Docker/browser-submitted input.",
         },
         "checks": {
             "unauthenticated_api_rejected": True,
@@ -479,6 +500,10 @@ async def main() -> int:
             "restart_persistence": restart_check,
             "backup_created": bool(backup_result),
             "restore_dry_run": bool(restore_result.get("manifest")) if restore_result else False,
+            "real_llm_requested": real_llm_requested,
+            "require_real_llm": bool(args.require_real_llm),
+            "dikiwi_full_outputs": dikiwi_full_outputs,
+            "provider_verified_dikiwi": provider_verified_dikiwi,
         },
         "screenshots": sorted(str(path.relative_to(evidence_dir)) for path in screenshots_dir.glob("*.png")),
         "failures_count": len(failures),
