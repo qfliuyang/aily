@@ -21,6 +21,9 @@ PROVIDER_TRACE_HEADER_NAMES = (
     "x-ms-request-id",
     "request-id",
     "cf-ray",
+    "retry-after",
+    "x-ratelimit-reset",
+    "x-ratelimit-reset-after",
 )
 
 
@@ -35,7 +38,7 @@ class LLMClient:
         api_key: str = "",
         model: str = "gpt-4o-mini",
         timeout: float = 60.0,
-        max_retries: int = 1,
+        max_retries: int = 2,
         thinking: bool = False,
         max_concurrency: int = 1,
         min_interval_seconds: float = 0.0,
@@ -164,6 +167,34 @@ class LLMClient:
                 await asyncio.sleep(self.min_interval_seconds - elapsed)
             self._last_request_started = time.monotonic()
 
+    @staticmethod
+    def _retry_after_seconds(headers: httpx.Headers | dict[str, str] | None) -> float | None:
+        """Parse provider retry-after hints without throwing on malformed headers."""
+        if not headers:
+            return None
+        for name in ("retry-after", "x-ratelimit-reset-after"):
+            value = headers.get(name) if hasattr(headers, "get") else None
+            if value in (None, ""):
+                continue
+            try:
+                delay = float(str(value).strip())
+            except ValueError:
+                continue
+            if delay > 0:
+                return min(delay, 180.0)
+        return None
+
+    def _retry_delay_seconds(self, attempt: int, exc: Exception) -> float:
+        """Return conservative retry delays for real provider pressure."""
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+            retry_after = self._retry_after_seconds(exc.response.headers)
+            if retry_after is not None:
+                return retry_after
+            return min(30.0 * (2 ** attempt), 180.0)
+        if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+            return min(5.0 * (2 ** attempt), 60.0)
+        return min(2.0 * (2 ** attempt), 30.0)
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -178,26 +209,25 @@ class LLMClient:
                 last_error = exc
                 logger.warning("LLM timeout (attempt %s)", attempt + 1)
                 if attempt < self.max_retries:
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                    await asyncio.sleep(self._retry_delay_seconds(attempt, exc))
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                # Rate limiting (429) - use longer backoff
                 if exc.response.status_code == 429:
-                    wait_time = 5 * (2 ** attempt)  # 5s, 10s, 20s
-                    logger.warning("Rate limited (429), waiting %ss before retry %s", wait_time, attempt + 1)
                     if attempt < self.max_retries:
+                        wait_time = self._retry_delay_seconds(attempt, exc)
+                        logger.warning("Rate limited (429), waiting %ss before retry %s", wait_time, attempt + 1)
                         await asyncio.sleep(wait_time)
                 else:
                     logger.warning("LLM HTTP error (attempt %s): %s", attempt + 1, exc)
                     if attempt < self.max_retries:
-                        await asyncio.sleep(2 ** attempt)
+                        await asyncio.sleep(self._retry_delay_seconds(attempt, exc))
             except LLMError:
                 raise
             except Exception as exc:
                 last_error = exc
                 logger.warning("LLM call failed (attempt %s): %s", attempt + 1, exc)
                 if attempt < self.max_retries:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(self._retry_delay_seconds(attempt, exc))
         raise LLMError(f"LLM failed after {self.max_retries + 1} attempts: {last_error}")
 
     async def complete(

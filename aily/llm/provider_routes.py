@@ -86,9 +86,9 @@ class PrimaryLLMRoute:
         model: str = "kimi-k2.6",
         thinking: bool = False,
         max_concurrency: int = 1,
-        min_interval_seconds: float = 3.0,
+        min_interval_seconds: float = 6.0,
         timeout: float = 120.0,
-        max_retries: int = 0,
+        max_retries: int = 2,
     ) -> LLMClient:
         return LLMRouter.standard_kimi(
             api_key=api_key,
@@ -108,9 +108,9 @@ class PrimaryLLMRoute:
         model: str = "deepseek-v4-pro",
         thinking: bool = False,
         max_concurrency: int = 1,
-        min_interval_seconds: float = 3.0,
+        min_interval_seconds: float = 6.0,
         timeout: float = 120.0,
-        max_retries: int = 0,
+        max_retries: int = 2,
     ) -> LLMClient:
         return LLMRouter.standard_deepseek(
             api_key=api_key,
@@ -206,9 +206,9 @@ class PrimaryLLMRoute:
         resolved_base_url = getattr(settings, "llm_base_url", "") or default_route.base_url
         resolved_thinking = bool(thinking) if thinking is not None else False
         resolved_concurrency = int(getattr(settings, "llm_max_concurrency", 1))
-        resolved_interval = float(getattr(settings, "llm_min_interval_seconds", 3.0))
+        resolved_interval = float(getattr(settings, "llm_min_interval_seconds", 6.0))
         resolved_timeout = float(getattr(settings, "llm_timeout_seconds", 120.0))
-        resolved_max_retries = max(0, int(getattr(settings, "llm_max_retries", 0)))
+        resolved_max_retries = max(0, int(getattr(settings, "llm_max_retries", 2)))
 
         applied_override: dict[str, Any] = {}
         for candidate in reversed(cls._workload_candidates(workload)):

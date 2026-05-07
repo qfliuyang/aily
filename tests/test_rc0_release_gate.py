@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts import run_rc0_release_gate
+from scripts.test_framework import full_pipeline_acceptance_failures
 
 
 pytestmark = pytest.mark.contract
@@ -139,3 +140,42 @@ def test_manifest_real_llm_requires_provider_verified_dikiwi_success(tmp_path: P
     assert manifest["acceptance"]["real_llm"] is True
     assert manifest["acceptance"]["provider_verified_dikiwi"] is True
     assert manifest["acceptance"]["real_graph_db"] is True
+
+
+def test_full_pipeline_acceptance_rejects_partial_dikiwi_success() -> None:
+    failures = full_pipeline_acceptance_failures(
+        [
+            {
+                "pdf": "sample.pdf",
+                "bridge_result": {
+                    "stage": "KNOWLEDGE",
+                    "stage_results": [
+                        {"stage": "DATA", "success": True, "items_output": 26},
+                        {"stage": "INFORMATION", "success": True, "items_output": 26},
+                        {"stage": "KNOWLEDGE", "success": True, "items_output": 0},
+                    ],
+                },
+            }
+        ],
+        {"01-Data": 26, "02-Information": 26},
+    )
+
+    messages = {failure["error"] for failure in failures}
+    assert "final_stage=KNOWLEDGE expected IMPACT" in messages
+    assert "stage KNOWLEDGE produced no output" in messages
+    assert "missing stage result IMPACT" in messages
+    assert "vault has no persisted notes for 06-Impact" in messages
+
+
+def test_full_pipeline_acceptance_accepts_complete_dikiwi_run() -> None:
+    stage_results = [
+        {"stage": stage, "success": True, "items_output": 1}
+        for stage in ("DATA", "INFORMATION", "KNOWLEDGE", "INSIGHT", "WISDOM", "IMPACT")
+    ]
+
+    failures = full_pipeline_acceptance_failures(
+        [{"pdf": "sample.pdf", "bridge_result": {"stage": "IMPACT", "stage_results": stage_results}}],
+        {"03-Knowledge": 1, "04-Insight": 1, "05-Wisdom": 1, "06-Impact": 1},
+    )
+
+    assert failures == []

@@ -63,6 +63,8 @@ DEFAULT_RUN_DIR = (
     if SETTINGS.evidence_runs_dir.is_absolute()
     else Path(__file__).resolve().parent.parent / SETTINGS.evidence_runs_dir
 )
+FULL_PIPELINE_REQUIRED_STAGES = ("DATA", "INFORMATION", "KNOWLEDGE", "INSIGHT", "WISDOM", "IMPACT")
+FULL_PIPELINE_REQUIRED_VAULT_DIRS = ("03-Knowledge", "04-Insight", "05-Wisdom", "06-Impact")
 
 TEST_MESSAGES = [
     "【转向AI芯片架构的路径与优势 - Monica AI Chat】https://monica.im/share/chat?shareId=1jB54WO31xDzAIjL",
@@ -161,6 +163,57 @@ def get_vault_status(vault_path: Path) -> dict[str, int]:
         if subdir.is_dir() and not subdir.name.startswith("."):
             status[subdir.name] = len(list(subdir.rglob("*.md")))
     return status
+
+
+def full_pipeline_acceptance_failures(
+    doc_results: list[dict[str, Any]],
+    vault_status: dict[str, int],
+) -> list[dict[str, str]]:
+    """Return release-blocking failures for Chaos→DIKIWI full-pipeline runs.
+
+    A provider-backed full-pipeline run is not successful merely because the
+    process exits without crashing. RC0 requires DATA→IMPACT and durable notes.
+    Rate limits/timeouts that leave a run at an intermediate stage are visible
+    failures and must make the scenario command exit non-zero.
+    """
+    failures: list[dict[str, str]] = []
+    for item in doc_results:
+        pdf = str(item.get("pdf") or "")
+        if item.get("error"):
+            failures.append({"pdf": pdf, "error": str(item["error"])})
+            continue
+
+        bridge = item.get("bridge_result")
+        if not isinstance(bridge, dict):
+            failures.append({"pdf": pdf, "error": "missing_bridge_result"})
+            continue
+        if bridge.get("error"):
+            failures.append({"pdf": pdf, "error": str(bridge["error"])})
+
+        final_stage = str(bridge.get("stage") or bridge.get("final_stage") or "")
+        if final_stage != "IMPACT":
+            failures.append({"pdf": pdf, "error": f"final_stage={final_stage or 'missing'} expected IMPACT"})
+
+        stage_results = {
+            str(result.get("stage") or ""): result
+            for result in bridge.get("stage_results", [])
+            if isinstance(result, dict)
+        }
+        for stage in FULL_PIPELINE_REQUIRED_STAGES:
+            result = stage_results.get(stage)
+            if result is None:
+                failures.append({"pdf": pdf, "error": f"missing stage result {stage}"})
+                continue
+            if result.get("success") is not True:
+                failures.append({"pdf": pdf, "error": f"stage {stage} failed: {result.get('error_message') or ''}".strip()})
+                continue
+            if int(result.get("items_output") or 0) <= 0:
+                failures.append({"pdf": pdf, "error": f"stage {stage} produced no output"})
+
+    for vault_dir in FULL_PIPELINE_REQUIRED_VAULT_DIRS:
+        if int(vault_status.get(vault_dir, 0)) <= 0:
+            failures.append({"pdf": "", "error": f"vault has no persisted notes for {vault_dir}"})
+    return failures
 
 
 def get_dir_samples(vault_path: Path, dir_name: str, limit: int = 3) -> list[tuple[str, int]]:
@@ -796,13 +849,11 @@ async def scenario_full_pipeline(
                     "token_usage": runtime.llm_client.get_usage_stats(),
                     "llm_log_file": str(llm_log) if llm_log else None,
                 }
-                failures = [
-                    {"pdf": item.get("pdf", ""), "error": str(item.get("error") or item.get("bridge_result", {}).get("error"))}
-                    for item in doc_results
-                    if item.get("error") or item.get("bridge_result", {}).get("error")
-                ]
+                failures = full_pipeline_acceptance_failures(doc_results, final_vault_status)
+                result["passed"] = not failures
+                result["acceptance_failures"] = failures
                 evidence.finalize(
-                    exit_code=0,
+                    exit_code=0 if not failures else 1,
                     result=result,
                     failures=failures,
                     llm_log_file=str(llm_log) if llm_log else None,

@@ -105,9 +105,9 @@ class LLMRouter:
         model: str = "kimi-k2.6",
         thinking: bool = False,
         max_concurrency: int = 1,
-        min_interval_seconds: float = 0.0,
+        min_interval_seconds: float = 6.0,
         timeout: float = 120.0,
-        max_retries: int = 0,
+        max_retries: int = 2,
     ) -> KimiClient:
         """Create standard Kimi API client.
 

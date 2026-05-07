@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from aily.config import Settings
 from aily.llm.provider_routes import PrimaryLLMRoute
+
+
+pytestmark = pytest.mark.unit
 
 
 def test_primary_route_builds_kimi_client_from_settings():
@@ -61,6 +66,18 @@ def test_primary_route_supports_workload_timeout_and_retry_overrides():
 
     assert route.timeout == 30.0
     assert route.max_retries == 2
+
+
+def test_primary_route_defaults_are_provider_pressure_safe():
+    assert Settings.model_fields["llm_max_retries"].default >= 2
+    assert Settings.model_fields["llm_min_interval_seconds"].default >= 6.0
+
+    settings = Settings(llm_provider="kimi", kimi_api_key="test-kimi-key", llm_min_interval_seconds=6.0)
+
+    route = PrimaryLLMRoute.resolve_route(settings, workload="dikiwi.DATA")
+
+    assert route.max_retries >= 2
+    assert route.min_interval_seconds >= 6.0
 
 
 def test_primary_route_supports_workload_specific_client_building():

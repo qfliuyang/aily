@@ -1237,3 +1237,112 @@ Remaining risks:
   improvement lane, not an RC0 blocker.
 - Business proposal/entrepreneur stages were intentionally skipped in the final
   DIKIWI quality run; RC0 targets 005/006 concern DIKIWI 00-06 note generation.
+
+## Post-Commit Goal Audit And Provider Hardening: 2026-05-07
+
+Reason for rerun:
+
+- The final committed RC0 state was `b5dd11d41620624a90129083d9a53acd12acf8fd`.
+- A fresh completion audit required current evidence for Docker, Studio, and real
+  provider DIKIWI instead of relying only on pre-commit dirty-tree manifests.
+
+### Failed Provider Control That Exposed A Real Blocker
+
+Command:
+
+```bash
+python3 scripts/run_rc0_provider_dikiwi_gate.py \
+  --output-dir logs/runs/2026-05-07T_post_commit_provider_dikiwi_goal_audit \
+  --max 1 --phase-timeout 900
+```
+
+Result:
+
+- Exit code: 1.
+- `full_pipeline_real_provider` exited 0, but the traceability audit failed.
+- Real Kimi calls were made: 5 provider-verified successes, followed by one
+  timeout and one `429 Too Many Requests`.
+- Blocking finding: the pipeline stopped at `KNOWLEDGE`, generated no
+  03-Knowledge/04-Insight/05-Wisdom/06-Impact notes, and therefore did not meet
+  DATA→IMPACT acceptance.
+- Evidence path:
+  `logs/runs/2026-05-07T_post_commit_provider_dikiwi_goal_audit/dikiwi-traceability-report.json`.
+
+Fix:
+
+- `LLM_MAX_RETRIES` default raised to 2 and request pacing default raised to 6s.
+- Kimi/Docker examples now document retry/pacing knobs.
+- `LLMClient` now uses provider `Retry-After` hints when available and a
+  conservative 30s/60s fallback for 429s.
+- `scripts/run_test_suite.py full-pipeline` now exits non-zero when DIKIWI does
+  not reach IMPACT or when required vault stage notes are absent; partial
+  provider runs are visible failures, not green proxy evidence.
+
+### Fresh Post-Hardening Verification
+
+Commands:
+
+```bash
+python3 -m pytest -q \
+  tests/llm/test_client_retry.py tests/llm/test_provider_routes.py \
+  tests/test_rc0_release_gate.py tests/test_config_security_contract.py \
+  tests/test_release_docs_contract.py
+
+python3 -m py_compile aily/config.py aily/llm/client.py \
+  aily/llm/provider_routes.py aily/llm/llm_router.py \
+  scripts/test_framework.py scripts/run_test_suite.py \
+  scripts/run_docker_preprod_e2e.py
+
+python3 scripts/verify_project_health.py --check --json \
+  --output /tmp/aily-health-after-provider-hardening.json
+
+python3 scripts/run_rc0_release_gate.py --mode practical \
+  --run-id 2026-05-07T_post_hardening_practical_goal_audit
+
+LLM_MAX_RETRIES=2 LLM_MIN_INTERVAL_SECONDS=6 \
+python3 scripts/run_rc0_provider_dikiwi_gate.py \
+  --output-dir logs/runs/2026-05-07T_post_hardening_provider_dikiwi_goal_audit \
+  --max 1 --phase-timeout 900
+
+python3 scripts/run_docker_preprod_e2e.py --build --exercise-url --exercise-retry
+```
+
+Result:
+
+- Targeted pytest: 24 passed.
+- Py compile: passed.
+- Health check: exit code 0, `baseline_failures=[]`.
+- Practical RC0 gate: exit code 0.
+- Provider DIKIWI gate: exit code 0.
+- Docker preprod E2E: exit code 0.
+
+Provider DIKIWI evidence:
+
+- Manifest:
+  `logs/runs/2026-05-07T_post_hardening_provider_dikiwi_goal_audit/provider-dikiwi-gate-manifest.json`
+- Traceability audit passed with `failures=[]`.
+- Stage counts: 01-Data 30, 02-Information 15, 03-Knowledge 12,
+  04-Insight 4, 05-Wisdom 2, 06-Impact 3.
+- LLM trace: 14 calls, 13 successes, 1 recovered failed attempt,
+  13/13 successful calls provider-verified, 0 unverified successes,
+  provider/base URL/status/token usage/provider response IDs recorded.
+- Note quality audit passed.
+- Vault graph-safety audit passed.
+- Strict DIKIWI quality audit passed.
+
+Docker evidence:
+
+- Manifest:
+  `logs/runs/2026-05-07T10-34-53Z_docker_preprod_retry_url_e2e/manifest.json`
+- Acceptance flags: mocked=false, real_files=true, real_graph_db=true,
+  real_vault=true, real_browser=true, real_fastapi=true, real_docker=true.
+- Docker health: `status=ok`, hosted mode true.
+- Docker readiness: graph DB/source store/vault configured and Studio auth
+  required.
+- Restart persistence, backup creation, and restore dry run passed.
+
+Remaining risk:
+
+- The post-hardening provider gate is still one real PDF plus the representative
+  sample ledger. Broader multi-document/provider soak remains a post-RC0
+  hardening lane, not a reason to accept mocked evidence.

@@ -236,7 +236,8 @@ async def main() -> int:
         "AILY_DOCKER_KIMI_API_KEY": os.getenv("AILY_DOCKER_KIMI_API_KEY", ""),
         "AILY_DOCKER_DEEPSEEK_API_KEY": os.getenv("AILY_DOCKER_DEEPSEEK_API_KEY", ""),
         "AILY_DOCKER_LLM_TIMEOUT_SECONDS": os.getenv("AILY_DOCKER_LLM_TIMEOUT_SECONDS", "120"),
-        "AILY_DOCKER_LLM_MAX_RETRIES": os.getenv("AILY_DOCKER_LLM_MAX_RETRIES", "0"),
+        "AILY_DOCKER_LLM_MAX_RETRIES": os.getenv("AILY_DOCKER_LLM_MAX_RETRIES", "2"),
+        "AILY_DOCKER_LLM_MIN_INTERVAL_SECONDS": os.getenv("AILY_DOCKER_LLM_MIN_INTERVAL_SECONDS", "6"),
     }
     env_file.write_text("\n".join(f"{key}={value}" for key, value in env_values.items()) + "\n", encoding="utf-8")
 

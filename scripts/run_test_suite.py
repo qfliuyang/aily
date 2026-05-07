@@ -113,6 +113,8 @@ async def main() -> int:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         (evidence_dir / "stdout.log").write_text(rendered_result + "\n", encoding="utf-8")
     print(rendered_result)
+    if isinstance(result, dict) and result.get("passed") is False:
+        return 1
     return 0
 
 

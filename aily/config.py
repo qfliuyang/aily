@@ -118,9 +118,9 @@ class Settings(BaseSettings):
     llm_model: str = "kimi-k2.6"
     llm_workload_routes_json: str = ""
     llm_timeout_seconds: float = 120.0
-    llm_max_retries: int = 0
+    llm_max_retries: int = 2
     llm_max_concurrency: int = 1
-    llm_min_interval_seconds: float = 3.0
+    llm_min_interval_seconds: float = 6.0
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
     dikiwi_stage_timeout_seconds: float = 240.0

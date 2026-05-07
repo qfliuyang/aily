@@ -306,3 +306,38 @@ Rollback note:
 - Revert the DIKIWI writer/agent propagation changes, the Studio vault note API,
   and the new audit scripts/tests if the auditors block valid real-provider
   output. Do not relax audit thresholds without a new real evidence run.
+
+## Post-Commit Hardening Addendum: 2026-05-07
+
+Scope:
+
+- Address the fresh provider-gate failure where Moonshot timeout/429 pressure
+  left DIKIWI at KNOWLEDGE while the full-pipeline scenario process exited 0.
+- Preserve the anti-cheat rule: partial provider output is a visible failure,
+  not acceptance evidence.
+
+Changed plan decisions:
+
+- Default provider retry budget is now `LLM_MAX_RETRIES=2`.
+- Default request pacing is now `LLM_MIN_INTERVAL_SECONDS=6`.
+- Docker deployment exposes the same retry/pacing knobs with
+  `AILY_DOCKER_LLM_MAX_RETRIES` and `AILY_DOCKER_LLM_MIN_INTERVAL_SECONDS`.
+- Full-pipeline scenario acceptance now requires DATA→IMPACT plus persisted
+  Knowledge/Insight/Wisdom/Impact vault notes before returning a green CLI exit.
+
+Fresh evidence:
+
+- Failed control:
+  `logs/runs/2026-05-07T_post_commit_provider_dikiwi_goal_audit/dikiwi-traceability-report.json`.
+- Passing provider rerun:
+  `logs/runs/2026-05-07T_post_hardening_provider_dikiwi_goal_audit/provider-dikiwi-gate-manifest.json`.
+- Passing practical gate:
+  `logs/runs/2026-05-07T_post_hardening_practical_goal_audit/manifest.json`.
+- Passing Docker rerun:
+  `logs/runs/2026-05-07T10-34-53Z_docker_preprod_retry_url_e2e/manifest.json`.
+
+Rollback note:
+
+- If provider cost or latency becomes unacceptable, tune the explicit env knobs;
+  do not lower release gates to accept partial DIKIWI or provider-unverified
+  traces.
