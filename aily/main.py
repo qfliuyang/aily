@@ -244,7 +244,12 @@ async def _process_reactor_job(job: dict) -> None:
         job.get("id"),
         len(proposals),
     )
-    if proposals and entrepreneur_scheduler is not None:
+    if (
+        proposals
+        and entrepreneur_scheduler is not None
+        and getattr(entrepreneur_scheduler, "enabled", False) is True
+        and SETTINGS.minds.entrepreneur_enabled
+    ):
         await db.enqueue(
             "entrepreneur_evaluate",
             {
@@ -258,6 +263,15 @@ async def _process_entrepreneur_job(job: dict) -> None:
     """Dispatch Entrepreneur evaluation from queue."""
     if entrepreneur_scheduler is None:
         logger.warning("Entrepreneur scheduler not available, skipping job %s", job.get("id"))
+        return
+    if not SETTINGS.minds.entrepreneur_enabled or getattr(entrepreneur_scheduler, "enabled", False) is not True:
+        logger.info("Entrepreneur mind disabled, skipping job %s", job.get("id"))
+        await emit_ui_event(
+            "proposal_review_skipped",
+            job_id=job.get("id"),
+            pipeline_id=job.get("payload", {}).get("pipeline_id"),
+            reason="entrepreneur_disabled",
+        )
         return
     await emit_ui_event(
         "proposal_review_started",

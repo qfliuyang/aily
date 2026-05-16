@@ -230,3 +230,73 @@ class TestDikiwiMind:
         assert mind._client_for_stage(DikiwiStage.DATA) is clients["dikiwi.data"]
         assert mind._client_for_stage(DikiwiStage.INSIGHT) is clients["dikiwi.insight"]
         assert mind._client_for_stage(DikiwiStage.WISDOM) is shared_client
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_disabled_entrepreneur_scheduler_does_not_enqueue_business_job(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        """DIKIWI must not trigger per-pipeline business work when Entrepreneur is disabled."""
+        scheduler = MagicMock()
+        scheduler.enabled = False
+        queue_db = AsyncMock()
+        residual = StageResult(
+            stage=DikiwiStage.RESIDUAL,
+            success=True,
+            data={"proposals": [{"proposal_id": "proposal_1"}]},
+        )
+        mind = DikiwiMind(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            entrepreneur_scheduler=scheduler,
+            queue_db=queue_db,
+        )
+
+        await mind._maybe_enqueue_entrepreneur_evaluation(
+            pipeline_id="pipeline_1",
+            pipeline_status="completed",
+            residual_result=residual,
+        )
+
+        assert queue_db.enqueue.await_count == 0
+        queue_db.enqueue.assert_not_awaited()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_enabled_entrepreneur_scheduler_enqueues_business_job(
+        self,
+        mock_llm_client,
+        mock_graph_db,
+    ):
+        """Enabled Entrepreneur mind remains wired for explicit business evaluation."""
+        scheduler = MagicMock()
+        scheduler.enabled = True
+        queue_db = AsyncMock()
+        residual = StageResult(
+            stage=DikiwiStage.RESIDUAL,
+            success=True,
+            data={"proposals": [{"proposal_id": "proposal_1"}]},
+        )
+        mind = DikiwiMind(
+            llm_client=mock_llm_client,
+            graph_db=mock_graph_db,
+            entrepreneur_scheduler=scheduler,
+            queue_db=queue_db,
+        )
+
+        await mind._maybe_enqueue_entrepreneur_evaluation(
+            pipeline_id="pipeline_1",
+            pipeline_status="completed",
+            residual_result=residual,
+        )
+
+        assert queue_db.enqueue.await_count == 1
+        queue_db.enqueue.assert_awaited_once_with(
+            "entrepreneur_evaluate",
+            {
+                "pipeline_id": "pipeline_1",
+                "proposals": [{"proposal_id": "proposal_1"}],
+            },
+        )

@@ -249,6 +249,10 @@ class BaseMindScheduler(ABC):
 
     async def _run_session_wrapper(self) -> None:
         """Wrapper for session execution with circuit breaker and error handling."""
+        if not self.enabled:
+            logger.info("[%s] Session skipped: mind is disabled", self.mind_name)
+            return
+
         # Check circuit breaker
         if not await self.circuit_breaker.can_execute():
             logger.warning(

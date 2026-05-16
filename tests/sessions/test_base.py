@@ -99,6 +99,7 @@ class MockMindScheduler(BaseMindScheduler):
         return self.run_result
 
 
+@pytest.mark.unit
 class TestBaseMindScheduler:
     """Tests for BaseMindScheduler."""
 
@@ -138,6 +139,17 @@ class TestBaseMindScheduler:
         assert scheduler.run_called is True
         assert scheduler.circuit_breaker._failure_count == 0
         assert scheduler._current_session.state.name == "COMPLETED"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_run_session_wrapper_skips_when_disabled(self):
+        """Direct queue-triggered session calls must respect the enabled flag."""
+        scheduler = MockMindScheduler(mind_name="test", enabled=False)
+
+        await scheduler._run_session_wrapper()
+
+        assert scheduler.run_called is False
+        assert scheduler._current_session is None
 
     @pytest.mark.asyncio
     async def test_run_session_wrapper_failure(self):

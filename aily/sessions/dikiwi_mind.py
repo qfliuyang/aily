@@ -362,6 +362,57 @@ class DikiwiMind:
         stage_name = stage.name.lower() if isinstance(stage, DikiwiStage) else str(stage).strip().lower()
         return self._client_for_workload(f"dikiwi.{stage_name}")
 
+    def _entrepreneur_evaluation_enabled(self) -> bool:
+        """Return whether DIKIWI may trigger per-pipeline business evaluation.
+
+        The Entrepreneur scheduler object can exist even when the mind is disabled
+        so that status APIs and later manual enablement still have an object to
+        inspect. DIKIWI must therefore check the scheduler's explicit runtime
+        flag before enqueueing side-effect jobs; object existence alone is not an
+        execution contract.
+        """
+        return bool(
+            self.entrepreneur_scheduler is not None
+            and SETTINGS.minds.entrepreneur_enabled
+            and getattr(self.entrepreneur_scheduler, "enabled", False) is True
+        )
+
+    async def _maybe_enqueue_entrepreneur_evaluation(
+        self,
+        *,
+        pipeline_id: str,
+        pipeline_status: str,
+        residual_result: StageResult | None,
+    ) -> None:
+        """Queue Entrepreneur evaluation only when that mind is explicitly enabled."""
+        if (
+            pipeline_status != "completed"
+            or not self._entrepreneur_evaluation_enabled()
+            or not residual_result
+            or not residual_result.success
+            or not residual_result.data.get("proposals")
+        ):
+            return
+
+        if not self.queue_db:
+            return
+
+        try:
+            logger.info(
+                "[DIKIWI] Enqueuing Entrepreneur evaluation for %d proposals from pipeline %s",
+                len(residual_result.data["proposals"]),
+                pipeline_id,
+            )
+            await self.queue_db.enqueue(
+                "entrepreneur_evaluate",
+                {
+                    "pipeline_id": pipeline_id,
+                    "proposals": residual_result.data["proposals"],
+                },
+            )
+        except Exception as exc:
+            logger.warning("[DIKIWI] Entrepreneur enqueue failed: %s", exc)
+
     def _get_or_create_memory(self, pipeline_id: str) -> ConversationMemory:
         """Get or create conversation memory for a pipeline."""
         if pipeline_id not in self._conversation_memories:
@@ -795,30 +846,15 @@ class DikiwiMind:
                     except Exception as exc:
                         logger.warning("[DIKIWI] Reactor residual screening failed: %s", exc)
 
-            # Per-pipeline Entrepreneur evaluation for business proposals
-            if (
-                pipeline.status == "completed"
-                and self.entrepreneur_scheduler
-                and residual_result
-                and residual_result.success
-                and residual_result.data.get("proposals")
-            ):
-                try:
-                    logger.info(
-                        "[DIKIWI] Enqueuing Entrepreneur evaluation for %d proposals from pipeline %s",
-                        len(residual_result.data["proposals"]),
-                        pipeline_id,
-                    )
-                    if self.queue_db:
-                        await self.queue_db.enqueue(
-                            "entrepreneur_evaluate",
-                            {
-                                "pipeline_id": pipeline_id,
-                                "proposals": residual_result.data["proposals"],
-                            },
-                        )
-                except Exception as exc:
-                    logger.warning("[DIKIWI] Entrepreneur enqueue failed: %s", exc)
+            # Per-pipeline Entrepreneur evaluation for business proposals.
+            # A scheduler instance is created during app startup even when the
+            # Entrepreneur mind is disabled; only enqueue when its enabled flag is
+            # explicitly true.
+            await self._maybe_enqueue_entrepreneur_evaluation(
+                pipeline_id=pipeline_id,
+                pipeline_status=pipeline.status,
+                residual_result=residual_result,
+            )
 
             # Transfer results
             result.stage_results = list(ctx.stage_results)
