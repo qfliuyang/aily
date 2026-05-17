@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = 1
     llm_min_interval_seconds: float = 6.0
     llm_trace_log_path: Path | None = None
+    dikiwi_foundation_only_ingestion: bool = True
     dikiwi_max_llm_calls_per_source: int = 30
     dikiwi_stage_round_limit: int = 4
     dikiwi_stage_timeout_seconds: float = 600.0
@@ -157,6 +158,16 @@ class Settings(BaseSettings):
     aily_digest_feishu_open_id: str = ""
     aily_data_dir: Path = Path.home() / ".aily"
     dikiwi_batch_lock_path: Path = Path.home() / ".aily" / "dikiwi_batch.lock"
+
+    # V1 orchestration settings
+    orchestrator_enabled: bool = False
+    orchestrator_shadow_mode: bool = True
+    inbox_path: Path = Path.home() / "Aily" / "Inbox"
+    inbox_watcher_enabled: bool = False
+    inbox_poll_interval_seconds: float = 5.0
+    inbox_file_stable_seconds: float = 2.0
+    research_daily_budget: int = 10
+    email_delivery_enabled: bool = False
 
     # Voice memo settings
     feishu_voice_enabled: bool = False  # Disabled by default until configured
@@ -207,8 +218,20 @@ class Settings(BaseSettings):
         return self.aily_data_dir / "sources"
 
     @property
+    def canonical_markdown_dir(self) -> Path:
+        return self.aily_data_dir / "markdown_packages"
+
+    @property
     def ui_event_log_path(self) -> Path:
         return self.aily_data_dir / "ui-events.jsonl"
+
+    @property
+    def langgraph_checkpoint_db_path(self) -> Path:
+        return self.aily_data_dir / "langgraph_checkpoints.sqlite"
+
+    @property
+    def workflow_runs_db_path(self) -> Path:
+        return self.aily_data_dir / "workflow_runs.db"
 
     @property
     def resolved_audit_log_path(self) -> Path:

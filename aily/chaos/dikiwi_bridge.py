@@ -59,6 +59,17 @@ class ChaosDikiwiBridge:
         self.dikiwi_mind = dikiwi_mind
         self.processed_folder = processed_folder or (Path.home() / "aily_chaos" / ".processed")
 
+    async def _process_batch_dikiwi(self, drops: list[RainDrop]) -> Any:
+        try:
+            return await self.dikiwi_mind.process_inputs_batched(
+                drops,
+                foundation_only=SETTINGS.dikiwi_foundation_only_ingestion,
+            )
+        except TypeError as exc:
+            if "foundation_only" not in str(exc):
+                raise
+            return await self.dikiwi_mind.process_inputs_batched(drops)
+
     async def process_extracted_content(
         self,
         content: ExtractedContentMultimodal,
@@ -130,7 +141,7 @@ class ChaosDikiwiBridge:
 
         drops = [self._create_raindrop(content) for content in contents]
         async with self._batch_lock():
-            batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
+            batch_run = await self._process_batch_dikiwi(drops)
 
         results: list[dict[str, Any]] = []
         processed = 0
@@ -212,7 +223,7 @@ class ChaosDikiwiBridge:
             }
 
         async with self._batch_lock():
-            batch_run = await self.dikiwi_mind.process_inputs_batched(drops)
+            batch_run = await self._process_batch_dikiwi(drops)
 
         results: list[dict[str, Any]] = []
         processed = 0

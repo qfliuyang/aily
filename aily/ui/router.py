@@ -26,6 +26,8 @@ def create_ui_router(
     source_provider: Callable[[int, int], Awaitable[dict[str, Any]]] | None = None,
     source_detail_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
     source_jobs_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
+    workflow_trigger_handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    workflow_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
     proposal_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     entrepreneurship_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     vault_notes_provider: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
@@ -259,6 +261,22 @@ def create_ui_router(
         if source_jobs_provider is None:
             return {"total": 0, "jobs": []}
         return await source_jobs_provider(limit, offset, status)
+
+    @router.post("/workflows/iwi")
+    async def trigger_iwi_workflow(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        _check_rate_limit(request)
+        if workflow_trigger_handler is None:
+            raise HTTPException(status_code=503, detail="Workflow trigger unavailable")
+        motive = str(payload.get("motive", "")).strip()
+        if not motive:
+            raise HTTPException(status_code=400, detail="Workflow motive is required")
+        return await workflow_trigger_handler(payload)
+
+    @router.get("/workflows")
+    async def list_workflows(limit: int = 50, offset: int = 0, status: str | None = None) -> dict[str, Any]:
+        if workflow_provider is None:
+            return {"total": 0, "workflows": []}
+        return await workflow_provider(limit, offset, status)
 
     @router.get("/proposals")
     async def list_proposals(limit: int = 50) -> dict[str, Any]:

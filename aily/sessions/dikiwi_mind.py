@@ -282,6 +282,7 @@ class DikiwiBatchRun:
     post_information_nodes: int = 0
     incremental_ratio: float = 0.0
     incremental_threshold: float = 0.05
+    foundation_only: bool = False
     higher_order_triggered: bool = False
     higher_order_candidates: int = 0
     higher_order_selected: int = 0
@@ -479,6 +480,17 @@ class DikiwiMind:
             obsidian_writer=self.obsidian_writer,
             dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
             markdownizer=self._markdownizer,
+        )
+
+    @staticmethod
+    def _drop_requests_full_dikiwi(drop: "RainDrop") -> bool:
+        metadata = getattr(drop, "metadata", {}) or {}
+        return bool(
+            metadata.get("force_full_dikiwi")
+            or metadata.get("manual_iwi_trigger")
+            or metadata.get("triggered_synthesis")
+            or metadata.get("dikiwi_mode") == "full"
+            or metadata.get("workflow_kind") == "business_planning"
         )
 
     async def _execute_batch_stage(
@@ -693,6 +705,9 @@ class DikiwiMind:
                 ],
             )
 
+        if SETTINGS.dikiwi_foundation_only_ingestion and not self._drop_requests_full_dikiwi(drop):
+            return await self.process_input_foundation(drop)
+
         self._total_inputs += 1
         start_time = time.time()
         pipeline_id = f"dikiwi_{drop.id[:12]}_{int(start_time)}"
@@ -903,12 +918,210 @@ class DikiwiMind:
 
         return result
 
+    async def process_input_foundation(self, drop: "RainDrop") -> DikiwiResult:
+        """Process one input only through DATA → INFORMATION → KNOWLEDGE."""
+        batch = await self.process_inputs_batched(
+            [drop],
+            foundation_only=True,
+            max_concurrency=1,
+        )
+        if batch.results:
+            return batch.results[0]
+        return DikiwiResult(
+            input_id=drop.id,
+            stage_results=[
+                StageResult(
+                    stage=DikiwiStage.DATA,
+                    success=False,
+                    error_message="DIKIWI foundation processing produced no result",
+                )
+            ],
+        )
+
+    async def process_triggered_iwi(
+        self,
+        *,
+        motive: str,
+        workflow_run_id: str,
+        node_ids: list[str] | None = None,
+    ) -> DikiwiResult:
+        """Run triggered Insight → Wisdom → Impact over selected Knowledge graph context."""
+        from aily.dikiwi.agents.context import AgentContext
+        from aily.dikiwi.network_synthesis import SubgraphCandidate
+        from aily.gating.drainage import RainDrop, RainType, StreamType
+
+        if not self.enabled:
+            return DikiwiResult(
+                input_id=workflow_run_id,
+                pipeline_id=workflow_run_id,
+                stage_results=[
+                    StageResult(
+                        stage=DikiwiStage.INSIGHT,
+                        success=False,
+                        error_message="DIKIWI Mind disabled",
+                    )
+                ],
+            )
+        if self.graph_db is None:
+            return DikiwiResult(
+                input_id=workflow_run_id,
+                pipeline_id=workflow_run_id,
+                stage_results=[
+                    StageResult(
+                        stage=DikiwiStage.INSIGHT,
+                        success=False,
+                        error_message="GraphDB unavailable for triggered I/W/I workflow",
+                    )
+                ],
+            )
+
+        effective_node_ids = [node_id for node_id in (node_ids or []) if node_id]
+        if effective_node_ids:
+            graph_nodes = await self.graph_db.get_nodes_by_ids(effective_node_ids)
+        else:
+            graph_nodes = await self.graph_db.get_top_information_nodes_by_semantic_edge_count(limit=8)
+            effective_node_ids = [str(node["id"]) for node in graph_nodes]
+
+        if len(graph_nodes) < 2:
+            return DikiwiResult(
+                input_id=workflow_run_id,
+                pipeline_id=workflow_run_id,
+                stage_results=[
+                    StageResult(
+                        stage=DikiwiStage.INSIGHT,
+                        success=False,
+                        error_message="Triggered I/W/I requires at least two information nodes",
+                    )
+                ],
+            )
+
+        edges = await self.graph_db.get_edges_for_nodes(effective_node_ids, limit=40)
+        info_nodes = [
+            InformationNode(
+                id=str(node["id"]),
+                data_point_id=str(node["id"]),
+                content=str(node.get("label", "")),
+                info_type=str(node.get("type", "information")),
+                domain="triggered",
+                concept=str(node.get("label", ""))[:80],
+                tags=["triggered_iwi"],
+            )
+            for node in graph_nodes
+            if str(node.get("type", "information")) == "information"
+        ]
+        links = [
+            KnowledgeLink(
+                source_id=str(edge["source_node_id"]),
+                target_id=str(edge["target_node_id"]),
+                relation_type=str(edge.get("relation_type") or "relates_to"),
+                strength=float(edge.get("weight") or 0.5),
+                reasoning=f"Triggered by motive: {motive[:160]}",
+            )
+            for edge in edges
+        ]
+        candidate = SubgraphCandidate(
+            id=f"triggered:{workflow_run_id}",
+            anchor_id=info_nodes[0].id,
+            anchor_label=info_nodes[0].content,
+            anchor_type="information",
+            reason=f"Manual I/W/I trigger: {motive}",
+            score=max(1.0, float(len(info_nodes) + len(links))),
+            nodes=graph_nodes,
+            edges=edges,
+            changed_node_ids=effective_node_ids,
+        )
+
+        drop = RainDrop(
+            id=workflow_run_id,
+            rain_type=RainType.DOCUMENT,
+            content=motive,
+            source="manual_iwi_trigger",
+            source_id=workflow_run_id,
+            stream_type=StreamType.EXTRACT_ANALYZE,
+            metadata={
+                "workflow_run_id": workflow_run_id,
+                "motive": motive,
+                "dikiwi_mode": "full",
+                "manual_iwi_trigger": True,
+                "knowledge_node_ids": effective_node_ids,
+            },
+        )
+        memory = self._get_or_create_memory(workflow_run_id)
+        self._llm_budgets[workflow_run_id] = LLMUsageBudget(
+            max_calls=SETTINGS.dikiwi_max_llm_calls_per_source,
+            stage_round_limit=SETTINGS.dikiwi_stage_round_limit,
+        )
+        memory.add_user(f"Manual I/W/I workflow motive: {motive}")
+        ctx = AgentContext(
+            pipeline_id=workflow_run_id,
+            correlation_id=workflow_run_id,
+            drop=drop,
+            memory=memory,
+            budget=self._llm_budgets[workflow_run_id],
+            llm_client=self._client_for_stage(DikiwiStage.INSIGHT),
+            graph_db=self.graph_db,
+            obsidian_writer=self.obsidian_writer,
+            dikiwi_obsidian_writer=self.dikiwi_obsidian_writer,
+            markdownizer=self._markdownizer,
+        )
+        ctx.stage_results.extend(
+            [
+                StageResult(
+                    stage=DikiwiStage.INFORMATION,
+                    success=True,
+                    items_processed=len(info_nodes),
+                    items_output=len(info_nodes),
+                    data={"information_nodes": info_nodes, "info_note_ids": []},
+                ),
+                StageResult(
+                    stage=DikiwiStage.KNOWLEDGE,
+                    success=True,
+                    items_processed=len(info_nodes),
+                    items_output=len(links),
+                    data={
+                        "links": links,
+                        "network_nodes": info_nodes,
+                        "subgraph_candidates": [candidate],
+                        "network_context": candidate.to_prompt_context(),
+                        "knowledge_note_ids": [],
+                        "network_synthesis_triggered": True,
+                        "triggered_iwi": True,
+                    },
+                ),
+            ]
+        )
+        result = DikiwiResult(input_id=workflow_run_id, pipeline_id=workflow_run_id)
+        try:
+            agents = self._build_agent_registry()
+            for stage in (DikiwiStage.INSIGHT, DikiwiStage.WISDOM, DikiwiStage.IMPACT):
+                ctx.llm_client = self._client_for_stage(stage)
+                stage_result = await agents[stage].execute(ctx)
+                ctx.stage_results.append(stage_result)
+                await emit_ui_event(
+                    "stage_completed" if stage_result.success else "stage_failed",
+                    pipeline_id=workflow_run_id,
+                    correlation_id=workflow_run_id,
+                    stage=stage.name,
+                    workflow_run_id=workflow_run_id,
+                    success=stage_result.success,
+                    error=stage_result.error_message or "",
+                )
+                if not stage_result.success:
+                    break
+            result.stage_results = list(ctx.stage_results)
+            result.completed_at = datetime.now(timezone.utc)
+            return result
+        finally:
+            self._cleanup_memory(workflow_run_id)
+            self._llm_budgets.pop(workflow_run_id, None)
+
     async def process_inputs_batched(
         self,
         drops: list["RainDrop"],
         *,
         incremental_threshold: float | None = None,
         max_concurrency: int | None = None,
+        foundation_only: bool = False,
     ) -> DikiwiBatchRun:
         """Run DIKIWI as a stage-latched batch over many drops.
 
@@ -934,7 +1147,8 @@ class DikiwiMind:
                         ],
                     )
                     for drop in drops
-                ]
+                ],
+                foundation_only=foundation_only,
             )
 
         threshold = (
@@ -1028,10 +1242,19 @@ class DikiwiMind:
                 pre_information_nodes,
                 post_information_nodes,
             )
-            higher_order_triggered = bool(knowledge_contexts) and incremental_ratio >= threshold
+            higher_order_triggered = (
+                bool(knowledge_contexts)
+                and incremental_ratio >= threshold
+                and not foundation_only
+            )
 
             if not knowledge_contexts:
                 logger.info("[DIKIWI] Batch stopped before graph threshold check: no successful KNOWLEDGE results")
+            elif foundation_only:
+                logger.info(
+                    "[DIKIWI] Foundation-only batch stopped after KNOWLEDGE for %d contexts",
+                    len(knowledge_contexts),
+                )
             elif not higher_order_triggered:
                 logger.info(
                     "[DIKIWI] Batch stopped after KNOWLEDGE: information graph growth %.2f%% below threshold %.2f%%",
@@ -1040,15 +1263,20 @@ class DikiwiMind:
                 )
             if knowledge_contexts:
                 await emit_ui_event(
-                    "threshold_crossed" if higher_order_triggered else "threshold_not_reached",
+                    (
+                        "foundation_ingestion_completed"
+                        if foundation_only
+                        else "threshold_crossed" if higher_order_triggered else "threshold_not_reached"
+                    ),
                     stage=DikiwiStage.KNOWLEDGE.name,
                     incremental_ratio=incremental_ratio,
                     incremental_threshold=threshold,
+                    foundation_only=foundation_only,
                     higher_order_triggered=higher_order_triggered,
                     pipeline_ids=[ctx.pipeline_id for ctx in knowledge_contexts],
                 )
 
-            if higher_order_triggered and knowledge_contexts:
+            if higher_order_triggered and knowledge_contexts and not foundation_only:
                 await self._attach_batch_network_assessment(knowledge_contexts)
 
             higher_order_candidates = [
@@ -1058,6 +1286,7 @@ class DikiwiMind:
                 and ctx.stage_results[-1].stage == DikiwiStage.KNOWLEDGE
                 and ctx.stage_results[-1].success
                 and higher_order_triggered
+                and not foundation_only
                 and ctx.stage_results[-1].data.get("network_synthesis_triggered", False)
             ]
             selected_higher_order_contexts = self._select_higher_order_contexts(higher_order_candidates)
@@ -1117,6 +1346,7 @@ class DikiwiMind:
                 post_information_nodes=post_information_nodes,
                 incremental_ratio=incremental_ratio,
                 incremental_threshold=threshold,
+                foundation_only=foundation_only,
                 higher_order_triggered=higher_order_triggered,
                 higher_order_candidates=len(higher_order_candidates),
                 higher_order_selected=len(selected_higher_order_contexts),

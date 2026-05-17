@@ -53,8 +53,16 @@ from aily.sessions.entrepreneur_scheduler import EntrepreneurScheduler
 from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 from aily.gating.drainage import RainDrop, RainType, StreamType
+from aily.processing.canonical_markdown import CanonicalMarkdownConverter
 from aily.processing.router import ProcessingRouter
 from aily.runtime.backpressure import provider_backpressure
+from aily.inbox import WatchedInboxService
+from aily.orchestration.checkpoint import async_sqlite_checkpointer
+from aily.orchestration.runs import WorkflowRunStore
+from aily.orchestration.source_foundation_graph import (
+    SourceFoundationDependencies,
+    build_source_foundation_graph,
+)
 from aily.source_store import SourceJobCapacityError, SourceStore
 from aily.ui.events import emit_ui_event, ui_event_hub
 from aily.ui.router import create_ui_router
@@ -70,7 +78,12 @@ HAS_MULTIPART = importlib.util.find_spec("python_multipart") is not None
 
 db = QueueDB(SETTINGS.queue_db_path)
 graph_db = GraphDB(SETTINGS.graph_db_path)
-source_store = SourceStore(SETTINGS.source_store_db_path, SETTINGS.source_object_dir)
+source_store = SourceStore(
+    SETTINGS.source_store_db_path,
+    SETTINGS.source_object_dir,
+    SETTINGS.canonical_markdown_dir,
+)
+workflow_run_store = WorkflowRunStore(SETTINGS.workflow_runs_db_path)
 fetcher = BrowserFetcher()
 pusher = FeishuPusher(SETTINGS.feishu_app_id, SETTINGS.feishu_app_secret)
 writer = ObsidianWriter(
@@ -91,6 +104,8 @@ browser_manager_instance = None
 ui_upload_tasks: dict[str, asyncio.Task[Any]] = {}
 source_worker_tasks: list[asyncio.Task[Any]] = []
 source_worker_stop: asyncio.Event | None = None
+inbox_watcher: WatchedInboxService | None = None
+workflow_tasks: dict[str, asyncio.Task[Any]] = {}
 ui_upload_semaphore = asyncio.Semaphore(max(1, SETTINGS.ui_upload_concurrency))
 ui_rate_limiter = FixedWindowRateLimiter(
     max_requests=max(1, SETTINGS.ui_rate_limit_requests),
@@ -183,6 +198,191 @@ def _should_enqueue_upload_source(source_record: dict[str, Any]) -> bool:
         "failed_retry_exhausted",
         "cancelled",
         "retry_pending",
+    }
+
+
+def _canonical_markdown_converter() -> CanonicalMarkdownConverter:
+    return CanonicalMarkdownConverter(source_store=source_store)
+
+
+async def _process_dikiwi_ingestion(drop: RainDrop) -> Any:
+    if not dikiwi_mind:
+        raise RuntimeError("DIKIWI Mind is not initialized")
+    if (
+        SETTINGS.dikiwi_foundation_only_ingestion
+        and hasattr(dikiwi_mind, "process_input_foundation")
+        and not getattr(dikiwi_mind, "_drop_requests_full_dikiwi", lambda _drop: False)(drop)
+    ):
+        return await dikiwi_mind.process_input_foundation(drop)
+    return await dikiwi_mind.process_input(drop)
+
+
+async def _process_source_job_with_foundation_graph(job: dict[str, Any]) -> str:
+    payload = dict(job.get("payload") or {})
+    source_id = str(job.get("source_id") or payload.get("source_id") or "")
+    job_id = str(job.get("job_id") or payload.get("job_id") or "")
+    job_type = str(job.get("job_type") or payload.get("job_type") or "")
+    input_summary = source_id
+    if job_type == "process_url_source":
+        source = await source_store.get_source(source_id)
+        input_summary = str((source or {}).get("normalized_source") or payload.get("url") or source_id)
+    run = await workflow_run_store.create_run(
+        workflow_kind="source_foundation",
+        input_summary=input_summary[:500],
+        metadata={
+            "source_id": source_id,
+            "job_id": job_id,
+            "job_type": job_type,
+            "job_payload": {
+                **payload,
+                "source_id": source_id,
+                "job_id": job_id,
+                "job_type": job_type,
+            },
+        },
+    )
+    await emit_ui_event(
+        "workflow_run_queued",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        source_id=source_id,
+        job_id=job_id,
+        job_type=job_type,
+    )
+    await workflow_run_store.update_status(
+        run.workflow_run_id,
+        status="running",
+        current_node="source_foundation",
+        metadata={"source_id": source_id, "job_id": job_id, "job_type": job_type},
+    )
+    await emit_ui_event(
+        "workflow_run_started",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        source_id=source_id,
+        job_id=job_id,
+        job_type=job_type,
+    )
+    dependencies = SourceFoundationDependencies(
+        source_store=source_store,
+        processing_router_factory=lambda: ProcessingRouter(browser_manager=browser_manager_instance),
+        canonical_markdown_converter_factory=_canonical_markdown_converter,
+        dikiwi_ingestion=_process_dikiwi_ingestion,
+        emit_event=emit_ui_event,
+        browser_manager=browser_manager_instance,
+        workflow_run_store=workflow_run_store,
+        failed_stage=_failed_stage,
+    )
+    state = {
+        "workflow_run_id": run.workflow_run_id,
+        "langgraph_thread_id": run.langgraph_thread_id,
+        "workflow_kind": "source_foundation",
+        "status": "queued",
+        "steps": [],
+        "source_id": source_id,
+        "job_id": job_id,
+        "job_type": job_type,
+        "metadata": {
+            "source_id": source_id,
+            "job_id": job_id,
+            "job_type": job_type,
+            "job_payload": {
+                **payload,
+                "source_id": source_id,
+                "job_id": job_id,
+                "job_type": job_type,
+            },
+        },
+    }
+    config = {"configurable": {"thread_id": run.langgraph_thread_id}}
+    try:
+        async with async_sqlite_checkpointer(SETTINGS.langgraph_checkpoint_db_path) as checkpointer:
+            graph = build_source_foundation_graph(checkpointer, dependencies=dependencies)
+            result = await graph.ainvoke(state, config)
+    except Exception as exc:
+        error = str(exc)
+        await workflow_run_store.update_status(
+            run.workflow_run_id,
+            status="failed",
+            current_node="source_foundation",
+            last_error=error,
+        )
+        await emit_ui_event(
+            "workflow_run_failed",
+            workflow_run_id=run.workflow_run_id,
+            workflow_kind=run.workflow_kind,
+            source_id=source_id,
+            job_id=job_id,
+            job_type=job_type,
+            error=error,
+        )
+        raise
+    if result.get("status") == "completed":
+        await emit_ui_event(
+            "workflow_run_completed",
+            workflow_run_id=run.workflow_run_id,
+            workflow_kind=run.workflow_kind,
+            source_id=source_id,
+            job_id=job_id,
+            job_type=job_type,
+            pipeline_id=result.get("pipeline_id"),
+            final_stage=result.get("final_stage"),
+        )
+        return "completed"
+    error = str(result.get("error") or "source foundation graph failed")
+    await workflow_run_store.update_status(
+        run.workflow_run_id,
+        status="failed",
+        current_node=str(result.get("current_node") or "source_foundation"),
+        last_error=error,
+    )
+    await emit_ui_event(
+        "workflow_run_failed",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        source_id=source_id,
+        job_id=job_id,
+        job_type=job_type,
+        error=error,
+    )
+    return f"failed:{error}"
+
+
+async def _process_dikiwi_batch_ingestion(drops: list[RainDrop]) -> Any:
+    if not dikiwi_mind:
+        raise RuntimeError("DIKIWI Mind is not initialized")
+    try:
+        return await dikiwi_mind.process_inputs_batched(
+            drops,
+            foundation_only=SETTINGS.dikiwi_foundation_only_ingestion,
+        )
+    except TypeError as exc:
+        if "foundation_only" not in str(exc):
+            raise
+        return await dikiwi_mind.process_inputs_batched(drops)
+
+
+def _source_foundation_graph_enabled(job: dict[str, Any]) -> bool:
+    return (
+        SETTINGS.orchestrator_enabled
+        and not SETTINGS.orchestrator_shadow_mode
+        and job.get("job_type") in {"process_upload_source", "process_url_source"}
+    )
+
+
+def _workflow_snapshot_payload(snapshot: Any) -> dict[str, Any]:
+    return {
+        "workflow_run_id": snapshot.workflow_run_id,
+        "langgraph_thread_id": snapshot.langgraph_thread_id,
+        "workflow_kind": snapshot.workflow_kind,
+        "status": snapshot.status,
+        "current_node": snapshot.current_node,
+        "input_summary": snapshot.input_summary,
+        "metadata": snapshot.metadata,
+        "created_at": snapshot.created_at,
+        "updated_at": snapshot.updated_at,
+        "completed_at": snapshot.completed_at,
+        "last_error": snapshot.last_error,
     }
 
 
@@ -632,9 +832,6 @@ async def _process_ui_upload(
                 text_length=len(extracted.text or ""),
             )
 
-            if not dikiwi_mind:
-                raise RuntimeError("DIKIWI Mind is not initialized")
-
             title = extracted.title or Path(filename).stem
             content = extracted.text or ""
             if title:
@@ -658,7 +855,7 @@ async def _process_ui_upload(
                 },
             )
             await source_store.update_status(source_id, "processing")
-            result = await dikiwi_mind.process_input(drop)
+            result = await _process_dikiwi_ingestion(drop)
             await source_store.update_status(
                 source_id,
                 "completed",
@@ -764,20 +961,36 @@ async def _process_upload_source_job(job: dict[str, Any]) -> str:
         title=extracted.title or Path(filename).stem,
         text_length=len(extracted.text or ""),
     )
-
-    if not dikiwi_mind:
-        raise RuntimeError("DIKIWI Mind is not initialized")
-
-    title = extracted.title or Path(filename).stem
-    content = extracted.text or ""
-    if title:
-        content = f"# {title}\n\n{content}".strip()
+    markdown_package = await _canonical_markdown_converter().convert_extracted(
+        source_id=source_id,
+        extracted=extracted,
+        fallback_title=filename,
+        metadata={
+            "job_id": job.get("job_id"),
+            "upload_id": upload_id,
+            "batch_id": batch_id,
+            "filename": filename,
+            "content_type": content_type,
+        },
+    )
+    await emit_ui_event(
+        "canonical_markdown_created",
+        job_id=job.get("job_id"),
+        batch_id=batch_id or None,
+        upload_id=upload_id,
+        source_id=source_id,
+        package_id=markdown_package.package_id,
+        markdown_sha256=markdown_package.markdown_sha256,
+        package_path=markdown_package.package_path,
+        title=markdown_package.title,
+        text_length=len(markdown_package.markdown),
+    )
 
     drop = RainDrop(
         id="",
         rain_type=RainType.DOCUMENT,
-        content=content,
-        raw_bytes=b"",
+        content=markdown_package.markdown,
+        raw_bytes=markdown_package.markdown.encode("utf-8"),
         source="web_upload_source_job",
         source_id=source_id,
         stream_type=StreamType.EXTRACT_ANALYZE,
@@ -789,11 +1002,14 @@ async def _process_upload_source_job(job: dict[str, Any]) -> str:
             "content_type": content_type,
             "source_type": extracted.source_type,
             "processing_method": "durable_source_job",
+            "canonical_markdown_package_id": markdown_package.package_id,
+            "canonical_markdown_path": markdown_package.package_path,
+            "canonical_markdown_sha256": markdown_package.markdown_sha256,
             **(extracted.metadata or {}),
         },
     )
     await source_store.update_status(source_id, "processing", {"job_id": job.get("job_id"), "batch_id": batch_id})
-    result = await dikiwi_mind.process_input(drop)
+    result = await _process_dikiwi_ingestion(drop)
     failed_stage = _failed_stage(result)
     if failed_stage is not None:
         error = failed_stage.error_message or f"{failed_stage.stage.name} failed"
@@ -926,20 +1142,35 @@ async def _process_url_source_job(job: dict[str, Any]) -> str:
         title=extracted.title or url,
         text_length=len(extracted.text or ""),
     )
-
-    if not dikiwi_mind:
-        raise RuntimeError("DIKIWI Mind is not initialized")
-
-    title = extracted.title or url
-    content = extracted.text or ""
-    if title:
-        content = f"# {title}\n\n{content}".strip()
+    markdown_package = await _canonical_markdown_converter().convert_extracted(
+        source_id=source_id,
+        extracted=extracted,
+        fallback_title=url,
+        source_url=url,
+        metadata={
+            "job_id": job.get("job_id"),
+            "upload_id": upload_id,
+            "url": url,
+        },
+    )
+    await emit_ui_event(
+        "canonical_markdown_created",
+        job_id=job.get("job_id"),
+        source_id=source_id,
+        upload_id=upload_id,
+        package_id=markdown_package.package_id,
+        markdown_sha256=markdown_package.markdown_sha256,
+        package_path=markdown_package.package_path,
+        title=markdown_package.title,
+        text_length=len(markdown_package.markdown),
+        url=url,
+    )
 
     drop = RainDrop(
         id="",
         rain_type=RainType.URL,
-        content=content,
-        raw_bytes=(extracted.text or "").encode("utf-8"),
+        content=markdown_package.markdown,
+        raw_bytes=markdown_package.markdown.encode("utf-8"),
         source="studio_url_source_job",
         source_id=source_id,
         stream_type=StreamType.FETCH_ANALYZE,
@@ -949,11 +1180,14 @@ async def _process_url_source_job(job: dict[str, Any]) -> str:
             "url": url,
             "source_type": extracted.source_type,
             "processing_method": "durable_studio_url_fetch_extract_dikiwi",
+            "canonical_markdown_package_id": markdown_package.package_id,
+            "canonical_markdown_path": markdown_package.package_path,
+            "canonical_markdown_sha256": markdown_package.markdown_sha256,
             **(extracted.metadata or {}),
         },
     )
     await source_store.update_status(source_id, "processing", {"job_id": job.get("job_id"), "upload_id": upload_id})
-    result = await dikiwi_mind.process_input(drop)
+    result = await _process_dikiwi_ingestion(drop)
     failed_stage = _failed_stage(result)
     if failed_stage is not None:
         error = failed_stage.error_message or f"{failed_stage.stage.name} failed"
@@ -1050,7 +1284,9 @@ async def _source_worker_loop(worker_id: str) -> None:
                 continue
             result = "failed"
             try:
-                if job.get("job_type") == "process_upload_source":
+                if _source_foundation_graph_enabled(job):
+                    result = await _process_source_job_with_foundation_graph(job)
+                elif job.get("job_type") == "process_upload_source":
                     result = await _process_upload_source_job(job)
                 elif job.get("job_type") == "process_url_source":
                     result = await _process_url_source_job(job)
@@ -1233,9 +1469,6 @@ async def _process_ui_url(source_id: str, url: str, *, retry_id: str | None = No
             text_length=len(extracted.text or ""),
         )
 
-        if not dikiwi_mind:
-            raise RuntimeError("DIKIWI Mind is not initialized")
-
         title = extracted.title or url
         content = extracted.text or ""
         if title:
@@ -1258,7 +1491,7 @@ async def _process_ui_url(source_id: str, url: str, *, retry_id: str | None = No
             },
         )
         await source_store.update_status(source_id, "processing")
-        result = await dikiwi_mind.process_input(drop)
+        result = await _process_dikiwi_ingestion(drop)
         await source_store.update_status(
             source_id,
             "completed",
@@ -1599,17 +1832,34 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
                 title=extracted.title or Path(item["filename"]).stem,
                 text_length=len(extracted.text or ""),
             )
-
-            title = extracted.title or Path(item["filename"]).stem
-            content = extracted.text or ""
-            if title:
-                content = f"# {title}\n\n{content}".strip()
+            markdown_package = await _canonical_markdown_converter().convert_extracted(
+                source_id=item["source_id"],
+                extracted=extracted,
+                fallback_title=item["filename"],
+                metadata={
+                    "batch_id": batch_id,
+                    "upload_id": item["upload_id"],
+                    "filename": item["filename"],
+                    "content_type": item["content_type"],
+                },
+            )
+            await emit_ui_event(
+                "canonical_markdown_created",
+                batch_id=batch_id,
+                upload_id=item["upload_id"],
+                source_id=item["source_id"],
+                package_id=markdown_package.package_id,
+                markdown_sha256=markdown_package.markdown_sha256,
+                package_path=markdown_package.package_path,
+                title=markdown_package.title,
+                text_length=len(markdown_package.markdown),
+            )
 
             drop = RainDrop(
                 id="",
                 rain_type=RainType.DOCUMENT,
-                content=content,
-                raw_bytes=b"",
+                content=markdown_package.markdown,
+                raw_bytes=markdown_package.markdown.encode("utf-8"),
                 source="web_upload_batch",
                 source_id=item["source_id"],
                 stream_type=StreamType.EXTRACT_ANALYZE,
@@ -1620,6 +1870,9 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
                     "filename": item["filename"],
                     "content_type": item["content_type"],
                     "source_type": extracted.source_type,
+                    "canonical_markdown_package_id": markdown_package.package_id,
+                    "canonical_markdown_path": markdown_package.package_path,
+                    "canonical_markdown_sha256": markdown_package.markdown_sha256,
                     **(extracted.metadata or {}),
                 },
             )
@@ -1634,7 +1887,7 @@ async def _process_ui_upload_batch(batch_id: str, items: list[dict[str, Any]]) -
         for item in process_items:
             await source_store.update_status(item["source_id"], "processing", {"batch_id": batch_id})
 
-        batch = await dikiwi_mind.process_inputs_batched(drops)
+        batch = await _process_dikiwi_batch_ingestion(drops)
         for drop, result in zip(drops, batch.results):
             item = item_by_source.get(drop.source_id)
             if item is None:
@@ -1801,6 +2054,13 @@ async def _ui_status_provider() -> dict[str, Any]:
 
     worker_running = bool(worker and worker._task and not worker._task.done())
     source_workers_running = sum(1 for task in source_worker_tasks if not task.done())
+    inbox_snapshot = inbox_watcher.snapshot() if inbox_watcher else {
+        "running": False,
+        "inbox_path": str(SETTINGS.inbox_path),
+    }
+    workflow_counts = {
+        "active": sum(1 for task in workflow_tasks.values() if not task.done()),
+    }
     return {
         "queue": queue_counts,
         "source_jobs": source_job_counts,
@@ -1815,6 +2075,8 @@ async def _ui_status_provider() -> dict[str, Any]:
         "daemons": {
             "queue_worker": worker_running,
             "source_workers": source_workers_running,
+            "inbox_watcher": bool(inbox_watcher and inbox_watcher.running),
+            "workflow_runner": workflow_counts["active"],
             "passive_capture_scheduler": scheduler is not None,
             "daily_digest_scheduler": digest_scheduler is not None,
             "claude_capture_scheduler": claude_capture_scheduler is not None,
@@ -1825,6 +2087,8 @@ async def _ui_status_provider() -> dict[str, Any]:
             "reactor": innovation_scheduler is not None,
             "entrepreneur": entrepreneur_scheduler is not None,
         },
+        "inbox": inbox_snapshot,
+        "workflows": workflow_counts,
     }
 
 
@@ -1854,6 +2118,126 @@ async def _ui_source_detail_provider(source_id: str) -> dict[str, Any] | None:
 
 async def _ui_source_jobs_provider(limit: int, offset: int, status: str | None = None) -> dict[str, Any]:
     return await source_store.list_source_jobs(limit=limit, offset=offset, status=status)
+
+
+async def _ui_workflows_provider(limit: int, offset: int, status: str | None = None) -> dict[str, Any]:
+    safe_status = status if status in {"queued", "running", "interrupted", "completed", "failed", "cancelled"} else None
+    runs = await workflow_run_store.list_runs(limit=limit, offset=offset, status=safe_status)
+    return {
+        "total": len(runs),
+        "workflows": [_workflow_snapshot_payload(run) for run in runs],
+    }
+
+
+async def _run_iwi_workflow(workflow_run_id: str, *, motive: str, node_ids: list[str]) -> None:
+    await workflow_run_store.update_status(
+        workflow_run_id,
+        status="running",
+        current_node="trigger_iwi",
+        metadata={"node_ids": node_ids},
+    )
+    await emit_ui_event(
+        "workflow_run_started",
+        workflow_run_id=workflow_run_id,
+        workflow_kind="triggered_iwi",
+        motive=motive,
+        node_ids=node_ids,
+    )
+    try:
+        if dikiwi_mind is None or not hasattr(dikiwi_mind, "process_triggered_iwi"):
+            raise RuntimeError("DIKIWI triggered I/W/I runner is unavailable")
+        result = await dikiwi_mind.process_triggered_iwi(
+            motive=motive,
+            workflow_run_id=workflow_run_id,
+            node_ids=node_ids,
+        )
+        failed_stage = _failed_stage(result)
+        final_stage = result.final_stage_reached.name if result.final_stage_reached else ""
+        if failed_stage is not None:
+            error = failed_stage.error_message or f"{failed_stage.stage.name} failed"
+            await workflow_run_store.update_status(
+                workflow_run_id,
+                status="failed",
+                current_node=failed_stage.stage.name,
+                metadata={
+                    "pipeline_id": result.pipeline_id,
+                    "final_stage": final_stage,
+                    "stage_count": len(result.stage_results),
+                },
+                last_error=error,
+            )
+            await emit_ui_event(
+                "workflow_run_failed",
+                workflow_run_id=workflow_run_id,
+                workflow_kind="triggered_iwi",
+                pipeline_id=result.pipeline_id,
+                final_stage=final_stage,
+                error=error,
+            )
+            return
+        await workflow_run_store.update_status(
+            workflow_run_id,
+            status="completed",
+            current_node=final_stage or "completed",
+            metadata={
+                "pipeline_id": result.pipeline_id,
+                "final_stage": final_stage,
+                "stage_count": len(result.stage_results),
+            },
+        )
+        await emit_ui_event(
+            "workflow_run_completed",
+            workflow_run_id=workflow_run_id,
+            workflow_kind="triggered_iwi",
+            pipeline_id=result.pipeline_id,
+            final_stage=final_stage,
+            stage_count=len(result.stage_results),
+        )
+    except Exception as exc:
+        logger.exception("Triggered I/W/I workflow failed: %s", workflow_run_id)
+        await workflow_run_store.update_status(
+            workflow_run_id,
+            status="failed",
+            current_node="trigger_iwi",
+            last_error=str(exc),
+        )
+        await emit_ui_event(
+            "workflow_run_failed",
+            workflow_run_id=workflow_run_id,
+            workflow_kind="triggered_iwi",
+            error=str(exc),
+        )
+    finally:
+        workflow_tasks.pop(workflow_run_id, None)
+
+
+async def _ui_iwi_workflow_trigger(payload: dict[str, Any]) -> dict[str, Any]:
+    motive = str(payload.get("motive", "")).strip()
+    node_ids = [str(item).strip() for item in payload.get("node_ids", []) if str(item).strip()]
+    run = await workflow_run_store.create_run(
+        workflow_kind="triggered_iwi",
+        input_summary=motive[:500],
+        metadata={
+            "motive": motive,
+            "node_ids": node_ids,
+            "trigger": "ui_workflow",
+        },
+    )
+    await emit_ui_event(
+        "workflow_run_queued",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        motive=motive,
+        node_ids=node_ids,
+    )
+    if payload.get("run_inline") is True:
+        await _run_iwi_workflow(run.workflow_run_id, motive=motive, node_ids=node_ids)
+    else:
+        workflow_tasks[run.workflow_run_id] = asyncio.create_task(
+            _run_iwi_workflow(run.workflow_run_id, motive=motive, node_ids=node_ids)
+        )
+    updated = await workflow_run_store.get_run(run.workflow_run_id)
+    return _workflow_snapshot_payload(updated or run)
 
 
 def _studio_vault_path() -> Path:
@@ -2045,11 +2429,12 @@ async def lifespan(app: FastAPI):
     global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
     global dikiwi_mind, innovation_scheduler, entrepreneur_scheduler
     global browser_manager_instance
-    global source_worker_stop, source_worker_tasks
+    global source_worker_stop, source_worker_tasks, inbox_watcher
     _validate_runtime_security_config()
     await db.initialize()
     await graph_db.initialize()
     await source_store.initialize()
+    await workflow_run_store.initialize()
     ui_event_hub.configure_persistence(SETTINGS.ui_event_log_path)
     loaded_ui_events = await ui_event_hub.load_persisted(limit=SETTINGS.ui_event_trace_limit)
     if loaded_ui_events:
@@ -2140,6 +2525,16 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_source_worker_loop(f"source-worker-{index + 1}"))
         for index in range(max(0, int(SETTINGS.source_worker_count)))
     ]
+    if SETTINGS.inbox_watcher_enabled:
+        inbox_watcher = WatchedInboxService(
+            source_store=source_store,
+            inbox_path=SETTINGS.inbox_path,
+            poll_interval_seconds=SETTINGS.inbox_poll_interval_seconds,
+            file_stable_seconds=SETTINGS.inbox_file_stable_seconds,
+            max_pending_jobs=SETTINGS.source_job_max_pending,
+            emit_event=emit_ui_event,
+        )
+        await inbox_watcher.start()
     scheduler = PassiveCaptureScheduler(enqueue_fn=_enqueue_url)
     scheduler.start()
     digest_scheduler = DailyDigestScheduler(
@@ -2227,6 +2622,14 @@ async def lifespan(app: FastAPI):
         entrepreneur_scheduler.stop()
     if source_worker_stop:
         source_worker_stop.set()
+    for task in workflow_tasks.values():
+        task.cancel()
+    if workflow_tasks:
+        await asyncio.gather(*workflow_tasks.values(), return_exceptions=True)
+        workflow_tasks.clear()
+    if inbox_watcher:
+        await inbox_watcher.stop()
+        inbox_watcher = None
     for task in source_worker_tasks:
         task.cancel()
     if source_worker_tasks:
@@ -2234,6 +2637,7 @@ async def lifespan(app: FastAPI):
         source_worker_tasks = []
     if worker:
         await worker.stop()
+    await workflow_run_store.close()
     await source_store.close()
     await fetcher.stop()
     if browser_manager:
@@ -2332,6 +2736,8 @@ app.include_router(
         source_provider=_ui_sources_provider,
         source_detail_provider=_ui_source_detail_provider,
         source_jobs_provider=_ui_source_jobs_provider,
+        workflow_trigger_handler=_ui_iwi_workflow_trigger,
+        workflow_provider=_ui_workflows_provider,
         proposal_provider=_ui_proposals_provider,
         entrepreneurship_provider=_ui_entrepreneurship_provider,
         vault_notes_provider=_ui_vault_notes_provider,

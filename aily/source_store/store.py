@@ -33,14 +33,16 @@ class SourceJobCapacityError(RuntimeError):
 class SourceStore:
     """Persistent raw source store for uploads, links, and future media inputs."""
 
-    def __init__(self, db_path: Path, object_dir: Path) -> None:
+    def __init__(self, db_path: Path, object_dir: Path, markdown_dir: Path | None = None) -> None:
         self.db_path = db_path.expanduser()
         self.object_dir = object_dir.expanduser()
+        self.markdown_dir = (markdown_dir or (self.object_dir.parent / "markdown_packages")).expanduser()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.object_dir.mkdir(parents=True, exist_ok=True)
+        self.markdown_dir.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
@@ -97,6 +99,22 @@ class SourceStore:
             )
             """
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_markdown_packages (
+                package_id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL UNIQUE,
+                markdown_sha256 TEXT NOT NULL,
+                package_path TEXT NOT NULL,
+                title TEXT,
+                source_type TEXT NOT NULL DEFAULT 'unknown',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(source_id) REFERENCES sources(source_id)
+            )
+            """
+        )
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_sources_updated ON sources(updated_at)")
         await self._db.execute("CREATE INDEX IF NOT EXISTS idx_uploads_source ON source_uploads(source_id)")
@@ -105,6 +123,9 @@ class SourceStore:
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_source_jobs_source ON source_jobs(source_id, status)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_markdown_packages_source ON source_markdown_packages(source_id)"
         )
         await self._db.commit()
 
@@ -689,6 +710,111 @@ class SourceStore:
             raise FileNotFoundError(f"Stored object missing for {source_id}: {path}")
         return path.read_bytes()
 
+    async def store_markdown_package(
+        self,
+        *,
+        source_id: str,
+        markdown: str,
+        title: str = "",
+        source_type: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        db = self._check_db()
+        source = await self.get_source(source_id)
+        if source is None:
+            raise FileNotFoundError(f"Source not found: {source_id}")
+        normalized = markdown.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("Canonical markdown package is empty")
+        data = normalized.encode("utf-8")
+        digest = _sha256_bytes(data)
+        package_key = f"{source_id}\0{digest}".encode("utf-8")
+        package_id = f"md:{_sha256_bytes(package_key)}"
+        package_path = self.markdown_dir / digest[:2] / f"{digest}.md"
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+        package_path.write_text(normalized + "\n", encoding="utf-8")
+        now = _utc_now()
+        await db.execute(
+            """
+            INSERT INTO source_markdown_packages (
+                package_id, source_id, markdown_sha256, package_path, title,
+                source_type, metadata, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                package_id = excluded.package_id,
+                markdown_sha256 = excluded.markdown_sha256,
+                package_path = excluded.package_path,
+                title = excluded.title,
+                source_type = excluded.source_type,
+                metadata = excluded.metadata,
+                updated_at = excluded.updated_at
+            """,
+            (
+                package_id,
+                source_id,
+                digest,
+                str(package_path),
+                title,
+                source_type,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        await db.execute(
+            """
+            UPDATE sources
+            SET metadata = ?, updated_at = ?
+            WHERE source_id = ?
+            """,
+            (
+                json.dumps(
+                    {
+                        **dict(source.get("metadata") or {}),
+                        "canonical_markdown_package_id": package_id,
+                        "canonical_markdown_path": str(package_path),
+                        "canonical_markdown_sha256": digest,
+                    },
+                    ensure_ascii=False,
+                ),
+                now,
+                source_id,
+            ),
+        )
+        await db.commit()
+        return {
+            "package_id": package_id,
+            "source_id": source_id,
+            "markdown_sha256": digest,
+            "package_path": str(package_path),
+            "title": title,
+            "source_type": source_type,
+            "metadata": metadata or {},
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    async def get_markdown_package(self, source_id: str) -> dict[str, Any] | None:
+        db = self._check_db()
+        cursor = await db.execute(
+            "SELECT * FROM source_markdown_packages WHERE source_id = ?",
+            (source_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return self._markdown_package_row_to_dict(row)
+
+    async def read_markdown_package(self, source_id: str) -> str:
+        package = await self.get_markdown_package(source_id)
+        if package is None:
+            raise FileNotFoundError(f"Canonical markdown package not found for {source_id}")
+        path = Path(str(package["package_path"])).expanduser()
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"Canonical markdown package missing for {source_id}: {path}")
+        return path.read_text(encoding="utf-8")
+
     async def list_sources(self, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         db = self._check_db()
         safe_limit = min(max(1, limit), 500)
@@ -725,4 +851,13 @@ class SourceStore:
             payload["source_metadata"] = json.loads(payload.get("source_metadata") or "{}")
         except json.JSONDecodeError:
             payload["source_metadata"] = {}
+        return payload
+
+    @staticmethod
+    def _markdown_package_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+        payload = dict(row)
+        try:
+            payload["metadata"] = json.loads(payload.get("metadata") or "{}")
+        except json.JSONDecodeError:
+            payload["metadata"] = {}
         return payload

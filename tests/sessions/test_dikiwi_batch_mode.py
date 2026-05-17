@@ -3,9 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import pytest
+
 from aily.config import SETTINGS
 from aily.gating.drainage import RainDrop, RainType, StreamType
-from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiStage, StageResult
+from aily.sessions.dikiwi_mind import DikiwiMind, DikiwiResult, DikiwiStage, StageResult
+
+
+pytestmark = pytest.mark.contract
 
 
 @dataclass
@@ -15,6 +20,36 @@ class FakeGraphDB:
     async def count_nodes_by_type(self, node_type: str) -> int:
         assert node_type == "information"
         return self.counts.pop(0)
+
+    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[dict]:
+        return [
+            {
+                "id": node_id,
+                "type": "information",
+                "label": f"Knowledge node {node_id}",
+                "source": "test",
+                "created_at": "2026-05-17T00:00:00+00:00",
+            }
+            for node_id in node_ids
+        ]
+
+    async def get_top_information_nodes_by_semantic_edge_count(self, limit: int = 10) -> list[dict]:
+        return await self.get_nodes_by_ids(["info-a", "info-b"][:limit])
+
+    async def get_edges_for_nodes(self, node_ids: list[str], limit: int = 200) -> list[dict]:
+        if len(node_ids) < 2:
+            return []
+        return [
+            {
+                "id": "edge-1",
+                "source_node_id": node_ids[0],
+                "target_node_id": node_ids[1],
+                "relation_type": "supports",
+                "weight": 0.9,
+                "source": "test",
+                "created_at": "2026-05-17T00:00:00+00:00",
+            }
+        ][:limit]
 
 
 class FakeAgent:
@@ -155,6 +190,102 @@ async def test_batch_mode_runs_higher_order_only_for_affected_contexts(monkeypat
     impact_calls = [pipeline_id for stage, pipeline_id in log if stage == "IMPACT"]
     assert len(insight_calls) == 1
     assert insight_calls == wisdom_calls == impact_calls
+
+
+async def test_foundation_only_batch_stops_after_knowledge_even_when_threshold_crosses(monkeypatch):
+    log: list[tuple[str, str]] = []
+    events: list[tuple[str, dict]] = []
+    mind = DikiwiMind(graph_db=FakeGraphDB([100, 140]), llm_client=object())
+    trigger_map: dict[str, bool] = {"drop_a": True, "drop_b": True}
+
+    def fake_registry():
+        return {
+            DikiwiStage.DATA: FakeAgent(DikiwiStage.DATA, log),
+            DikiwiStage.INFORMATION: FakeAgent(DikiwiStage.INFORMATION, log),
+            DikiwiStage.KNOWLEDGE: FakeAgent(DikiwiStage.KNOWLEDGE, log, trigger_map=trigger_map),
+            DikiwiStage.INSIGHT: FakeAgent(DikiwiStage.INSIGHT, log),
+            DikiwiStage.WISDOM: FakeAgent(DikiwiStage.WISDOM, log),
+            DikiwiStage.IMPACT: FakeAgent(DikiwiStage.IMPACT, log),
+        }
+
+    async def fake_emit(event_type: str, **payload):
+        events.append((event_type, payload))
+        return {"type": event_type, **payload}
+
+    monkeypatch.setattr(mind, "_build_agent_registry", fake_registry)
+    monkeypatch.setattr("aily.sessions.dikiwi_mind.emit_ui_event", fake_emit)
+
+    batch = await mind.process_inputs_batched(
+        [_drop("a"), _drop("b")],
+        incremental_threshold=0.05,
+        foundation_only=True,
+    )
+
+    assert batch.foundation_only is True
+    assert batch.higher_order_triggered is False
+    assert batch.higher_order_candidates == 0
+    assert batch.higher_order_selected == 0
+    assert [stage for stage, _ in log] == [
+        "DATA", "DATA",
+        "INFORMATION", "INFORMATION",
+        "KNOWLEDGE", "KNOWLEDGE",
+    ]
+    assert all(result.final_stage_reached == DikiwiStage.KNOWLEDGE for result in batch.results)
+    assert any(event_type == "foundation_ingestion_completed" for event_type, _ in events)
+
+
+async def test_process_input_uses_foundation_when_ingestion_flag_enabled(monkeypatch):
+    original = SETTINGS.dikiwi_foundation_only_ingestion
+    mind = DikiwiMind(graph_db=FakeGraphDB([0, 0]), llm_client=object())
+    calls: list[str] = []
+
+    async def fake_foundation(drop):
+        calls.append(drop.id)
+        return DikiwiResult(
+            input_id=drop.id,
+            stage_results=[
+                StageResult(stage=DikiwiStage.KNOWLEDGE, success=True),
+            ],
+        )
+
+    try:
+        SETTINGS.dikiwi_foundation_only_ingestion = True
+        monkeypatch.setattr(mind, "process_input_foundation", fake_foundation)
+        result = await mind.process_input(_drop("foundation"))
+    finally:
+        SETTINGS.dikiwi_foundation_only_ingestion = original
+
+    assert calls == ["drop_foundation"]
+    assert result.final_stage_reached == DikiwiStage.KNOWLEDGE
+
+
+async def test_triggered_iwi_runs_upper_stages_from_graph_context(monkeypatch):
+    log: list[tuple[str, str]] = []
+    mind = DikiwiMind(graph_db=FakeGraphDB([0, 0]), llm_client=object())
+
+    def fake_registry():
+        return {
+            DikiwiStage.DATA: FakeAgent(DikiwiStage.DATA, log),
+            DikiwiStage.INFORMATION: FakeAgent(DikiwiStage.INFORMATION, log),
+            DikiwiStage.KNOWLEDGE: FakeAgent(DikiwiStage.KNOWLEDGE, log),
+            DikiwiStage.INSIGHT: FakeAgent(DikiwiStage.INSIGHT, log),
+            DikiwiStage.WISDOM: FakeAgent(DikiwiStage.WISDOM, log),
+            DikiwiStage.IMPACT: FakeAgent(DikiwiStage.IMPACT, log),
+        }
+
+    monkeypatch.setattr(mind, "_build_agent_registry", fake_registry)
+
+    result = await mind.process_triggered_iwi(
+        motive="Explore whether this knowledge supports a business plan.",
+        workflow_run_id="wf-triggered",
+        node_ids=["info-a", "info-b"],
+    )
+
+    assert result.pipeline_id == "wf-triggered"
+    assert result.final_stage_reached == DikiwiStage.IMPACT
+    assert [stage for stage, _ in log] == ["INSIGHT", "WISDOM", "IMPACT"]
+    assert result.stage_results[0].stage == DikiwiStage.INFORMATION
+    assert result.stage_results[1].stage == DikiwiStage.KNOWLEDGE
 
 
 async def test_batch_mode_selects_highest_scored_higher_order_contexts(monkeypatch):

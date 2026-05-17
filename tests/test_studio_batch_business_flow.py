@@ -7,11 +7,15 @@ import pytest
 import aily.main as main
 
 
+pytestmark = pytest.mark.contract
+
+
 class FakeSourceStore:
     def __init__(self) -> None:
         self.statuses: list[tuple[str, str, dict | None]] = []
         self.reads: list[str] = []
         self.jobs: list[dict] = []
+        self.markdown_packages: list[dict] = []
 
     async def read_stored_object(self, source_id: str) -> bytes:
         self.reads.append(source_id)
@@ -24,6 +28,19 @@ class FakeSourceStore:
         job = {"job_id": "job-1", "job_type": kwargs["job_type"], **kwargs}
         self.jobs.append(job)
         return job
+
+    async def store_markdown_package(self, **kwargs):
+        package = {
+            "package_id": "md:package-1",
+            "source_id": kwargs["source_id"],
+            "markdown_sha256": "markdown-sha",
+            "package_path": "/tmp/markdown.md",
+            "title": kwargs["title"],
+            "source_type": kwargs["source_type"],
+            "metadata": kwargs["metadata"],
+        }
+        self.markdown_packages.append(package)
+        return package
 
 
 class FakeRouter:
@@ -43,8 +60,9 @@ class FakeRouter:
 class FakeDikiwiMind:
     async def process_inputs_batched(self, drops):
         assert len(drops) == 1
-        assert drops[0].raw_bytes == b""
+        assert drops[0].raw_bytes.startswith(b"# Meaningful extracted title")
         assert drops[0].content.startswith("# Meaningful extracted title")
+        assert drops[0].metadata["canonical_markdown_package_id"] == "md:package-1"
         return SimpleNamespace(
             results=[
                 SimpleNamespace(

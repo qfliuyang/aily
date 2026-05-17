@@ -18,6 +18,22 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Real-run evidence harness: `aily/verify/evidence.py`
 - Evidence run registry/API: `aily/verify/run_registry.py`
 - Durable source store: `aily/source_store/store.py`
+- Canonical Markdown package converter: `aily/processing/canonical_markdown.py`
+  persists one current Markdown package per source before durable source jobs
+  feed DIKIWI
+- V1 watched inbox plumbing: `aily/inbox/watcher.py` registers files and URL
+  pointer files into SourceStore when `INBOX_WATCHER_ENABLED=true`
+- Optional SourceFoundationGraph intake path: `aily/orchestration/source_foundation_graph.py`
+  can run durable upload and URL source jobs through checkpointed LangGraph nodes
+  when the orchestrator flags are enabled; contract tests cover Knowledge failure
+  stopping and retry reuse of existing canonical Markdown packages
+- Graph-backed source intake evidence runner: `scripts/run_source_foundation_graph_evidence.py`
+  (`scripts.run_source_foundation_graph_evidence`)
+  writes mocked-boundary evidence for the local LangGraph adapter without
+  claiming DIKIWI/LLM product acceptance
+- Manual V1 I/W/I trigger: `/api/ui/workflows/iwi` creates durable
+  `triggered_iwi` workflow runs and calls `DikiwiMind.process_triggered_iwi()`
+  over selected Knowledge graph context
 - Persistent Studio event log: `aily/ui/events.py` writes and reloads `SETTINGS.ui_event_log_path`
 - Persistent Studio event query: `/api/ui/events/query` filters durable UI events by `run_id`, `pipeline_id`, `upload_id`, and event type for replay/debug
 - Provider route and timeout control: `aily/llm/provider_routes.py`, `aily/llm/llm_router.py`
@@ -32,8 +48,8 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 3. Single-file Studio uploads still run one pipeline directly after source-store persistence.
 4. Multi-file Studio uploads are grouped into one backend batch: all sources are stored, all extract into Chaos content, then `DikiwiMind.process_inputs_batched()` advances the batch stage-by-stage.
 5. For batch chaos ingestion, `00-Chaos` is written first and then the whole batch advances stage-by-stage through `01-Data`, `02-Information`, and `03-Knowledge`.
-6. After at least one successful batch `KNOWLEDGE` result, Aily measures incremental graph growth. If new information nodes add less than `5%` to the existing information graph, the batch stops after `KNOWLEDGE`.
-7. If the batch crosses the incremental threshold and a context has a synthesis-grade changed neighborhood, that context continues through `INSIGHT -> WISDOM -> IMPACT`.
+6. V1 automatic ingestion defaults to foundation-only mode through `SETTINGS.dikiwi_foundation_only_ingestion=true`; file, URL, Studio, and Chaos batch ingestion stop after `KNOWLEDGE` unless a drop explicitly requests full DIKIWI.
+7. The older incremental graph-growth trigger remains available for full DIKIWI runs, but Insight/Wisdom/Impact are now treated as triggered synthesis work rather than default ingestion work.
 8. If every source fails before `KNOWLEDGE`, no graph-threshold event is emitted. If a higher-order stage has zero surviving contexts, no empty downstream stage event is emitted.
 9. After IMPACT, `ReactorScheduler` generates proposal candidates from multiple frameworks.
 10. `ResidualAgent` synthesizes vault, graph, and reactor context into structured `residual_proposal` nodes.
@@ -93,6 +109,15 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 
 ## Latest Real Evidence
 
+- `logs/runs/2026-05-17T07-32-31Z_source_foundation_graph_offline/manifest.json`
+  - Local graph-backed source intake run with real source file, real SourceStore,
+    real ProcessingRouter, real canonical Markdown package persistence, real
+    WorkflowRunStore, real async SQLite LangGraph checkpoint file, and real UI
+    event projection.
+  - Explicitly `mocked=true`: DIKIWI/LLM, GraphDB, and Obsidian are simulated,
+    so this is adapter/runtime evidence only, not product acceptance.
+  - Proved the upload source was treated as `DOCUMENT` rather than misclassified
+    as a URL even though upload records carry `normalized_source=filename`.
 - `logs/runs/2026-05-02T10-17-46Z_full_pipeline_2pdf/manifest.json`
   - Real files, real vault, real graph, real Kimi calls, `mocked=false`.
   - Proved stage-latched batch events through DATA, INFORMATION, KNOWLEDGE, INSIGHT, and WISDOM.
