@@ -719,7 +719,8 @@ Recommended files:
 - `aily/llm/client.py`
 - `scripts/benchmark_providers.py`
 - `scripts/benchmark_run.py`
-- `docs/PROVIDER_OUTPUT_EVALUATION_2026-04-26.md`
+- `docs/PROVIDER_ROUTING_MATRIX.md`
+- `logs/provider_smoke_report.json`
 - `tests/llm/test_provider_routes.py`
 
 Acceptance tests:
