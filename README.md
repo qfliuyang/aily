@@ -91,9 +91,9 @@ The FastAPI lifespan in `aily/main.py` starts:
 ## Documentation
 
 - `docs/CURRENT_STATE.md` - shortest reliable map of what is active
-- `docs/CUSTOMER_SHIP_READINESS_AUDIT.md` - strict customer-shipping readiness audit and blocker list
 - `docs/ARCHITECTURE_AND_VISION.md` - current high-level architecture
 - `docs/DIKIWI_ARCHITECTURE.md` - DIKIWI and post-pipeline flow
 - `docs/AILY_CHAOS_ARCHITECTURE.md` - chaos ingestion path
 - `docs/AI_INNOVATION_METHODOLOGIES.md` - framework reference
+- `docs/AILY_V1_UPGRADE_PLAN.md` - authoritative Aily V1 upgrade plan
 - `docs/prompt-improvement-spec.md` - prompt improvement spec

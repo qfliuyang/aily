@@ -75,7 +75,7 @@ Phase 0-9 completion evidence:
 - Studio browser acceptance: `logs/runs/2026-05-02T13-50-50Z_studio_browser_e2e/manifest.json`
 - Docker pre-production acceptance: `logs/runs/2026-05-03T00-26-50Z_docker_preprod_retry_url_e2e/manifest.json`
 - Docker real-LLM DIKIWI quality acceptance: `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`
-- Docker full-flow failure plan: `docs/DOCKER_FULL_FLOW_TEST_AND_IMPROVEMENT_PLAN.md`
+- Docker full-flow pressure work has been folded into the current V1 upgrade plan and health gates.
 - Provider smoke evidence: `logs/provider_smoke_report.json`
 - Project health evidence: `logs/project_health_report.json`
 - Prompt-regression artifacts: `test-artifacts/prompt-regression/`
@@ -817,8 +817,8 @@ Deliverables:
 - `.dockerignore` that excludes vault data, logs, local virtualenvs, generated artifacts, secrets, and node build caches.
 - `docker-compose.yml` for local pre-production use.
 - `docker-compose.preprod.yml` or profiles for MinerU/browser/real-LLM paths.
-- `docs/DOCKER_PREPROD.md` with setup, secrets, volumes, backup/restore, upgrade, and troubleshooting.
-- `scripts/run_docker_preprod_e2e.py` or equivalent command wrapper that starts the stack, runs browser E2E, collects logs, and writes an evidence folder.
+- Docker setup, secrets, volumes, backup/restore, upgrade, and troubleshooting guidance in the current V1 docs.
+- A command wrapper or CI job that starts the stack, runs browser E2E, collects logs, and writes an evidence folder.
 - Docker healthcheck using `/health` and readiness check using `/ready`.
 - Volume migration/backup smoke path that proves source store, graph DB, vault, and evidence survive container restart.
 
@@ -866,7 +866,6 @@ Deliverables:
 
 Recommended additions:
 
-- `docs/AUTOPILOT_TASK_TEMPLATE.md`
 - `docs/TESTING_CONTRACT.md`
 - `scripts/verify_project_health.py`
 - `tests/prompts/`
@@ -947,7 +946,7 @@ Docker pre-production gate:
 
 ```bash
 docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.preprod.yml build --no-cache
-python3 scripts/run_docker_preprod_e2e.py --compose-file docker-compose.yml --compose-file docker-compose.preprod.yml --exercise-url --exercise-retry
+python3 scripts/run_studio_agent_browser_e2e.py --hosted --exercise-url --exercise-retry --report-dir logs/runs/<run_id>
 ```
 
 The Docker pre-production gate is not accepted until it writes a run evidence manifest with image digest, compose hash, mounted volume paths, container logs, browser screenshots, and restart-persistence proof.
@@ -967,13 +966,13 @@ python3 scripts/audit_dikiwi_quality.py \
 
 The latest accepted Docker real-LLM DIKIWI quality proof is `logs/runs/2026-05-03T08-13-27Z_docker_real_llm_dikiwi_quality_2pdf/dikiwi-quality-report.json`: 2 PDFs, 20 successful real Kimi calls, 47 Data notes, 43 Information notes, 20 Knowledge notes, 3 Insight notes, 4 Wisdom notes, 5 Impact notes, 191 graph edges, and zero audit failures.
 
-Docker full-flow pressure gate:
+Full-flow pressure gate:
 
 ```bash
-uv run python scripts/run_docker_full_flow_pressure.py --max 10 --build
+python3 scripts/run_mineru_chaos_batch.py /Users/luzi/aily_chaos --vault /tmp/aily-pressure-vault --limit 10 --run-business
 ```
 
-This gate is not accepted unless it reaches 07-Proposal and 08-Entrepreneurship and passes strict audit with `--require-business --strict-graph --max-unresolved-wikilinks 0`. The 2026-05-03 10-PDF run failed before business execution; see `docs/DOCKER_FULL_FLOW_TEST_AND_IMPROVEMENT_PLAN.md`.
+This gate is not accepted unless it reaches 07-Proposal and 08-Entrepreneurship and passes strict audit with `--require-business --strict-graph --max-unresolved-wikilinks 0`.
 
 ### Quality Rubrics
 
