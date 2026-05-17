@@ -2007,7 +2007,7 @@ aily/export/
 | `aily/sessions/reactor_scheduler.py` | Legacy innovation scheduler | Wrap or quarantine; migrate useful logic into Technical Innovation evaluator. |
 | `aily/sessions/entrepreneur_scheduler.py` / `gstack_agent.py` | Legacy business evaluator | Wrap useful GStack/Guru logic into Commercial Feasibility and Business Plan synthesis; stop autonomous daily scheduling by default. |
 | `aily/agent/*` | Legacy simple planner agents | Quarantine or adapt small pieces into chat/topic extraction tests; do not use as V1 core. |
-| `aily/verify/*` and `scripts/run_test_suite.py` | Evidence harness | Extend evidence manifest with LangGraph checkpoints, workflow runs, chat prompts, research packets, exports, and email drafts. |
+| `aily/verify/*` | Evidence primitives | Redesign the V1 evidence harness around LangGraph checkpoints, workflow runs, chat prompts, research packets, exports, and email drafts. |
 
 ### LangGraph Node Wrapping Rules
 

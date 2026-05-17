@@ -16,17 +16,11 @@ python -m aily.main          # starts FastAPI on 127.0.0.1:8000
 python scripts/run_chaos_daemon.py start
 python scripts/run_chaos_daemon.py status
 
-# Tests
-pytest                        # all tests
-pytest tests/test_foo.py      # single file
-pytest tests/test_foo.py::test_bar  # single test
-pytest -xvs                   # stop on first failure, verbose
-
 # Env
 cp .env.example .env          # then fill in API keys
 ```
 
-`pytest.ini` sets `asyncio_mode = auto`, so all async tests run without extra decorators.
+Legacy test infrastructure was removed for the Aily V1 redesign.
 
 ## Architecture
 
@@ -108,7 +102,6 @@ Entry points:
 | `aily/scheduler/jobs.py` | APScheduler wrappers for digest, passive capture, Claude session capture |
 | `aily/thinking/` | 11 innovation frameworks (TRIZ, SCAMPER, Blue Ocean, etc.) |
 | `aily/gating/` | Hydrological gating subsystem — **experimental, not the active runtime** |
-| `scripts/benchmark_providers.py` | Multi-provider benchmark (Kimi / Zhipu / DeepSeek) |
 | `scripts/prep_chaos.py` | Pre-extract PDFs for consistent benchmark inputs |
 
 ### Required env vars

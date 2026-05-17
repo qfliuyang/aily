@@ -71,8 +71,8 @@ async def main():
         __import__("json").dumps({"pdfs": [str(p) for p in selected], "names": [p.stem for p in selected]}), indent=2
     )
 
-    print("\nReady. Run 3 benchmarks in parallel:")
+    print("\nReady. Use these vaults as seeded V1 evaluation inputs:")
     for p in ["kimi", "deepseek"]:
-        print(f"  python scripts/benchmark_run.py {p} test-vault-{p}")
+        print(f"  test-vault-{p}")
 
 asyncio.run(main())

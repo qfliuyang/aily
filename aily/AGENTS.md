@@ -52,8 +52,8 @@ Core application package containing all subsystems: LLM routing, chaos processin
 - `SETTINGS` is loaded once at import time — don't mutate it
 
 ### Testing Requirements
-- Most modules have corresponding tests under `tests/`
-- Async tests run without decorators (pytest.ini sets `asyncio_mode = auto`)
+- Legacy tests were removed for the Aily V1 test infrastructure redesign.
+- Use import/build sanity checks and real-path evidence until the V1 harness lands.
 
 ### Common Patterns
 - `from __future__ import annotations` in every file

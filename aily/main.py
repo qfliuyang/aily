@@ -2367,31 +2367,14 @@ async def _ui_control_handler(action: str, payload: dict[str, Any]) -> dict[str,
 
 
 async def _tool_executor(action: str, **kwargs) -> dict:
-    """Execute tools for GStack Agent - actually runs tests, checks, etc."""
-    import subprocess
-    import os
+    """Execute lightweight tools for GStack Agent."""
 
     if action == "run_tests":
-        # Look for test commands in common locations
-        test_commands = [
-            ["python", "-m", "pytest", "-xvs"],
-            ["pytest", "-xvs"],
-            ["python", "-m", "unittest", "discover"],
-        ]
-        for cmd in test_commands:
-            try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=60, cwd=os.getcwd()
-                )
-                return {
-                    "passed": result.returncode == 0,
-                    "total": len(result.stdout.split("\n")),
-                    "coverage": "unknown",
-                    "output": result.stdout[:1000] if result.stdout else result.stderr[:1000],
-                }
-            except Exception:
-                continue
-        return {"passed": False, "error": "No test runner found"}
+        return {
+            "passed": False,
+            "disabled": True,
+            "error": "Legacy test runner removed for the Aily V1 test redesign",
+        }
 
     elif action == "health_check":
         # Check if the app can start

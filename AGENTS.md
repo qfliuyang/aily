@@ -14,7 +14,6 @@ Aily is a **Three-Mind knowledge system** built as a FastAPI app with a backgrou
 | `aily/main.py` | FastAPI entry point, lifespan context, job dispatch |
 | `requirements.txt` | Python dependencies |
 | `pyproject.toml` | Project metadata and tool config |
-| `pytest.ini` | Test configuration (asyncio_mode = auto) |
 | `CLAUDE.md` | Project guidance for Claude Code |
 
 ## Subdirectories
@@ -24,7 +23,6 @@ Aily is a **Three-Mind knowledge system** built as a FastAPI app with a backgrou
 | `aily/` | Core application code (see `aily/AGENTS.md`) |
 | `docs/` | Architecture docs, API guides, design documents |
 | `scripts/` | CLI tools, daemons, batch runners (see `scripts/AGENTS.md`) |
-| `tests/` | Test suites (see `tests/AGENTS.md`) |
 | `plans/` | Claude Code plan files |
 | `.omc/` | oh-my-claudecode state (autopilot, plans, sessions) |
 
@@ -33,12 +31,8 @@ Aily is a **Three-Mind knowledge system** built as a FastAPI app with a backgrou
 ### Working In This Directory
 - All configuration lives in `aily/config.py` via pydantic-settings
 - The app reads `.env` at startup; never hardcode API keys
-- `pytest -xvs` runs all tests; most are async (auto mode)
-
-### Testing Requirements
-- Run `pytest` before committing changes to `aily/`
-- Integration tests need real API keys; skip with `-k "not integration"`
-- `tests/e2e/` covers full DIKIWI pipeline end-to-end
+- Legacy test infrastructure has been removed for the Aily V1 redesign.
+- Until V1 test infrastructure lands, validate with import/build checks and manual evidence only.
 
 ### Common Patterns
 - Async-first codebase — all I/O is async

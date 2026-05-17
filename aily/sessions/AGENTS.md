@@ -28,8 +28,7 @@ The Three-Mind System. Three independent schedulers that run at different cadenc
 - Schedulers are wired in `main.py` lifespan context
 
 ### Testing Requirements
-- `tests/sessions/` covers scheduler behavior
-- `tests/e2e/` tests full Three-Mind flow
+- Legacy scheduler and E2E tests were removed for the Aily V1 test infrastructure redesign.
 
 ### Common Patterns
 - Schedulers use `APScheduler` for daily runs

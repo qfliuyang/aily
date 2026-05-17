@@ -32,6 +32,6 @@ Phase 7 makes provider selection explicit and benchmarkable.
 
 - Use identical source manifests before comparing providers.
 - Save run IDs and LLM traces before ranking output quality.
-- Use `scripts/provider_smoke.py` for real API reachability checks against active providers only.
+- Use the future V1 evidence harness for real API reachability checks against active providers only.
 - Use benchmark reports for novelty, feasibility, evidence grounding, EDA relevance, and business depth.
 - Do not rank a provider from unit tests or mocked responses.

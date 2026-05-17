@@ -35,7 +35,7 @@ Chaos is the file-watching and document extraction subsystem. It monitors `~/ail
 - The `ChaosProcessor` routes by MIME type; `mineru_processor.py` handles Office docs
 
 ### Testing Requirements
-- `tests/chaos/` has processor tests
+- Legacy processor tests were removed for the Aily V1 test infrastructure redesign.
 - MinerU tests need `mineru` CLI installed or mock the API
 
 ### Common Patterns

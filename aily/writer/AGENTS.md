@@ -25,8 +25,7 @@ Obsidian vault output layer. Writes DIKIWI stage notes, generic notes, and Zette
 - Frontmatter is YAML with `dikiwi_id`, `aliases`, `tags`, type-specific fields
 
 ### Testing Requirements
-- `tests/writer/` covers obsidian integration
-- `tests/e2e/` validates vault output quality
+- Legacy writer and E2E tests were removed for the Aily V1 test infrastructure redesign.
 
 ### Common Patterns
 - `_write_dikiwi_note()` is the core write method

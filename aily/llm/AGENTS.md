@@ -30,7 +30,7 @@ LLM abstraction layer. Provides a unified `LLMClient` interface, active runtime 
 - Never call provider APIs directly from outside this package
 
 ### Testing Requirements
-- `tests/llm/` covers client behavior
+- Legacy LLM tests were removed for the Aily V1 test infrastructure redesign.
 - Mock `LLMClient` for unit tests that don't need real LLM calls
 
 ### Common Patterns

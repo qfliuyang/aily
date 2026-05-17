@@ -38,8 +38,7 @@ The DIKIWI (Data → Information → Knowledge → Insight → Wisdom → Impact
 - Higher-stage notes (insight, wisdom, impact) include `grounded_in` frontmatter for dependency tracking
 
 ### Testing Requirements
-- `tests/dikiwi/` covers stage logic and agent behavior
-- `tests/e2e/` runs full pipeline with real LLM calls
+- Legacy DIKIWI and E2E tests were removed for the Aily V1 test infrastructure redesign.
 
 ### Common Patterns
 - `chat_json()` in `agents/llm_tools.py` for structured LLM output
