@@ -76,7 +76,6 @@ The FastAPI lifespan in `aily/main.py` starts:
 - Learning loop
 - Passive capture scheduler
 - Daily digest scheduler
-- Claude Code capture scheduler
 - `ReactorScheduler`
 - `EntrepreneurScheduler`
 

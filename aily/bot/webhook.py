@@ -104,8 +104,7 @@ async def feishu_webhook(request: Request) -> dict:
         url = _extract_url(text)
 
         if url is None:
-            await db.enqueue("agent_request", {"request": text, "open_id": open_id})
-            logger.info("Enqueued agent request from Feishu: %s", text[:50])
+            logger.info("Ignoring non-URL Feishu text while V1 orchestrator is being rebuilt")
             return {"status": "ok"}
 
         enqueued = await db.enqueue_url(url, open_id=open_id, source="manual")

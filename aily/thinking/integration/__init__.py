@@ -4,11 +4,9 @@ This module provides integration with Aily infrastructure:
 - LLM integration with structured output validation (Instructor)
 - GraphDB client for insight storage
 - Queue integration for job processing
-- Agent registration
 - Output delivery
 """
 
-from aily.thinking.integration.agent_registration import register_thinking_agents
 from aily.thinking.integration.graphdb_client import ThinkingGraphClient
 from aily.thinking.integration.llm_integration import ThinkingLLMClient
 from aily.thinking.integration.output_integration import (
@@ -27,5 +25,4 @@ __all__ = [
     "ThinkingOutputHandler",
     "DeliveryResult",
     "create_thinking_job",
-    "register_thinking_agents",
 ]

@@ -26,7 +26,7 @@ class RainType(Enum):
     VOICE = auto()  # Audio message
     IMAGE = auto()  # Image for OCR
     CLIPBOARD = auto()  # Passive capture
-    SESSION = auto()  # Claude Code session
+    SESSION = auto()  # Agent/session transcript
 
 
 class StreamType(Enum):

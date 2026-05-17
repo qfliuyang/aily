@@ -30,17 +30,9 @@ from aily.parser.parsers import (
     parse_youtube,
 )
 from aily.graph.db import GraphDB
-from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler, ClaudeCodeCaptureScheduler
+from aily.scheduler.jobs import PassiveCaptureScheduler, DailyDigestScheduler
 from aily.llm.client import LLMClient
 from aily.digest.pipeline import DigestPipeline
-from aily.agent.registry import AgentRegistry
-from aily.agent.agents import (
-    summarizer_agent,
-    researcher_agent,
-    connector_agent,
-    zettel_suggester_agent,
-)
-from aily.agent.pipeline import PlannerPipeline
 from aily.learning.loop import LearningLoop
 from aily.voice.downloader import FeishuVoiceDownloader, FeishuVoiceError
 from aily.voice.transcriber import WhisperTranscriber, TranscriptionError
@@ -95,7 +87,6 @@ llm_resolver = PrimaryLLMRoute.build_settings_resolver(SETTINGS)
 llm_client = llm_resolver("default")
 digest_scheduler: DailyDigestScheduler | None = None
 learning_loop: LearningLoop | None = None
-claude_capture_scheduler: ClaudeCodeCaptureScheduler | None = None
 ws_client = None
 browser_manager_instance = None
 ui_upload_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -114,7 +105,6 @@ audit_logger = AuditLogger(SETTINGS.resolved_audit_log_path)
 dikiwi_mind: DikiwiMind | None = None
 innovation_scheduler: ReactorScheduler | None = None
 entrepreneur_scheduler: EntrepreneurScheduler | None = None
-agent_registry = AgentRegistry()
 tailscale_client = TailscaleClient()
 
 ERROR_MESSAGES = {
@@ -404,12 +394,8 @@ async def _dispatch_job(job: dict) -> None:
         await _process_url_job(job)
     elif job["type"] == "daily_digest":
         await _process_digest_job(job)
-    elif job["type"] == "agent_request":
-        await _process_agent_job(job)
     elif job["type"] == "voice_message":
         await _process_voice_job(job)
-    elif job["type"] == "claude_session":
-        await _process_claude_session_job(job)
     elif job["type"] == "file_attachment":
         await _process_file_job(job)
     elif job["type"] == "image_ocr":
@@ -518,13 +504,6 @@ async def _process_digest_job(job: dict) -> None:
     await pipeline.run(open_id=open_id)
 
 
-async def _process_agent_job(job: dict) -> None:
-    request = job["payload"]["request"]
-    open_id = job["payload"].get("open_id", "")
-    pipeline = PlannerPipeline(graph_db, llm_client, agent_registry, writer, pusher)
-    await pipeline.run(request=request, open_id=open_id)
-
-
 async def _process_voice_job(job: dict) -> None:
     """Process a voice message: download, transcribe, and create note."""
     payload = job["payload"]
@@ -599,50 +578,6 @@ async def _process_voice_job(job: dict) -> None:
         raise
     finally:
         await transcriber.close()
-
-
-async def _process_claude_session_job(job: dict) -> None:
-    """Process a Claude Code session capture job."""
-    from aily.capture.claude_code import ClaudeCodeSessionCapture, SessionMetadata
-    from datetime import datetime, timezone
-
-    file_path = Path(job["payload"]["file_path"])
-
-    try:
-        capture = ClaudeCodeSessionCapture()
-        entries = await capture.parse_session(file_path)
-
-        if not entries:
-            logger.warning("No entries found in session: %s", file_path)
-            return
-
-        # Get title from first user message
-        title = await capture.get_session_title(entries)
-
-        # Create metadata for formatting
-        stat = file_path.stat()
-        mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-        session_id = capture._extract_session_id(file_path.name)
-
-        metadata = SessionMetadata(
-            session_id=session_id,
-            project=None,  # Could extract from first entry
-            started_at=mtime,
-            file_path=file_path,
-        )
-
-        markdown = await capture.format_as_markdown(entries, metadata)
-        note_path = await writer.write_note(
-            title=f"Claude: {title[:60]}",
-            markdown=markdown,
-            source_url=f"claude://session/{session_id}",
-        )
-
-        logger.info("Claude session captured: %s -> %s", file_path, note_path)
-
-    except Exception:
-        logger.exception("Failed to capture Claude session: %s", file_path)
-        raise
 
 
 async def _process_file_job(job: dict) -> None:
@@ -784,11 +719,6 @@ async def _enqueue_digest() -> None:
     open_id = SETTINGS.aily_digest_feishu_open_id
     await db.enqueue("daily_digest", {"open_id": open_id})
     logger.info("Enqueued daily digest")
-
-
-async def _enqueue_claude_session(file_path: Path) -> None:
-    await db.enqueue("claude_session", {"file_path": str(file_path)})
-    logger.info("Enqueued Claude session capture: %s", file_path)
 
 
 async def _process_ui_upload(
@@ -2076,7 +2006,6 @@ async def _ui_status_provider() -> dict[str, Any]:
             "workflow_runner": workflow_counts["active"],
             "passive_capture_scheduler": scheduler is not None,
             "daily_digest_scheduler": digest_scheduler is not None,
-            "claude_capture_scheduler": claude_capture_scheduler is not None,
             "feishu_ws_client": ws_client is not None,
         },
         "minds": {
@@ -2406,7 +2335,7 @@ def _validate_runtime_security_config() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker, scheduler, digest_scheduler, learning_loop, claude_capture_scheduler, ws_client
+    global worker, scheduler, digest_scheduler, learning_loop, ws_client
     global dikiwi_mind, innovation_scheduler, entrepreneur_scheduler
     global browser_manager_instance
     global source_worker_stop, source_worker_tasks, inbox_watcher
@@ -2494,10 +2423,6 @@ async def lifespan(app: FastAPI):
     registry.register(r"^https://arxiv\.org/abs/", parse_arxiv)
     registry.register(r"^https://github\.com/", parse_github)
     registry.register(r"^https://(www\.)?youtube\.com/watch", parse_youtube)
-    agent_registry.register("summarizer", summarizer_agent, "Summarize a piece of text into bullets.")
-    agent_registry.register("researcher", researcher_agent, "Answer a research question.")
-    agent_registry.register("connector", connector_agent, "Find graph connections for a node.")
-    agent_registry.register("zettel_suggester", zettel_suggester_agent, "Suggest Zettelkasten links for a note.")
     worker = JobWorker(db, _dispatch_job)
     await worker.start()
     source_worker_stop = asyncio.Event()
@@ -2523,9 +2448,6 @@ async def lifespan(app: FastAPI):
         minute=SETTINGS.aily_digest_minute,
     )
     digest_scheduler.start()
-    claude_capture_scheduler = ClaudeCodeCaptureScheduler(enqueue_session_fn=_enqueue_claude_session)
-    claude_capture_scheduler.start()
-
     # Initialize and start Innovation and Entrepreneur Minds
     # (DIKIWI Mind was already initialized earlier for WebSocket routing)
     try:
@@ -2589,8 +2511,6 @@ async def lifespan(app: FastAPI):
         ws_client.stop()
     if learning_loop:
         await learning_loop.stop()
-    if claude_capture_scheduler:
-        claude_capture_scheduler.stop()
     if digest_scheduler:
         digest_scheduler.stop()
     if scheduler:

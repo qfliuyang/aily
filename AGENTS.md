@@ -14,17 +14,14 @@ Aily is a **Three-Mind knowledge system** built as a FastAPI app with a backgrou
 | `aily/main.py` | FastAPI entry point, lifespan context, job dispatch |
 | `requirements.txt` | Python dependencies |
 | `pyproject.toml` | Project metadata and tool config |
-| `CLAUDE.md` | Project guidance for Claude Code |
 
 ## Subdirectories
 
 | Directory | Purpose |
 |-----------|---------|
-| `aily/` | Core application code (see `aily/AGENTS.md`) |
-| `docs/` | Architecture docs, API guides, design documents |
-| `scripts/` | CLI tools, daemons, batch runners (see `scripts/AGENTS.md`) |
-| `plans/` | Claude Code plan files |
-| `.omc/` | oh-my-claudecode state (autopilot, plans, sessions) |
+| `aily/` | Core application code |
+| `docs/` | V1 architecture and design references |
+| `scripts/` | Minimal daemon and evidence helpers |
 
 ## For AI Agents
 

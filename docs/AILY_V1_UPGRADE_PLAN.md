@@ -456,7 +456,7 @@ Acceptance criteria:
 Purpose:
 
 Use LangGraph as Aily V1's durable agent/workflow runtime. This gives Aily a
-production-grade execution spine without copying Codex or Claude Code. Aily
+production-grade execution spine without copying external coding agents. Aily
 should define domain-specific graphs and nodes; LangGraph should provide
 checkpointing, resumability, human interrupts, branching, and state inspection.
 

@@ -137,7 +137,7 @@ class LLMRouter:
         """Create ByteDance Ark Coding Plan client.
 
         Best for:
-        - Interactive coding with Claude Code
+        - Interactive coding workflows
         - Code generation and review
         - Architecture discussions
         - Real-time assistance
@@ -159,7 +159,7 @@ class LLMRouter:
 
         Best for:
         - Qwen models with image understanding
-        - Claude Code integration
+        - Interactive coding workflows
         - Chinese language tasks
 
         Pricing: Fixed monthly (¥40-200/month)
