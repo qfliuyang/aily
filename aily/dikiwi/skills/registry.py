@@ -283,8 +283,6 @@ class SkillRegistry:
             "javascript",
             "typescript",
             "github",
-            "docker",
-            "kubernetes",
         ]
         business_indicators = [
             "revenue",
