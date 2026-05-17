@@ -19,7 +19,7 @@ def _utc_now_iso() -> str:
 class UIEventHub:
     """In-memory event hub for Aily Studio.
 
-    This is intentionally simple for the first frontend iteration:
+    This is intentionally simple for the current UI event projection:
     - stores a rolling event buffer for replay
     - broadcasts events to websocket subscribers
     - indexes events by pipeline_id and upload_id for trace views

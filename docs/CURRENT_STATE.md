@@ -5,7 +5,7 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 ## Active Runtime
 
 - App bootstrap: `aily/main.py`
-- Private local Studio entrypoint: `aily/main.py` serves `frontend/dist` when the frontend has been built
+- Legacy GUI: removed for the Aily V1 UI redesign
 - Continuous pipeline entrypoint: `aily/sessions/dikiwi_mind.py`
 - DIKIWI runtime coordination: `aily/dikiwi/orchestrator.py`
 - DIKIWI graph-trigger selector: `aily/dikiwi/network_synthesis.py`
@@ -61,7 +61,7 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 ## V1 Test Infrastructure Status
 
 - Legacy test suites, integration mocks, report artifacts, and ad hoc runner scripts have been removed.
-- Aily V1 needs a newly designed test/evidence harness aligned with LangGraph workflows, Obsidian persistence, provider research packets, exports, and email delivery.
+- Aily V1 needs a newly designed GUI plus test/evidence harness aligned with LangGraph workflows, Obsidian persistence, provider research packets, exports, and email delivery.
 - Until the V1 harness lands, use lightweight import/build sanity checks and real-path manual evidence only; do not claim acceptance from mocked LLM, mocked graph, mocked vault, or fake browser events.
 
 ## Experimental Or Quarantined

@@ -1,11 +1,3 @@
-FROM node:20-bookworm-slim AS frontend-build
-
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
-
 FROM python:3.11-slim-bookworm AS app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -40,9 +32,8 @@ RUN for attempt in 1 2 3; do \
 COPY aily ./aily
 COPY scripts ./scripts
 COPY pyproject.toml README.md ./
-COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-RUN mkdir -p /data /vault /chaos /app/logs/runs
+RUN mkdir -p /data/runs /vault /chaos
 
 EXPOSE 8000
 

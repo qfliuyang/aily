@@ -95,7 +95,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runs-root",
         type=Path,
-        default=Path("logs/runs"),
+        default=Path.home() / ".aily" / "runs",
         help="Evidence root directory.",
     )
     return parser.parse_args()

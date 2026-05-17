@@ -197,7 +197,7 @@ class Settings(BaseSettings):
     ui_rate_limit_requests: int = 20
     ui_rate_limit_window_seconds: float = 60.0
     audit_log_path: Path | None = None
-    evidence_runs_dir: Path = Path("logs/runs")
+    evidence_runs_dir: Path = Path.home() / ".aily" / "runs"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

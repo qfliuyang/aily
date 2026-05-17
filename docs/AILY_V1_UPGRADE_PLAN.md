@@ -1543,7 +1543,7 @@ Implementation checkpoint:
   completion, Markdown package persistence, and workflow lifecycle events.
 - `scripts/run_source_foundation_graph_evidence.py` now produces a standard
   evidence folder for graph-backed source intake. The first passing run is
-  `logs/runs/2026-05-17T07-32-31Z_source_foundation_graph_offline/manifest.json`.
+  `~/.aily/runs/2026-05-17T07-32-31Z_source_foundation_graph_offline/manifest.json`.
   It proves the local graph adapter with real files, stores, checkpoints,
   Markdown conversion, workflow runs, and UI events, but it intentionally marks
   `mocked=true` because DIKIWI/LLM, GraphDB, and Obsidian are simulated.
@@ -2002,7 +2002,7 @@ aily/export/
 | `aily/graph/db.py` | Knowledge graph | Add search/context helpers needed by topic extraction and BusinessPlanningGraph. |
 | `aily/ui/events.py` | Studio event stream | Reuse for graph-node status; add workflow-run and prompt-notification event types. |
 | `aily/ui/router.py` | Studio HTTP/WebSocket routes | Add chat, workflow, system status, research, export, and email endpoints; keep existing `/api/ui/*` until migration completes. |
-| `frontend/src/App.tsx` | Studio prototype | Recenter around an IM-style Aily Messenger shell with chat timeline, attachment cards, status prompts, approval cards, workflow run list, and Obsidian links. |
+| New V1 GUI package | Studio prototype | Build an IM-style Aily Messenger shell with chat timeline, attachment cards, status prompts, approval cards, workflow run list, and Obsidian links. |
 | `aily/writer/dikiwi_obsidian.py` | DIKIWI vault writer | Preserve numbered DIKIWI folders; enforce `00-Chaos` reservation and add `99-System` writer support. |
 | `aily/sessions/reactor_scheduler.py` | Legacy innovation scheduler | Wrap or quarantine; migrate useful logic into Technical Innovation evaluator. |
 | `aily/sessions/entrepreneur_scheduler.py` / `gstack_agent.py` | Legacy business evaluator | Wrap useful GStack/Guru logic into Commercial Feasibility and Business Plan synthesis; stop autonomous daily scheduling by default. |
@@ -2198,7 +2198,7 @@ the evidence folder, it is not accepted as V1 behavior.
 Every V1 acceptance run should produce:
 
 ```text
-logs/runs/<run_id>/
+~/.aily/runs/<run_id>/
   manifest.json
   command.txt
   environment.json

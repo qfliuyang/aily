@@ -10,7 +10,7 @@ services:
       AILY_DATA_DIR: /data
       OBSIDIAN_VAULT_PATH: /vault
       DIKIWI_VAULT_PATH: /vault
-      EVIDENCE_RUNS_DIR: /data/logs/runs
+      EVIDENCE_RUNS_DIR: /data/runs
       HOSTED_MODE: ${AILY_DOCKER_HOSTED_MODE:-true}
       UI_AUTH_ENABLED: ${AILY_DOCKER_UI_AUTH_ENABLED:-true}
       UI_AUTH_TOKEN: ${AILY_DOCKER_UI_AUTH_TOKEN:?Set AILY_DOCKER_UI_AUTH_TOKEN to a strong random token}
@@ -44,10 +44,10 @@ services:
       AILY_PROPOSAL_MAX_PER_SESSION: ${AILY_DOCKER_PROPOSAL_MAX_PER_SESSION:-4}
       MAX_FILE_SIZE: ${AILY_DOCKER_MAX_FILE_SIZE:-52428800}
     volumes:
-      - ${AILY_DOCKER_DATA_DIR:-./.docker-data/data}:/data
-      - ${AILY_DOCKER_VAULT_DIR:-./.docker-data/vault}:/vault
-      - ${AILY_DOCKER_CHAOS_DIR:-./.docker-data/chaos}:/chaos
-      - ${AILY_DOCKER_CHAOS_DIR:-./.docker-data/chaos}:/root/aily_chaos
+      - ${AILY_DOCKER_DATA_DIR:-/tmp/aily-docker-data/data}:/data
+      - ${AILY_DOCKER_VAULT_DIR:-/tmp/aily-docker-data/vault}:/vault
+      - ${AILY_DOCKER_CHAOS_DIR:-/tmp/aily-docker-data/chaos}:/chaos
+      - ${AILY_DOCKER_CHAOS_DIR:-/tmp/aily-docker-data/chaos}:/root/aily_chaos
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

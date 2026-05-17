@@ -18,5 +18,5 @@ services:
     profiles: ["mineru"]
     command: ["sleep", "infinity"]
     volumes:
-      - ${AILY_DOCKER_CHAOS_DIR:-./.docker-data/chaos}:/chaos
-      - ${AILY_DOCKER_VAULT_DIR:-./.docker-data/vault}:/vault
+      - ${AILY_DOCKER_CHAOS_DIR:-/tmp/aily-docker-data/chaos}:/chaos
+      - ${AILY_DOCKER_VAULT_DIR:-/tmp/aily-docker-data/vault}:/vault

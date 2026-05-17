@@ -11,8 +11,6 @@ from fastapi import FastAPI, UploadFile
 from fastapi import Request
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from aily.config import SETTINGS
@@ -73,7 +71,6 @@ from aily.security.rate_limit import FixedWindowRateLimiter
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-FRONTEND_DIST_PATH = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 HAS_MULTIPART = importlib.util.find_spec("python_multipart") is not None
 
 db = QueueDB(SETTINGS.queue_db_path)
@@ -2636,24 +2633,6 @@ app = FastAPI(lifespan=lifespan)
 
 @app.middleware("http")
 async def hosted_mode_guard(request: Request, call_next):
-    if SETTINGS.hosted_mode and (request.url.path == "/" or request.url.path.startswith("/assets/")):
-        token = SETTINGS.ui_auth_token
-        bearer = request.headers.get("authorization", "")
-        explicit_token = request.headers.get("x-aily-token", "")
-        query_token = request.query_params.get("token", "")
-        cookie_token = request.cookies.get("aily_ui_token", "")
-        if not token or (
-            bearer != f"Bearer {token}"
-            and explicit_token != token
-            and query_token != token
-            and cookie_token != token
-        ):
-            await audit_logger.log(
-                "hosted_static_rejected",
-                path=request.url.path,
-                client=request.client.host if request.client else "unknown",
-            )
-            return JSONResponse({"detail": "Aily hosted mode authentication required"}, status_code=401)
     response = await call_next(request)
     if SETTINGS.hosted_mode and SETTINGS.ui_auth_token and request.query_params.get("token") == SETTINGS.ui_auth_token:
         response.set_cookie(
@@ -2734,35 +2713,6 @@ app.include_router(
         trust_proxy_headers=SETTINGS.trusted_proxy_headers,
     )
 )
-
-
-def _configure_frontend_static(fastapi_app: FastAPI, dist_path: Path = FRONTEND_DIST_PATH) -> None:
-    """Serve the built Aily Studio frontend when `frontend/dist` exists."""
-    index_path = dist_path / "index.html"
-    if not index_path.exists():
-        logger.info("Aily Studio frontend build not found at %s; skipping static mount", dist_path)
-        return
-
-    assets_path = dist_path / "assets"
-    if assets_path.exists():
-        fastapi_app.mount("/assets", StaticFiles(directory=assets_path), name="aily_studio_assets")
-
-    @fastapi_app.get("/", include_in_schema=False)
-    async def _frontend_index() -> FileResponse:
-        return FileResponse(index_path)
-
-    @fastapi_app.get("/{full_path:path}", include_in_schema=False)
-    async def _frontend_spa_fallback(full_path: str) -> FileResponse:
-        if full_path.startswith(("api/", "webhook")):
-            raise HTTPException(status_code=404, detail="Not found")
-        candidate = (dist_path / full_path).resolve()
-        dist_root = dist_path.resolve()
-        if candidate.is_file() and (candidate == dist_root or dist_root in candidate.parents):
-            return FileResponse(candidate)
-        return FileResponse(index_path)
-
-
-_configure_frontend_static(app)
 
 
 if __name__ == "__main__":
