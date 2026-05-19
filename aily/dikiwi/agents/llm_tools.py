@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from aily.llm.conversation_logger import get_conversation_logger
 from aily.llm.prompt_registry import DikiwiPromptRegistry
+from aily.ui.telemetry import ui_telemetry_scope
 
 if TYPE_CHECKING:
     from aily.sessions.dikiwi_mind import LLMUsageBudget
@@ -52,7 +53,10 @@ async def chat_json(
             budget.stage_calls.get(reserve_key, 0),
             budget.stage_round_limit,
         )
-    result = await llm_client.chat_json(messages=messages, temperature=temperature)
+    stage_name = str(stage or "").strip().lower()
+    workload = f"dikiwi.{stage_name}" if stage_name else None
+    with ui_telemetry_scope(stage=stage_name.upper() if stage_name else None, workload=workload):
+        result = await llm_client.chat_json(messages=messages, temperature=temperature)
     get_conversation_logger().log(
         stage=stage,
         stage_key=reserve_key,

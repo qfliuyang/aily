@@ -15,6 +15,7 @@ import aily.main as main
 from aily.orchestration.runs import WorkflowRunStore
 from aily.source_store import SourceStore
 from aily.verify.evidence import EvidenceRun, make_run_id
+from aily.writer.vault_layout import ensure_v1_vault_layout
 
 
 DEFAULT_CONTENT = """# Aily SourceFoundationGraph Evidence
@@ -26,6 +27,18 @@ checkpoints, WorkflowRunStore, and UI event projection.
 DIKIWI/LLM output is intentionally simulated in this evidence run so the
 manifest must remain mocked=true and must not be used as product acceptance.
 """
+
+
+def _development_source_header() -> str:
+    return (
+        "---\n"
+        "origin_creator: evidence-runner\n"
+        "origin_created_at: generated at runtime\n"
+        "origin_generation_method: scripts/run_source_foundation_graph_evidence.py mocked development input\n"
+        "origin_evidence_class: development\n"
+        "origin_modified_by_lead_agent: false\n"
+        "---\n\n"
+    )
 
 
 class OfflineFoundationMind:
@@ -109,21 +122,10 @@ async def _run() -> int:
     runtime_dir = run_root / "runtime"
     source_path = run_root / "input" / "graph-source.md"
     source_path.parent.mkdir(parents=True, exist_ok=True)
-    source_path.write_text(args.content.strip() + "\n", encoding="utf-8")
+    source_path.write_text(_development_source_header() + args.content.strip() + "\n", encoding="utf-8")
     vault_path = runtime_dir / "vault"
     graph_db_path = runtime_dir / "graph.db"
-    for stage_dir in [
-        "00-Chaos",
-        "01-Data",
-        "02-Information",
-        "03-Knowledge",
-        "04-Insight",
-        "05-Wisdom",
-        "06-Impact",
-        "07-Proposal",
-        "08-Entrepreneurship",
-    ]:
-        (vault_path / stage_dir).mkdir(parents=True, exist_ok=True)
+    ensure_v1_vault_layout(vault_path, include_legacy_compatibility=False)
 
     evidence = EvidenceRun(
         root_dir=repo_root / args.runs_root,

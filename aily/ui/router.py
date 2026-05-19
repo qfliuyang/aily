@@ -28,6 +28,17 @@ def create_ui_router(
     source_jobs_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
     workflow_trigger_handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     workflow_provider: Callable[[int, int, str | None], Awaitable[dict[str, Any]]] | None = None,
+    chat_thread_create_handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    chat_thread_provider: Callable[[int, int], Awaitable[dict[str, Any]]] | None = None,
+    chat_thread_detail_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    chat_message_handler: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    workflow_plan_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    workflow_plan_confirm_handler: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    research_jobs_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
+    research_job_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    second_opinion_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
+    business_plan_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
+    business_plan_detail_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
     proposal_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     entrepreneurship_provider: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
     vault_notes_provider: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
@@ -277,6 +288,87 @@ def create_ui_router(
         if workflow_provider is None:
             return {"total": 0, "workflows": []}
         return await workflow_provider(limit, offset, status)
+
+    @router.post("/chat/threads")
+    async def create_chat_thread(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        _check_rate_limit(request)
+        if chat_thread_create_handler is None:
+            raise HTTPException(status_code=503, detail="Chat store unavailable")
+        return await chat_thread_create_handler(payload or {})
+
+    @router.get("/chat/threads")
+    async def list_chat_threads(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        if chat_thread_provider is None:
+            return {"total": 0, "threads": []}
+        return await chat_thread_provider(limit, offset)
+
+    @router.get("/chat/threads/{chat_thread_id}")
+    async def chat_thread_detail(chat_thread_id: str) -> dict[str, Any]:
+        if chat_thread_detail_provider is None:
+            raise HTTPException(status_code=404, detail="Chat store unavailable")
+        payload = await chat_thread_detail_provider(chat_thread_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Chat thread not found")
+        return payload
+
+    @router.post("/chat/threads/{chat_thread_id}/messages")
+    async def add_chat_message(request: Request, chat_thread_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        _check_rate_limit(request)
+        if chat_message_handler is None:
+            raise HTTPException(status_code=503, detail="Chat message handler unavailable")
+        return await chat_message_handler(chat_thread_id, payload)
+
+    @router.get("/workflow-plans/{workflow_plan_id}")
+    async def workflow_plan_detail(workflow_plan_id: str) -> dict[str, Any]:
+        if workflow_plan_provider is None:
+            raise HTTPException(status_code=404, detail="Workflow plan store unavailable")
+        payload = await workflow_plan_provider(workflow_plan_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Workflow plan not found")
+        return payload
+
+    @router.post("/workflow-plans/{workflow_plan_id}/confirm")
+    async def confirm_workflow_plan(request: Request, workflow_plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        _check_rate_limit(request)
+        if workflow_plan_confirm_handler is None:
+            raise HTTPException(status_code=503, detail="Workflow plan confirmation unavailable")
+        return await workflow_plan_confirm_handler(workflow_plan_id, payload)
+
+    @router.get("/research/jobs")
+    async def list_research_jobs(limit: int = 50) -> dict[str, Any]:
+        if research_jobs_provider is None:
+            return {"total": 0, "items": []}
+        return await research_jobs_provider(limit)
+
+    @router.get("/research/jobs/{research_id}")
+    async def research_job_detail(research_id: str) -> dict[str, Any]:
+        if research_job_provider is None:
+            raise HTTPException(status_code=404, detail="Research store unavailable")
+        payload = await research_job_provider(research_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Research job not found")
+        return payload
+
+    @router.get("/second-opinions")
+    async def list_second_opinions(limit: int = 50) -> dict[str, Any]:
+        if second_opinion_provider is None:
+            return {"total": 0, "items": []}
+        return await second_opinion_provider(limit)
+
+    @router.get("/business-plans")
+    async def list_business_plans(limit: int = 50) -> dict[str, Any]:
+        if business_plan_provider is None:
+            return {"total": 0, "items": []}
+        return await business_plan_provider(limit)
+
+    @router.get("/business-plans/{business_plan_id}")
+    async def business_plan_detail(business_plan_id: str) -> dict[str, Any]:
+        if business_plan_detail_provider is None:
+            raise HTTPException(status_code=404, detail="Business plan store unavailable")
+        payload = await business_plan_detail_provider(business_plan_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Business plan not found")
+        return payload
 
     @router.get("/proposals")
     async def list_proposals(limit: int = 50) -> dict[str, Any]:

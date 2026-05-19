@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
+import re
 from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from aily.chaos.kiosk_markdown import render_kiosk_markdown
+from aily.chaos.types import ExtractedContentMultimodal
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.orchestration.state import WorkflowState
+from aily.writer.vault_layout import write_canonical_markdown_vault_artifact
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,7 @@ class SourceFoundationDependencies:
     emit_event: Callable[..., Awaitable[None]]
     browser_manager: Any = None
     workflow_run_store: Any | None = None
+    vault_path: Any | None = None
     failed_stage: Callable[[Any], Any | None] | None = None
 
 
@@ -107,6 +113,82 @@ def _failed_stage(dependencies: SourceFoundationDependencies, result: Any) -> An
     return None
 
 
+def _source_lineage_paths(state: WorkflowState) -> list[str]:
+    paths: list[str] = []
+    source_id = str(state.get("source_id") or "").strip()
+    if source_id:
+        paths.append(f"source_id:{source_id}")
+    for key in (
+        "origin_path",
+        "storage_path",
+        "canonical_markdown_path",
+        "canonical_markdown_vault_path",
+        "kiosk_markdown_vault_path",
+    ):
+        value = str(state.get(key) or "").strip()
+        if value and value not in paths:
+            paths.append(value)
+    return paths
+
+
+def _source_lineage(state: WorkflowState) -> dict[str, Any]:
+    return {
+        "source_id": state.get("source_id", ""),
+        "origin_path": state.get("origin_path", ""),
+        "storage_path": state.get("storage_path", ""),
+        "canonical_markdown_package_id": state.get("canonical_document_id", ""),
+        "canonical_markdown_path": state.get("canonical_markdown_path", ""),
+        "canonical_markdown_vault_path": state.get("canonical_markdown_vault_path", ""),
+        "canonical_markdown_sha256": state.get("canonical_markdown_sha256", ""),
+        "source_paths": _source_lineage_paths(state),
+    }
+
+
+def _safe_kiosk_base_name(filename: str) -> str:
+    stem = Path(filename or "source").stem
+    safe = re.sub(r"[^A-Za-z0-9._ -]+", "-", stem).strip(" .-_")
+    safe = re.sub(r"\s+", " ", safe)
+    return safe[:90] or "source"
+
+
+async def _write_pdf_kiosk_artifact(
+    *,
+    dependencies: SourceFoundationDependencies,
+    source_file: Path,
+    extracted: Any,
+    filename: str,
+) -> dict[str, Any]:
+    vault = Path(dependencies.vault_path).expanduser().resolve()
+    base_name = _safe_kiosk_base_name(filename)
+    target = vault / "00-Chaos" / f"{base_name}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    multimodal = ExtractedContentMultimodal(
+        text=str(getattr(extracted, "text", "") or ""),
+        title=getattr(extracted, "title", None) or Path(filename).stem,
+        source_type=str(getattr(extracted, "source_type", "") or "pdf"),
+        source_path=source_file,
+        metadata=dict(getattr(extracted, "metadata", {}) or {}),
+        processing_method="source_foundation_pdf_kiosk",
+    )
+    rendered = await render_kiosk_markdown(
+        extracted=multimodal,
+        source_path=source_file,
+        base_name=base_name,
+        vault_path=vault,
+        source_display_name=filename,
+    )
+    target.write_text(rendered.markdown, encoding="utf-8")
+    return {
+        "path": str(target),
+        "relative_path": str(target.relative_to(vault)),
+        "page_count": rendered.page_count,
+        "screenshot_count": rendered.screenshot_count,
+        "screenshot_renderer": rendered.screenshot_renderer,
+        "screenshot_error": rendered.screenshot_error,
+    }
+
+
 async def _mark_workflow(
     dependencies: SourceFoundationDependencies,
     state: WorkflowState,
@@ -143,6 +225,9 @@ async def _register_source_node(
     batch_id = str(state.get("batch_id") or payload.get("batch_id") or "")
     filename = str(source.get("filename") or payload.get("filename") or source_id)
     content_type = str(source.get("content_type") or payload.get("content_type") or "application/octet-stream")
+    source_metadata = dict(source.get("metadata") or {})
+    origin_path = str(source_metadata.get("origin_path") or payload.get("origin_path") or "")
+    storage_path = str(source.get("storage_path") or "")
     is_url = job_type == "process_url_source"
     url = str(source.get("normalized_source") or payload.get("url") or "") if is_url else ""
 
@@ -194,6 +279,9 @@ async def _register_source_node(
         filename=filename,
         content_type=content_type,
         url=url,
+        origin_path=origin_path,
+        storage_path=storage_path,
+        source_metadata=source_metadata,
     )
 
 
@@ -206,6 +294,10 @@ async def _convert_to_markdown_node(
     upload_id = state.get("upload_id", "")
     batch_id = state.get("batch_id", "")
     url = state.get("url", "")
+    source_record = await dependencies.source_store.get_source(source_id)
+    source_metadata = dict((source_record or {}).get("metadata") or {})
+    origin_path = str(state.get("origin_path") or source_metadata.get("origin_path") or "")
+    storage_path = str(state.get("storage_path") or (source_record or {}).get("storage_path") or "")
     existing_package = None
     if hasattr(dependencies.source_store, "get_markdown_package"):
         existing_package = await dependencies.source_store.get_markdown_package(source_id)
@@ -228,14 +320,90 @@ async def _convert_to_markdown_node(
             current_node="convert_to_markdown",
             metadata={"canonical_document_id": existing_package["package_id"]},
         )
+        vault_artifact: dict[str, Any] | None = None
+        if dependencies.vault_path:
+            vault_artifact = write_canonical_markdown_vault_artifact(
+                dependencies.vault_path,
+                source_id=source_id,
+                package_id=str(existing_package["package_id"]),
+                markdown_sha256=str(existing_package["markdown_sha256"]),
+                title=str(existing_package.get("title") or source_id),
+                source_type=str(existing_package.get("source_type") or "unknown"),
+                markdown=markdown,
+                source_url=url,
+                origin_path=origin_path,
+                storage_path=storage_path,
+            )
+            await dependencies.emit_event(
+                "canonical_markdown_vault_artifact_written",
+                workflow_run_id=state.get("workflow_run_id"),
+                job_id=job_id or None,
+                source_id=source_id,
+                upload_id=upload_id,
+                package_id=existing_package["package_id"],
+                vault_path=vault_artifact["path"],
+                vault_relative_path=vault_artifact["relative_path"],
+                created=vault_artifact["created"],
+                changed=vault_artifact["changed"],
+                reused=True,
+            )
+        kiosk_artifact: dict[str, Any] | None = None
+        if dependencies.vault_path and storage_path and str(state.get("content_type") or "").lower() == "application/pdf":
+            source_file = Path(storage_path).expanduser().resolve()
+            if source_file.exists():
+                kiosk_artifact = await _write_pdf_kiosk_artifact(
+                    dependencies=dependencies,
+                    source_file=source_file,
+                    extracted=ExtractedContentMultimodal(
+                        text=markdown,
+                        title=str(existing_package.get("title") or state.get("filename") or source_id),
+                        source_type=str(existing_package.get("source_type") or "pdf"),
+                        source_path=source_file,
+                        metadata={"source_id": source_id, "reused_canonical_markdown": True},
+                        processing_method="source_foundation_pdf_kiosk_reused",
+                    ),
+                    filename=str(state.get("filename") or existing_package.get("title") or source_id),
+                )
+                await dependencies.emit_event(
+                    "source_equivalent_kiosk_markdown_written",
+                    workflow_run_id=state.get("workflow_run_id"),
+                    job_id=job_id or None,
+                    source_id=source_id,
+                    upload_id=upload_id,
+                    vault_path=kiosk_artifact["path"],
+                    vault_relative_path=kiosk_artifact["relative_path"],
+                    page_count=kiosk_artifact["page_count"],
+                    screenshot_count=kiosk_artifact["screenshot_count"],
+                    screenshot_renderer=kiosk_artifact["screenshot_renderer"],
+                    reused=True,
+                )
         return _append_step(
             state,
             "convert_to_markdown",
             canonical_document_id=str(existing_package["package_id"]),
             canonical_markdown_path=str(existing_package["package_path"]),
             canonical_markdown_sha256=str(existing_package["markdown_sha256"]),
+            canonical_markdown_vault_path="" if vault_artifact is None else vault_artifact["path"],
+            canonical_markdown_vault_relative_path="" if vault_artifact is None else vault_artifact["relative_path"],
+            kiosk_markdown_vault_path="" if kiosk_artifact is None else kiosk_artifact["path"],
+            kiosk_markdown_vault_relative_path="" if kiosk_artifact is None else kiosk_artifact["relative_path"],
             markdown=markdown,
             source_type=str(existing_package.get("source_type") or "unknown"),
+            origin_path=origin_path,
+            storage_path=storage_path,
+            source_metadata=source_metadata,
+            source_lineage={
+                **_source_lineage(
+                    {
+                        **state,
+                        "origin_path": origin_path,
+                        "storage_path": storage_path,
+                        "canonical_document_id": str(existing_package["package_id"]),
+                        "canonical_markdown_path": str(existing_package["package_path"]),
+                        "canonical_markdown_sha256": str(existing_package["markdown_sha256"]),
+                    }
+                )
+            },
         )
 
     router = dependencies.processing_router_factory()
@@ -292,6 +460,13 @@ async def _convert_to_markdown_node(
             "filename": state.get("filename", ""),
             "content_type": state.get("content_type", ""),
             "url": url,
+            "origin_path": origin_path,
+            "storage_path": storage_path,
+            "source_lineage": {
+                "source_id": source_id,
+                "origin_path": origin_path,
+                "storage_path": storage_path,
+            },
         },
     )
     await dependencies.emit_event(
@@ -308,12 +483,64 @@ async def _convert_to_markdown_node(
         text_length=len(markdown_package.markdown),
         url=url or None,
     )
+    kiosk_artifact: dict[str, Any] | None = None
+    if dependencies.vault_path and storage_path and str(state.get("content_type") or "").lower() == "application/pdf":
+        source_file = Path(storage_path).expanduser().resolve()
+        if source_file.exists():
+            kiosk_artifact = await _write_pdf_kiosk_artifact(
+                dependencies=dependencies,
+                source_file=source_file,
+                extracted=extracted,
+                filename=str(state.get("filename") or fallback_title),
+            )
+            await dependencies.emit_event(
+                "source_equivalent_kiosk_markdown_written",
+                workflow_run_id=state.get("workflow_run_id"),
+                job_id=job_id or None,
+                source_id=source_id,
+                upload_id=upload_id,
+                vault_path=kiosk_artifact["path"],
+                vault_relative_path=kiosk_artifact["relative_path"],
+                page_count=kiosk_artifact["page_count"],
+                screenshot_count=kiosk_artifact["screenshot_count"],
+                screenshot_renderer=kiosk_artifact["screenshot_renderer"],
+            )
+    vault_artifact: dict[str, Any] | None = None
+    if dependencies.vault_path:
+        vault_artifact = write_canonical_markdown_vault_artifact(
+            dependencies.vault_path,
+            source_id=source_id,
+            package_id=markdown_package.package_id,
+            markdown_sha256=markdown_package.markdown_sha256,
+            title=markdown_package.title,
+            source_type=markdown_package.source_type,
+            markdown=markdown_package.markdown,
+            source_url=url,
+            origin_path=origin_path,
+            storage_path=storage_path,
+        )
+        await dependencies.emit_event(
+            "canonical_markdown_vault_artifact_written",
+            workflow_run_id=state.get("workflow_run_id"),
+            job_id=job_id or None,
+            source_id=source_id,
+            upload_id=upload_id,
+            package_id=markdown_package.package_id,
+            vault_path=vault_artifact["path"],
+            vault_relative_path=vault_artifact["relative_path"],
+            created=vault_artifact["created"],
+            changed=vault_artifact["changed"],
+        )
     await _mark_workflow(
         dependencies,
         state,
         status="running",
         current_node="convert_to_markdown",
-        metadata={"canonical_document_id": markdown_package.package_id},
+        metadata={
+            "canonical_document_id": markdown_package.package_id,
+            "canonical_markdown_vault_path": "" if vault_artifact is None else vault_artifact["path"],
+            "kiosk_markdown_vault_path": "" if kiosk_artifact is None else kiosk_artifact["path"],
+        },
     )
     return _append_step(
         state,
@@ -323,6 +550,24 @@ async def _convert_to_markdown_node(
         canonical_markdown_sha256=markdown_package.markdown_sha256,
         markdown=markdown_package.markdown,
         source_type=markdown_package.source_type,
+        origin_path=origin_path,
+        storage_path=storage_path,
+        source_metadata=source_metadata,
+        canonical_markdown_vault_path="" if vault_artifact is None else vault_artifact["path"],
+        canonical_markdown_vault_relative_path="" if vault_artifact is None else vault_artifact["relative_path"],
+        kiosk_markdown_vault_path="" if kiosk_artifact is None else kiosk_artifact["path"],
+        kiosk_markdown_vault_relative_path="" if kiosk_artifact is None else kiosk_artifact["relative_path"],
+        source_lineage=_source_lineage(
+            {
+                **state,
+                "source_id": source_id,
+                "origin_path": origin_path,
+                "storage_path": storage_path,
+                "canonical_document_id": markdown_package.package_id,
+                "canonical_markdown_path": markdown_package.package_path,
+                "canonical_markdown_sha256": markdown_package.markdown_sha256,
+            }
+        ),
     )
 
 
@@ -365,7 +610,12 @@ async def _run_data_node(
             "processing_method": "source_foundation_graph",
             "canonical_markdown_package_id": state.get("canonical_document_id", ""),
             "canonical_markdown_path": state.get("canonical_markdown_path", ""),
+            "canonical_markdown_vault_path": state.get("canonical_markdown_vault_path", ""),
             "canonical_markdown_sha256": state.get("canonical_markdown_sha256", ""),
+            "origin_path": state.get("origin_path", ""),
+            "storage_path": state.get("storage_path", ""),
+            "source_paths": _source_lineage_paths(state),
+            "source_lineage": _source_lineage(state),
         },
     )
     result = await dependencies.dikiwi_ingestion(drop)

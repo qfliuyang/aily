@@ -375,6 +375,50 @@ class GraphDB:
             for row in rows
         ]
 
+    async def search_information_nodes(
+        self,
+        query_terms: list[str],
+        *,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Search information nodes by label and rich node properties."""
+        terms = [term.strip().lower() for term in query_terms if term.strip()]
+        if not terms:
+            return []
+        clauses: list[str] = []
+        params: list[object] = []
+        for term in terms[:8]:
+            pattern = f"%{term}%"
+            clauses.append("(lower(n.label) LIKE ? OR lower(COALESCE(np.properties, '')) LIKE ?)")
+            params.extend([pattern, pattern])
+        params.append(max(1, min(100, limit)))
+        rows = await self._fetchall(
+            f"""
+            SELECT n.id, n.type, n.label, n.source, n.created_at, np.properties
+            FROM nodes n
+            LEFT JOIN node_properties np ON n.id = np.node_id
+            WHERE n.type = 'information'
+              AND ({' OR '.join(clauses)})
+            ORDER BY n.created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        results: list[dict] = []
+        for row in rows:
+            props = json.loads(row[5]) if row[5] else {}
+            results.append(
+                {
+                    "id": row[0],
+                    "type": row[1],
+                    "label": row[2],
+                    "source": row[3],
+                    "created_at": row[4],
+                    "properties": props,
+                }
+            )
+        return results
+
     async def get_neighbors(
         self,
         node_id: str,

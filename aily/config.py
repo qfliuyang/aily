@@ -234,6 +234,18 @@ class Settings(BaseSettings):
         return self.aily_data_dir / "workflow_runs.db"
 
     @property
+    def chat_store_db_path(self) -> Path:
+        return self.aily_data_dir / "chat_store.db"
+
+    @property
+    def research_store_db_path(self) -> Path:
+        return self.aily_data_dir / "research_store.db"
+
+    @property
+    def business_plan_store_db_path(self) -> Path:
+        return self.aily_data_dir / "business_plan_store.db"
+
+    @property
     def resolved_audit_log_path(self) -> Path:
         return self.audit_log_path or (self.aily_data_dir / "audit.jsonl")
 

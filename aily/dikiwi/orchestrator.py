@@ -46,6 +46,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _workload_for_stage(stage: DikiwiStage) -> str:
+    return f"dikiwi.{stage.name.lower()}"
+
+
 @dataclass
 class PipelineConfig:
     """Configuration for DIKIWI pipeline."""
@@ -205,7 +209,7 @@ class DikiwiOrchestrator:
         if agent:
             try:
                 if self.llm_client_resolver is not None:
-                    agent_ctx.llm_client = self.llm_client_resolver(DikiwiStage.DATA)
+                    agent_ctx.llm_client = self.llm_client_resolver(_workload_for_stage(DikiwiStage.DATA))
                 await emit_ui_event(
                     "stage_started",
                     pipeline_id=pipeline.pipeline_id,
@@ -625,7 +629,7 @@ class DikiwiOrchestrator:
             if ctx:
                 async def _execute_agent() -> bool:
                     if self.llm_client_resolver is not None:
-                        ctx.llm_client = self.llm_client_resolver(to_stage)
+                        ctx.llm_client = self.llm_client_resolver(_workload_for_stage(to_stage))
                     await emit_ui_event(
                         "stage_started",
                         pipeline_id=pipeline.pipeline_id,
@@ -639,7 +643,7 @@ class DikiwiOrchestrator:
                         pipeline_id=pipeline.pipeline_id,
                         upload_id=ctx.drop.metadata.get("ui_upload_id"),
                         stage=to_stage.name,
-                        workload=f"dikiwi.{to_stage.name.lower()}",
+                        workload=_workload_for_stage(to_stage),
                     ):
                         result = await agent.execute(ctx)
                     ctx.stage_results.append(result)

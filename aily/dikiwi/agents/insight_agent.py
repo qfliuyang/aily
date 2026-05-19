@@ -100,10 +100,18 @@ class InsightAgent(DikiwiAgent):
         network_context: str = "",
     ) -> list[Insight]:
         nodes_desc = "\n".join(
-            f"E{i+1}. [{n.domain}] {n.content[:180]}"
+            f"E{i+1}. [{n.domain}] {getattr(n, 'concept', '') or n.content[:180]}"
             for i, n in enumerate(info_nodes[:15])
         )
         node_label_map = {f"E{i+1}": n.id for i, n in enumerate(info_nodes[:15])}
+        node_reference_map = {
+            f"E{i+1}": {
+                "node_id": n.id,
+                "label": getattr(n, "concept", "") or n.content[:180],
+                "domain": n.domain,
+            }
+            for i, n in enumerate(info_nodes[:15])
+        }
         links_desc = "\n".join(
             f"- {l.source_id[:8]}... {l.relation_type} {l.target_id[:8]}... (strength: {l.strength:.2f})"
             for l in links[:10]
@@ -157,15 +165,33 @@ class InsightAgent(DikiwiAgent):
             for p in insights_data:
                 if isinstance(p, dict) and p.get("description"):
                     related_nodes = self._resolve_related_nodes(p, node_label_map)
-                    insights.append(
-                        Insight(
-                            id=f"insight_{uuid.uuid4().hex[:8]}",
-                            insight_type=p.get("type", "pattern"),
-                            description=p.get("description", ""),
-                            related_nodes=related_nodes,
-                            confidence=p.get("confidence", 0.5),
-                        )
+                    insight = Insight(
+                        id=f"insight_{uuid.uuid4().hex[:8]}",
+                        insight_type=p.get("type", "pattern"),
+                        description=p.get("description", ""),
+                        related_nodes=related_nodes,
+                        confidence=p.get("confidence", 0.5),
                     )
+                    setattr(insight, "title", p.get("insight_title", ""))
+                    setattr(insight, "why_nonobvious", p.get("why_nonobvious", ""))
+                    setattr(insight, "significance", p.get("significance", ""))
+                    setattr(insight, "design_implication", p.get("design_implication", ""))
+                    node_references = []
+                    for ref in p.get("related_evidence", []) if isinstance(p.get("related_evidence"), list) else []:
+                        mapped = node_reference_map.get(str(ref).strip())
+                        if mapped:
+                            node_references.append(mapped)
+                    setattr(insight, "node_references", node_references)
+                    setattr(
+                        insight,
+                        "evidence_label_map",
+                        {
+                            ref: str(mapped.get("label") or "")
+                            for ref, mapped in node_reference_map.items()
+                            if mapped.get("label")
+                        },
+                    )
+                    insights.append(insight)
             return insights
         except Exception as exc:
             logger.debug("[DIKIWI] Pattern detection failed: %s", exc)

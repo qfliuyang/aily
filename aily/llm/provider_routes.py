@@ -57,13 +57,13 @@ class PrimaryLLMRoute:
     # Stage 01-02 (DATA, INFORMATION): Kimi — fast, cheap extraction
     # Stage 03-08 (KNOWLEDGE → Entrepreneur): DeepSeek — strong reasoning
     DEFAULT_WORKLOAD_ROUTES: dict[str, dict[str, str]] = {
-        "dikiwi.DATA": {"provider": "kimi"},
-        "dikiwi.INFORMATION": {"provider": "kimi"},
-        "dikiwi.KNOWLEDGE": {"provider": "deepseek"},
-        "dikiwi.INSIGHT": {"provider": "deepseek"},
-        "dikiwi.WISDOM": {"provider": "deepseek"},
-        "dikiwi.IMPACT": {"provider": "deepseek"},
-        "dikiwi.RESIDUAL": {"provider": "deepseek"},
+        "dikiwi.data": {"provider": "kimi"},
+        "dikiwi.information": {"provider": "kimi"},
+        "dikiwi.knowledge": {"provider": "deepseek"},
+        "dikiwi.insight": {"provider": "deepseek"},
+        "dikiwi.wisdom": {"provider": "deepseek"},
+        "dikiwi.impact": {"provider": "deepseek"},
+        "dikiwi.residual": {"provider": "deepseek"},
         "reactor": {"provider": "deepseek"},
         "entrepreneur": {"provider": "deepseek"},
         "guru": {"provider": "deepseek"},
@@ -124,7 +124,10 @@ class PrimaryLLMRoute:
 
     @staticmethod
     def _workload_candidates(workload: str) -> list[str]:
-        normalized = str(workload or "default").strip() or "default"
+        if not isinstance(workload, str) and getattr(workload, "name", ""):
+            normalized = f"dikiwi.{str(getattr(workload, 'name')).lower()}"
+        else:
+            normalized = str(workload or "default").strip().lower() or "default"
         if normalized == "default":
             return ["default"]
         parts = normalized.split(".")
@@ -153,7 +156,7 @@ class PrimaryLLMRoute:
         overrides: dict[str, dict[str, Any]] = {}
         for key, value in parsed.items():
             if isinstance(key, str) and isinstance(value, dict):
-                overrides[key.strip()] = value
+                overrides[key.strip().lower()] = value
         return overrides
 
     @classmethod

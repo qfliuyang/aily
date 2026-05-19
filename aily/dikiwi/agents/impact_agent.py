@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from typing import Any
 
@@ -86,6 +87,7 @@ class ImpactAgent(DikiwiAgent):
             f"- {z.title[:100]}"
             for z in zettels[:3]
         )
+        center_nodes = self._filter_centers_for_zettels(center_nodes, zettels)
         center_context = "\n".join(
             f"- C{i + 1}: [{node.get('type')}] {node.get('label')} "
             f"(edges={node.get('edge_count')}, weight={float(node.get('total_weight', 0.0)):.2f})"
@@ -114,6 +116,8 @@ class ImpactAgent(DikiwiAgent):
                     review_focus=(
                         "Remove generic actions that are not grounded in the notes.",
                         "Prefer concrete next steps that compound the knowledge system.",
+                        "Remove cross-domain claims unless the exact domain appears in the supplied zettels or graph centers.",
+                        "If the evidence only supports a narrow yield, timing, packaging, or EDA workflow, keep the proposal inside that workflow boundary.",
                     ),
                     context_sections=(
                         ("Graph Center Nodes", center_context or "No graph center nodes available."),
@@ -132,9 +136,18 @@ class ImpactAgent(DikiwiAgent):
                 {
                     "type": imp.get("type", "action"),
                     "description": imp.get("description", ""),
+                    "target_user": imp.get("target_user", ""),
+                    "economic_buyer": imp.get("economic_buyer", ""),
+                    "workflow_trigger": imp.get("workflow_trigger", ""),
+                    "current_workaround": imp.get("current_workaround", ""),
+                    "integration_surface": imp.get("integration_surface", ""),
+                    "proof_of_value": imp.get("proof_of_value", ""),
+                    "why_now": imp.get("why_now", ""),
+                    "killer_risk": imp.get("killer_risk", ""),
                     "priority": imp.get("priority", "medium"),
                     "rationale": imp.get("rationale", ""),
                     "effort_estimate": imp.get("effort_estimate", "medium"),
+                    "potential_value": imp.get("potential_value", ""),
                 }
                 for imp in impacts
                 if isinstance(imp, dict)
@@ -160,6 +173,68 @@ class ImpactAgent(DikiwiAgent):
         except Exception as exc:
             logger.warning("[DIKIWI] Failed to load graph centers for impact: %s", exc)
             return []
+
+    @staticmethod
+    def _filter_centers_for_zettels(center_nodes: list[dict[str, Any]], zettels: list[ZettelkastenNote]) -> list[dict[str, Any]]:
+        """Keep graph centers that share vocabulary with the wisdom notes.
+
+        Global graph hubs can be valid Obsidian navigation targets while still
+        being unsafe for Impact synthesis. This filter prevents a yield-focused
+        wisdom note from borrowing unrelated chiplet/STA centers simply because
+        they are globally central in the run.
+        """
+        stopwords = {
+            "about",
+            "after",
+            "analysis",
+            "based",
+            "between",
+            "design",
+            "diagnostic",
+            "diagnostics",
+            "framework",
+            "from",
+            "into",
+            "method",
+            "model",
+            "note",
+            "process",
+            "source",
+            "system",
+            "this",
+            "through",
+            "using",
+            "with",
+            "workflow",
+        }
+        terms: set[str] = set()
+        for zettel in zettels:
+            haystack = " ".join(
+                [
+                    getattr(zettel, "title", ""),
+                    getattr(zettel, "content", ""),
+                    " ".join(getattr(zettel, "tags", []) or []),
+                    " ".join(getattr(zettel, "links_to", []) or []),
+                ]
+            )
+            for word in re.findall(r"[A-Za-z][A-Za-z0-9.#+-]{3,}", haystack):
+                normalized = word.lower().strip(".")
+                if normalized not in stopwords:
+                    terms.add(normalized)
+        if not terms:
+            return center_nodes[:5]
+
+        filtered: list[dict[str, Any]] = []
+        for node in center_nodes:
+            label = str(node.get("label") or "")
+            node_terms = {
+                word.lower().strip(".")
+                for word in re.findall(r"[A-Za-z][A-Za-z0-9.#+-]{3,}", label)
+                if word.lower().strip(".") not in stopwords
+            }
+            if terms.intersection(node_terms):
+                filtered.append(node)
+        return filtered[:8] if filtered else center_nodes[:3]
 
     @staticmethod
     def _is_generic_center(node: dict[str, Any]) -> bool:

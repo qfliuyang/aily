@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,9 @@ from fastapi import Request
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
+from langgraph.types import Command
 
+from aily.business import BusinessPlanStore, BusinessPlanSynthesizer
 from aily.config import SETTINGS
 from aily.queue.db import QueueDB
 from aily.queue.worker import JobWorker
@@ -45,9 +48,19 @@ from aily.writer.dikiwi_obsidian import DikiwiObsidianWriter
 from aily.gating.drainage import RainDrop, RainType, StreamType
 from aily.processing.canonical_markdown import CanonicalMarkdownConverter
 from aily.processing.router import ProcessingRouter
+from aily.research import ResearchStore, TavilyResearchService
+from aily.research.tavily_packets import build_second_opinion_packet
 from aily.runtime.backpressure import provider_backpressure
 from aily.inbox import WatchedInboxService
 from aily.orchestration.checkpoint import async_sqlite_checkpointer
+from aily.orchestration.chat_store import (
+    ChatStore,
+    extract_candidate_topics,
+)
+from aily.orchestration.business_planning_graph import (
+    BusinessPlanningDependencies,
+    build_business_planning_graph,
+)
 from aily.orchestration.runs import WorkflowRunStore
 from aily.orchestration.source_foundation_graph import (
     SourceFoundationDependencies,
@@ -73,6 +86,9 @@ source_store = SourceStore(
     SETTINGS.canonical_markdown_dir,
 )
 workflow_run_store = WorkflowRunStore(SETTINGS.workflow_runs_db_path)
+chat_store = ChatStore(SETTINGS.chat_store_db_path)
+research_store = ResearchStore(SETTINGS.research_store_db_path)
+business_plan_store = BusinessPlanStore(SETTINGS.business_plan_store_db_path)
 fetcher = BrowserFetcher()
 pusher = FeishuPusher(SETTINGS.feishu_app_id, SETTINGS.feishu_app_secret)
 writer = ObsidianWriter(
@@ -258,6 +274,7 @@ async def _process_source_job_with_foundation_graph(job: dict[str, Any]) -> str:
         emit_event=emit_ui_event,
         browser_manager=browser_manager_instance,
         workflow_run_store=workflow_run_store,
+        vault_path=Path(SETTINGS.obsidian_vault_path or SETTINGS.dikiwi_vault_path),
         failed_stage=_failed_stage,
     )
     state = {
@@ -371,6 +388,165 @@ def _workflow_snapshot_payload(snapshot: Any) -> dict[str, Any]:
         "completed_at": snapshot.completed_at,
         "last_error": snapshot.last_error,
     }
+
+
+def _extract_source_ids_from_context_items(items: list[dict[str, Any]]) -> list[str]:
+    source_ids: list[str] = []
+    for item in items:
+        raw_source_id = str(item.get("source_id") or "").strip()
+        if raw_source_id and raw_source_id not in source_ids:
+            source_ids.append(raw_source_id)
+        source_paths = item.get("source_paths", [])
+        if isinstance(source_paths, list):
+            for raw_path in source_paths:
+                value = str(raw_path)
+                if value.startswith("source_id:"):
+                    source_id = value.removeprefix("source_id:")
+                    if source_id and source_id not in source_ids:
+                        source_ids.append(source_id)
+    return source_ids
+
+
+def _parse_simple_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    if not content.startswith("---"):
+        return {}, content
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}, content
+    frontmatter: dict[str, Any] = {}
+    current_key = ""
+    for raw_line in parts[1].splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("  - ") and current_key:
+            frontmatter.setdefault(current_key, []).append(line[4:].strip().strip('"'))
+            continue
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        current_key = key.strip()
+        value = raw_value.strip()
+        if value == "":
+            frontmatter[current_key] = []
+        elif value.startswith("[") and value.endswith("]"):
+            frontmatter[current_key] = [
+                item.strip().strip('"').strip("'")
+                for item in value[1:-1].split(",")
+                if item.strip()
+            ]
+        else:
+            frontmatter[current_key] = value.strip('"').strip("'")
+    return frontmatter, parts[2]
+
+
+def _context_terms(motive: str, topics: list[dict[str, Any]]) -> list[str]:
+    terms: list[str] = []
+    for topic in topics:
+        label = str(topic.get("label") or "").strip().lower()
+        if label and label not in terms:
+            terms.append(label)
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", motive.lower()):
+        if token not in terms:
+            terms.append(token)
+    return terms[:12]
+
+
+def _search_vault_knowledge_context(
+    *,
+    motive: str,
+    topics: list[dict[str, Any]],
+    required_source_ids: list[str],
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    vault_path = _studio_vault_path()
+    knowledge_dir = vault_path / "03-Knowledge"
+    if not knowledge_dir.exists():
+        return []
+    terms = _context_terms(motive, topics)
+    required = {source_id for source_id in required_source_ids if source_id}
+    results: list[dict[str, Any]] = []
+    for note_path in sorted(knowledge_dir.rglob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True):
+        try:
+            content = note_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        frontmatter, body = _parse_simple_frontmatter(content)
+        haystack = f"{note_path.name}\n{content}".lower()
+        source_id = str(frontmatter.get("source_id") or "").strip()
+        source_paths_raw = frontmatter.get("source_paths", [])
+        source_paths = source_paths_raw if isinstance(source_paths_raw, list) else [str(source_paths_raw)]
+        note_source_ids = {source_id} if source_id else set()
+        for raw_path in source_paths:
+            value = str(raw_path)
+            if value.startswith("source_id:"):
+                note_source_ids.add(value.removeprefix("source_id:"))
+        if required and not (required & note_source_ids):
+            continue
+        matched_terms = [term for term in terms if term and term in haystack]
+        if terms and not matched_terms and not (required & note_source_ids):
+            continue
+        results.append(
+            {
+                "context_type": "vault_knowledge_note",
+                "relative_path": str(note_path.relative_to(vault_path)),
+                "note_path": str(note_path),
+                "title": note_path.stem,
+                "source_id": source_id,
+                "source_paths": source_paths,
+                "semantic_topics": frontmatter.get("semantic_topics", []),
+                "matched_terms": matched_terms,
+                "excerpt": body.strip()[:1200],
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def _select_workflow_knowledge_context(
+    *,
+    motive: str,
+    topics: list[dict[str, Any]],
+    source_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    required_source_ids = [str(source_id).strip() for source_id in source_ids or [] if str(source_id).strip()]
+    vault_context = await asyncio.to_thread(
+        _search_vault_knowledge_context,
+        motive=motive,
+        topics=topics,
+        required_source_ids=required_source_ids,
+    )
+    context: list[dict[str, Any]] = [*vault_context]
+    terms = _context_terms(motive, topics)
+    try:
+        graph_nodes = await graph_db.search_information_nodes(terms, limit=12)
+    except Exception:
+        graph_nodes = []
+    for node in graph_nodes:
+        props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
+        source_paths = props.get("source_paths", [])
+        source_paths = source_paths if isinstance(source_paths, list) else [str(source_paths)]
+        node_source_ids = _extract_source_ids_from_context_items(
+            [{"source_paths": source_paths, "source_id": props.get("source_id", "")}]
+        )
+        if required_source_ids and not (set(required_source_ids) & set(node_source_ids)):
+            continue
+        context.append(
+            {
+                "context_type": "graph_information_node",
+                "node_id": node.get("id"),
+                "label": node.get("label"),
+                "source": node.get("source"),
+                "source_paths": source_paths,
+                "source_ids": node_source_ids,
+                "source_evidence": props.get("source_evidence", []),
+                "pipeline_id": props.get("pipeline_id", ""),
+            }
+        )
+        if len(context) >= 18:
+            break
+    return context
 
 
 async def _enqueue_url(url: str, open_id: str = "") -> None:
@@ -2055,6 +2231,374 @@ async def _ui_workflows_provider(limit: int, offset: int, status: str | None = N
     }
 
 
+async def _ui_create_chat_thread(payload: dict[str, Any]) -> dict[str, Any]:
+    thread = await chat_store.create_thread(
+        title=str(payload.get("title") or "").strip(),
+        metadata={"created_from": "ui_chat"},
+    )
+    await emit_ui_event("chat_thread_created", chat_thread_id=thread["chat_thread_id"])
+    return thread
+
+
+async def _ui_chat_threads_provider(limit: int, offset: int) -> dict[str, Any]:
+    return await chat_store.list_threads(limit=limit, offset=offset)
+
+
+async def _ui_chat_thread_detail_provider(chat_thread_id: str) -> dict[str, Any] | None:
+    return await chat_store.get_thread(chat_thread_id)
+
+
+async def _business_graph_select_context(
+    motive: str,
+    topics: list[dict[str, Any]],
+    source_ids: list[str],
+) -> list[dict[str, Any]]:
+    return await _select_workflow_knowledge_context(
+        motive=motive,
+        topics=topics,
+        source_ids=source_ids,
+    )
+
+
+async def _business_graph_run_iwi(motive: str, workflow_run_id: str, node_ids: list[str]) -> Any:
+    if dikiwi_mind is None or not hasattr(dikiwi_mind, "process_triggered_iwi"):
+        raise RuntimeError("DIKIWI triggered I/W/I runner is unavailable")
+    return await dikiwi_mind.process_triggered_iwi(
+        motive=motive,
+        workflow_run_id=workflow_run_id,
+        node_ids=node_ids,
+    )
+
+
+async def _business_graph_run_research(state: dict[str, Any]) -> dict[str, Any]:
+    topics = state.get("topics", [])
+    topic = ""
+    if topics and isinstance(topics[0], dict):
+        topic = str(topics[0].get("label") or "")
+    if not topic:
+        topic = str(state.get("motive") or "")[:120]
+    query = f"{topic} market technology competitors risks"
+    service = TavilyResearchService(store=research_store)
+    return await service.create_and_run_packet(
+        workflow_run_id=str(state.get("workflow_run_id") or ""),
+        topic=topic,
+        trigger="chat_motive",
+        query=query,
+        topic_extraction_id=str(state.get("topic_extraction_id") or ""),
+        model="mini",
+        internal_context=list(state.get("knowledge_context", [])),
+        max_results=5,
+    )
+
+
+async def _business_graph_run_business_plan(state: dict[str, Any]) -> dict[str, Any]:
+    synthesizer = BusinessPlanSynthesizer(
+        store=business_plan_store,
+        vault_path=_studio_vault_path(),
+    )
+    research_ids = [str(item) for item in state.get("research_ids", []) if str(item)]
+    research_jobs = [
+        job
+        for research_id in research_ids
+        if (job := await research_store.get_research_job(research_id)) is not None
+    ]
+    evaluations = await synthesizer.run_team_evaluations(
+        workflow_run_id=str(state.get("workflow_run_id") or ""),
+        workflow_plan_id=str(state.get("workflow_plan_id") or ""),
+        motive=str(state.get("motive") or ""),
+        knowledge_context=list(state.get("knowledge_context", [])),
+        iwi_result=dict(state.get("iwi_result", {})),
+        research_jobs=research_jobs,
+        second_opinion_packets=list(state.get("second_opinion_packets", [])),
+    )
+    business_plan = await synthesizer.synthesize_business_plan(
+        workflow_run_id=str(state.get("workflow_run_id") or ""),
+        workflow_plan_id=str(state.get("workflow_plan_id") or ""),
+        motive=str(state.get("motive") or ""),
+        evaluations=evaluations,
+        knowledge_context=list(state.get("knowledge_context", [])),
+        research_jobs=research_jobs,
+        second_opinion_packets=list(state.get("second_opinion_packets", [])),
+    )
+    return {
+        "evaluations": evaluations,
+        "business_plan": business_plan,
+    }
+
+
+async def _ui_chat_message_handler(chat_thread_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    content = str(payload.get("content") or payload.get("motive") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Chat message content is required")
+    role = str(payload.get("role") or "user").strip()
+    if role != "user":
+        raise HTTPException(status_code=400, detail="Only user chat messages can trigger workflow planning")
+    source_ids = [str(item).strip() for item in payload.get("source_ids", []) if str(item).strip()]
+    run = await workflow_run_store.create_run(
+        workflow_kind="business_planning",
+        input_summary=content[:500],
+        metadata={
+            "motive": content,
+            "chat_thread_id": chat_thread_id,
+            "source_ids": source_ids,
+            "attachment_ids": payload.get("attachment_ids", []),
+            "trigger": "ui_chat_message",
+        },
+    )
+    await emit_ui_event(
+        "workflow_run_queued",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        chat_thread_id=chat_thread_id,
+        motive=content,
+        source_ids=source_ids,
+    )
+    dependencies = BusinessPlanningDependencies(
+        chat_store=chat_store,
+        workflow_run_store=workflow_run_store,
+        select_context=_business_graph_select_context,
+        run_iwi=_business_graph_run_iwi,
+        run_research=_business_graph_run_research,
+        run_business_plan=_business_graph_run_business_plan,
+        emit_event=emit_ui_event,
+    )
+    async with async_sqlite_checkpointer(SETTINGS.langgraph_checkpoint_db_path) as checkpointer:
+        graph = build_business_planning_graph(checkpointer, dependencies=dependencies)
+        graph_result = await graph.ainvoke(
+            {
+                "workflow_run_id": run.workflow_run_id,
+                "langgraph_thread_id": run.langgraph_thread_id,
+                "workflow_kind": "business_planning",
+                "status": "queued",
+                "steps": [],
+                "motive": content,
+                "chat_thread_id": chat_thread_id,
+                "source_ids": source_ids,
+                "research_required": bool(payload.get("research_required", False)),
+            },
+            {"configurable": {"thread_id": run.langgraph_thread_id}},
+        )
+    interrupt_payload = {}
+    if graph_result.get("__interrupt__"):
+        interrupt_payload = graph_result["__interrupt__"][0].value
+    workflow_plan_id = str(interrupt_payload.get("workflow_plan_id") or graph_result.get("workflow_plan_id") or "")
+    workflow_plan = await chat_store.get_workflow_plan(workflow_plan_id) if workflow_plan_id else None
+    if workflow_plan is None:
+        raise HTTPException(status_code=500, detail="Business planning graph did not create a workflow plan")
+    message = await chat_store.get_message(workflow_plan["message_id"])
+    topic_extraction = await chat_store.get_topic_extraction(workflow_plan["topic_extraction_id"])
+    chat_thread = await chat_store.get_thread(chat_thread_id)
+    messages = chat_thread.get("messages", []) if chat_thread else []
+    assistant_message = next(
+        (
+            item
+            for item in reversed(messages)
+            if item.get("role") == "assistant"
+            and item.get("metadata", {}).get("workflow_plan_id") == workflow_plan_id
+        ),
+        None,
+    )
+    return {
+        "message": message,
+        "assistant_message": assistant_message,
+        "topic_extraction": topic_extraction,
+        "workflow_plan": workflow_plan,
+        "workflow_run": _workflow_snapshot_payload(await workflow_run_store.get_run(run.workflow_run_id) or run),
+        "graph_interrupt": interrupt_payload,
+    }
+
+
+async def _ui_workflow_plan_provider(workflow_plan_id: str) -> dict[str, Any] | None:
+    return await chat_store.get_workflow_plan(workflow_plan_id)
+
+
+async def _ui_research_jobs_provider(limit: int) -> dict[str, Any]:
+    items = await research_store.list_research_jobs(limit=limit)
+    return {"total": len(items), "items": items}
+
+
+async def _ui_research_job_provider(research_id: str) -> dict[str, Any] | None:
+    return await research_store.get_research_job(research_id)
+
+
+async def _ui_second_opinion_provider(limit: int) -> dict[str, Any]:
+    items = await research_store.list_second_opinions(limit=limit)
+    return {"total": len(items), "items": items}
+
+
+async def _ui_business_plan_provider(limit: int) -> dict[str, Any]:
+    items = await business_plan_store.list_business_plans(limit=limit)
+    return {"total": len(items), "items": items}
+
+
+async def _ui_business_plan_detail_provider(business_plan_id: str) -> dict[str, Any] | None:
+    return await business_plan_store.get_business_plan(business_plan_id)
+
+
+async def _dispatch_approved_workflow_plan(
+    workflow_plan: dict[str, Any],
+    *,
+    run_inline: bool = False,
+) -> dict[str, Any]:
+    if workflow_plan.get("status") not in {"approved", "dispatched"}:
+        raise HTTPException(status_code=409, detail="Workflow plan must be approved before dispatch")
+    node_ids = [
+        str(item.get("node_id")).strip()
+        for item in workflow_plan.get("knowledge_context", [])
+        if item.get("context_type") == "graph_information_node" and str(item.get("node_id") or "").strip()
+    ]
+    if not node_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="Workflow plan has no graph-backed Knowledge context for triggered I/W/I",
+        )
+    source_ids = _extract_source_ids_from_context_items(workflow_plan.get("knowledge_context", []))
+    run = await workflow_run_store.create_run(
+        workflow_kind="triggered_iwi",
+        input_summary=str(workflow_plan.get("motive") or "")[:500],
+        metadata={
+            "motive": workflow_plan.get("motive", ""),
+            "node_ids": node_ids,
+            "source_ids": source_ids,
+            "trigger": "confirmed_workflow_plan",
+            "workflow_plan_id": workflow_plan["workflow_plan_id"],
+            "topic_extraction_id": workflow_plan["topic_extraction_id"],
+            "chat_thread_id": workflow_plan["chat_thread_id"],
+            "message_id": workflow_plan["message_id"],
+        },
+    )
+    await chat_store.mark_workflow_plan_dispatched(
+        workflow_plan["workflow_plan_id"],
+        workflow_run_id=run.workflow_run_id,
+    )
+    await chat_store.add_message(
+        workflow_plan["chat_thread_id"],
+        role="assistant",
+        content="Confirmed workflow plan dispatched for I/W/I synthesis.",
+        metadata={
+            "workflow_plan_id": workflow_plan["workflow_plan_id"],
+            "workflow_run_id": run.workflow_run_id,
+            "notification_type": "workflow_plan_dispatched",
+        },
+    )
+    await emit_ui_event(
+        "workflow_run_queued",
+        workflow_run_id=run.workflow_run_id,
+        workflow_kind=run.workflow_kind,
+        workflow_plan_id=workflow_plan["workflow_plan_id"],
+        chat_thread_id=workflow_plan["chat_thread_id"],
+        motive=workflow_plan.get("motive", ""),
+        node_ids=node_ids,
+        source_ids=source_ids,
+    )
+    if run_inline:
+        await _run_iwi_workflow(
+            run.workflow_run_id,
+            motive=str(workflow_plan.get("motive") or ""),
+            node_ids=node_ids,
+        )
+    else:
+        workflow_tasks[run.workflow_run_id] = asyncio.create_task(
+            _run_iwi_workflow(
+                run.workflow_run_id,
+                motive=str(workflow_plan.get("motive") or ""),
+                node_ids=node_ids,
+            )
+        )
+    updated = await workflow_run_store.get_run(run.workflow_run_id)
+    return {
+        "workflow_plan": await chat_store.get_workflow_plan(workflow_plan["workflow_plan_id"]),
+        "workflow_run": _workflow_snapshot_payload(updated or run),
+    }
+
+
+async def _ui_workflow_plan_confirm_handler(workflow_plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    approved = payload.get("approved") is True
+    plan = await chat_store.get_workflow_plan(workflow_plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Workflow plan not found")
+
+    plan_metadata = plan.get("metadata", {})
+    graph_workflow_run_id = str(plan_metadata.get("workflow_run_id") or "").strip()
+    graph_created = plan_metadata.get("created_from") == "business_planning_graph"
+    graph_result: dict[str, Any] | None = None
+    business_workflow_run = None
+
+    if graph_created and plan.get("status") == "awaiting_confirmation":
+        if not graph_workflow_run_id:
+            raise HTTPException(status_code=409, detail="Workflow plan is missing its business-planning workflow run")
+        business_workflow_run = await workflow_run_store.get_run(graph_workflow_run_id)
+        if business_workflow_run is None:
+            raise HTTPException(status_code=404, detail="Business-planning workflow run not found")
+        dependencies = BusinessPlanningDependencies(
+            chat_store=chat_store,
+            workflow_run_store=workflow_run_store,
+            select_context=_business_graph_select_context,
+            run_iwi=_business_graph_run_iwi,
+            run_research=_business_graph_run_research,
+            run_business_plan=_business_graph_run_business_plan,
+            emit_event=emit_ui_event,
+        )
+        async with async_sqlite_checkpointer(SETTINGS.langgraph_checkpoint_db_path) as checkpointer:
+            graph = build_business_planning_graph(checkpointer, dependencies=dependencies)
+            graph_result = await graph.ainvoke(
+                Command(
+                    resume={
+                        "approved": approved,
+                        "decided_by": str(payload.get("decided_by") or "user"),
+                        "dispatch_iwi": payload.get("dispatch", True) is not False,
+                        "dispatch_research": payload.get("dispatch_research") is True,
+                        "dispatch_business_plan": payload.get("dispatch_business_plan") is True,
+                    }
+                ),
+                {"configurable": {"thread_id": business_workflow_run.langgraph_thread_id}},
+            )
+        plan = await chat_store.get_workflow_plan(workflow_plan_id)
+        business_workflow_run = await workflow_run_store.get_run(graph_workflow_run_id)
+    else:
+        plan = await chat_store.set_workflow_plan_decision(
+            workflow_plan_id,
+            approved=approved,
+            decided_by=str(payload.get("decided_by") or "user"),
+            metadata={"decision_source": "ui_workflow_plan_confirm"},
+        )
+        await emit_ui_event(
+            "workflow_plan_confirmed" if approved else "workflow_plan_rejected",
+            workflow_plan_id=workflow_plan_id,
+            chat_thread_id=plan["chat_thread_id"],
+            status=plan["status"],
+        )
+
+    if plan is None:
+        raise HTTPException(status_code=500, detail="Workflow plan confirmation failed")
+    if not approved or payload.get("dispatch", True) is False:
+        return {
+            "workflow_plan": plan,
+            "business_workflow_run": (
+                _workflow_snapshot_payload(business_workflow_run)
+                if business_workflow_run is not None
+                else None
+            ),
+            "graph_result": graph_result,
+        }
+    if graph_created:
+        business_workflow_run = (
+            await workflow_run_store.get_run(graph_workflow_run_id)
+            if graph_workflow_run_id
+            else business_workflow_run
+        )
+        return {
+            "workflow_plan": plan,
+            "business_workflow_run": (
+                _workflow_snapshot_payload(business_workflow_run)
+                if business_workflow_run is not None
+                else None
+            ),
+            "graph_result": graph_result,
+        }
+    return await _dispatch_approved_workflow_plan(plan, run_inline=bool(payload.get("run_inline", False)))
+
+
 async def _run_iwi_workflow(workflow_run_id: str, *, motive: str, node_ids: list[str]) -> None:
     await workflow_run_store.update_status(
         workflow_run_id,
@@ -2139,31 +2683,40 @@ async def _run_iwi_workflow(workflow_run_id: str, *, motive: str, node_ids: list
 
 async def _ui_iwi_workflow_trigger(payload: dict[str, Any]) -> dict[str, Any]:
     motive = str(payload.get("motive", "")).strip()
-    node_ids = [str(item).strip() for item in payload.get("node_ids", []) if str(item).strip()]
-    run = await workflow_run_store.create_run(
-        workflow_kind="triggered_iwi",
-        input_summary=motive[:500],
-        metadata={
-            "motive": motive,
-            "node_ids": node_ids,
-            "trigger": "ui_workflow",
+    workflow_plan_id = str(payload.get("workflow_plan_id") or "").strip()
+    if workflow_plan_id:
+        workflow_plan = await chat_store.get_workflow_plan(workflow_plan_id)
+        if workflow_plan is None:
+            raise HTTPException(status_code=404, detail="Workflow plan not found")
+        return await _dispatch_approved_workflow_plan(
+            workflow_plan,
+            run_inline=bool(payload.get("run_inline", False)),
+        )
+
+    chat_thread_id = str(payload.get("chat_thread_id") or "").strip()
+    if not chat_thread_id:
+        thread = await chat_store.create_thread(
+            title=motive[:80],
+            metadata={"created_from": "ui_iwi_workflow_trigger"},
+        )
+        chat_thread_id = thread["chat_thread_id"]
+    plan_payload = await _ui_chat_message_handler(
+        chat_thread_id,
+        {
+            "role": "user",
+            "content": motive,
+            "source_ids": payload.get("source_ids", []),
+            "attachment_ids": payload.get("attachment_ids", []),
+            "research_required": payload.get("research_required", False),
         },
     )
-    await emit_ui_event(
-        "workflow_run_queued",
-        workflow_run_id=run.workflow_run_id,
-        workflow_kind=run.workflow_kind,
-        motive=motive,
-        node_ids=node_ids,
-    )
-    if payload.get("run_inline") is True:
-        await _run_iwi_workflow(run.workflow_run_id, motive=motive, node_ids=node_ids)
-    else:
-        workflow_tasks[run.workflow_run_id] = asyncio.create_task(
-            _run_iwi_workflow(run.workflow_run_id, motive=motive, node_ids=node_ids)
-        )
-    updated = await workflow_run_store.get_run(run.workflow_run_id)
-    return _workflow_snapshot_payload(updated or run)
+    return {
+        "status": "awaiting_confirmation",
+        "chat_thread_id": chat_thread_id,
+        "message": plan_payload["message"],
+        "topic_extraction": plan_payload["topic_extraction"],
+        "workflow_plan": plan_payload["workflow_plan"],
+    }
 
 
 def _studio_vault_path() -> Path:
@@ -2344,6 +2897,9 @@ async def lifespan(app: FastAPI):
     await graph_db.initialize()
     await source_store.initialize()
     await workflow_run_store.initialize()
+    await chat_store.initialize()
+    await research_store.initialize()
+    await business_plan_store.initialize()
     ui_event_hub.configure_persistence(SETTINGS.ui_event_log_path)
     loaded_ui_events = await ui_event_hub.load_persisted(limit=SETTINGS.ui_event_trace_limit)
     if loaded_ui_events:
@@ -2537,6 +3093,9 @@ async def lifespan(app: FastAPI):
         source_worker_tasks = []
     if worker:
         await worker.stop()
+    await business_plan_store.close()
+    await research_store.close()
+    await chat_store.close()
     await workflow_run_store.close()
     await source_store.close()
     await fetcher.stop()
@@ -2620,6 +3179,17 @@ app.include_router(
         source_jobs_provider=_ui_source_jobs_provider,
         workflow_trigger_handler=_ui_iwi_workflow_trigger,
         workflow_provider=_ui_workflows_provider,
+        chat_thread_create_handler=_ui_create_chat_thread,
+        chat_thread_provider=_ui_chat_threads_provider,
+        chat_thread_detail_provider=_ui_chat_thread_detail_provider,
+        chat_message_handler=_ui_chat_message_handler,
+        workflow_plan_provider=_ui_workflow_plan_provider,
+        workflow_plan_confirm_handler=_ui_workflow_plan_confirm_handler,
+        research_jobs_provider=_ui_research_jobs_provider,
+        research_job_provider=_ui_research_job_provider,
+        second_opinion_provider=_ui_second_opinion_provider,
+        business_plan_provider=_ui_business_plan_provider,
+        business_plan_detail_provider=_ui_business_plan_detail_provider,
         proposal_provider=_ui_proposals_provider,
         entrepreneurship_provider=_ui_entrepreneurship_provider,
         vault_notes_provider=_ui_vault_notes_provider,

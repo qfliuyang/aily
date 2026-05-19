@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from aily.chaos.config import ChaosConfig
+from aily.chaos.kiosk_markdown import render_kiosk_markdown
 from aily.chaos.tagger.engine import IntelligentTagger
 from aily.chaos.types import (
     ExtractedContentMultimodal,
@@ -316,7 +317,7 @@ class ChaosProcessor:
             f.write("---\n\n")
             f.write(extracted.get_full_text())
 
-        # Save complete markdown transcript to vault 00-Chaos (one-to-one)
+        # Save complete source-equivalent Markdown transcript to vault 00-Chaos.
         if self.vault_path:
             transcript_dir = self.vault_path / "00-Chaos"
             transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -328,19 +329,19 @@ class ChaosProcessor:
                 transcript_path = transcript_dir / f"{base_name}_{counter}.md"
                 counter += 1
 
-            with open(transcript_path, "w", encoding="utf-8") as f:
-                f.write(f"# {extracted.title or base_name}\n\n")
-                f.write(f"**Original File:** {job.file_path.name}\n\n")
-                f.write(f"**Type:** {extracted.source_type}\n\n")
-                f.write(f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                f.write("---\n\n")
-                f.write(extracted.get_full_text())
-                if extracted.segments:
-                    f.write("\n\n## Segments\n\n")
-                    for seg in extracted.segments:
-                        start = self._format_timestamp(seg.start_time)
-                        end = self._format_timestamp(seg.end_time)
-                        f.write(f"**[{start} - {end}]** {seg.text}\n\n")
+            rendered = await render_kiosk_markdown(
+                extracted=extracted,
+                source_path=job.file_path,
+                base_name=base_name,
+                vault_path=self.vault_path,
+            )
+            extracted.metadata["kiosk_markdown"] = {
+                "page_count": rendered.page_count,
+                "screenshot_count": rendered.screenshot_count,
+                "screenshot_renderer": rendered.screenshot_renderer,
+                "screenshot_error": rendered.screenshot_error,
+            }
+            transcript_path.write_text(rendered.markdown, encoding="utf-8")
 
             logger.info(
                 "Saved complete transcript to vault 00-Chaos: %s",

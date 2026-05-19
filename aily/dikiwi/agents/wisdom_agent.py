@@ -195,18 +195,23 @@ class WisdomAgent(DikiwiAgent):
                 return []
 
             zettels_data = result.get("zettels", [])
-            return [
-                ZettelkastenNote(
+            zettels: list[ZettelkastenNote] = []
+            for z in zettels_data:
+                if not isinstance(z, dict) or not z.get("title") or len(z.get("content", "")) <= 100:
+                    continue
+                note = ZettelkastenNote(
                     id=f"z{uuid.uuid4().hex[:6]}",
-                    title=z.get("title", "Untitled"),
+                    title=z.get("canonical_title") or z.get("title", "Untitled"),
                     content=z.get("content", ""),
                     tags=z.get("tags", []),
                     links_to=z.get("links_to", []),
                     confidence=z.get("confidence", 0.5),
                 )
-                for z in zettels_data
-                if isinstance(z, dict) and z.get("title") and len(z.get("content", "")) > 100
-            ]
+                setattr(note, "thesis", z.get("thesis", ""))
+                setattr(note, "source_evidence", z.get("source_evidence", []))
+                setattr(note, "open_questions", z.get("open_questions", []))
+                zettels.append(note)
+            return zettels
         except Exception as exc:
             logger.debug("[DIKIWI] Wisdom synthesis failed: %s", exc)
             return []

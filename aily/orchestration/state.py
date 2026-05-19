@@ -45,10 +45,27 @@ class WorkflowState(TypedDict, total=False):
     stage_count: int
     stage_results: list[dict[str, Any]]
     topic_ids: list[str]
+    topics: list[dict[str, Any]]
+    source_ids: list[str]
+    chat_thread_id: str
+    message_id: str
+    topic_extraction_id: str
+    workflow_plan_id: str
+    workflow_plan: dict[str, Any]
+    knowledge_context: list[dict[str, Any]]
+    research_required: bool
+    execute_iwi: bool
+    execute_research: bool
+    execute_business_plan: bool
+    node_ids: list[str]
+    iwi_result: dict[str, Any]
+    research_job: dict[str, Any]
     second_opinion_ids: list[str]
     research_ids: list[str]
     evaluation_ids: list[str]
+    team_evaluations: list[dict[str, Any]]
     business_plan_id: str
+    business_plan: dict[str, Any]
     obsidian_document_ids: list[str]
     approvals: dict[str, Any]
     metadata: dict[str, Any]

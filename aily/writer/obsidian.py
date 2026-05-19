@@ -24,7 +24,9 @@ class ObsidianWriter:
         draft_folder: str = "Aily Drafts",
         queue_db: Optional[QueueDB] = None,
     ) -> None:
-        self.api_key = api_key
+        self.api_key = api_key.strip()
+        if self.api_key.lower().startswith("bearer "):
+            raise ValueError("Obsidian REST API key must be configured without the literal 'Bearer ' prefix")
         self.vault_path = Path(vault_path)
         self.base_url = f"http://127.0.0.1:{port}"
         self.draft_folder = draft_folder

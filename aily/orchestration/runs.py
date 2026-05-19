@@ -50,6 +50,23 @@ class WorkflowRunStore:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_workflow_runs_kind ON workflow_runs(workflow_kind, updated_at)"
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_run_history (
+                history_id TEXT PRIMARY KEY,
+                workflow_run_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_node TEXT NOT NULL DEFAULT '',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE
+            )
+            """
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_run_history_run ON workflow_run_history(workflow_run_id, created_at)"
+        )
         await self._db.commit()
 
     async def close(self) -> None:
@@ -93,6 +110,14 @@ class WorkflowRunStore:
                 now,
             ),
         )
+        await self._insert_history(
+            run_id,
+            status="queued",
+            current_node="",
+            metadata=metadata or {},
+            last_error=None,
+            created_at=now,
+        )
         await db.commit()
         snapshot = await self.get_run(run_id)
         if snapshot is None:
@@ -116,7 +141,10 @@ class WorkflowRunStore:
         if metadata:
             next_metadata = {**next_metadata, **metadata}
         now = _utc_now()
-        completed_at = now if status in {"completed", "failed", "cancelled"} else existing.completed_at
+        completed_at = now if status in {"completed", "failed", "cancelled"} else None
+        next_last_error = last_error if last_error is not None else existing.last_error
+        if status in {"queued", "running", "interrupted", "completed"} and last_error is None:
+            next_last_error = None
         await db.execute(
             """
             UPDATE workflow_runs
@@ -134,9 +162,17 @@ class WorkflowRunStore:
                 json.dumps(next_metadata, ensure_ascii=False, sort_keys=True),
                 now,
                 completed_at,
-                last_error if last_error is not None else existing.last_error,
+                next_last_error,
                 workflow_run_id,
             ),
+        )
+        await self._insert_history(
+            workflow_run_id,
+            status=status,
+            current_node=current_node if current_node is not None else existing.current_node,
+            metadata=next_metadata,
+            last_error=next_last_error,
+            created_at=now,
         )
         await db.commit()
         updated = await self.get_run(workflow_run_id)
@@ -210,6 +246,59 @@ class WorkflowRunStore:
                 (status, safe_limit, safe_offset),
             )
         return [self._snapshot_from_row(row) for row in await cursor.fetchall()]
+
+    async def list_run_history(self, workflow_run_id: str) -> list[dict[str, Any]]:
+        db = self._check_db()
+        cursor = await db.execute(
+            """
+            SELECT history_id, workflow_run_id, status, current_node, metadata,
+                   last_error, created_at
+            FROM workflow_run_history
+            WHERE workflow_run_id = ?
+            ORDER BY created_at ASC
+            """,
+            (workflow_run_id,),
+        )
+        rows = await cursor.fetchall()
+        history: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            try:
+                payload["metadata"] = json.loads(payload.get("metadata") or "{}")
+            except json.JSONDecodeError:
+                payload["metadata"] = {}
+            history.append(payload)
+        return history
+
+    async def _insert_history(
+        self,
+        workflow_run_id: str,
+        *,
+        status: WorkflowStatus,
+        current_node: str,
+        metadata: dict[str, Any],
+        last_error: str | None,
+        created_at: str,
+    ) -> None:
+        db = self._check_db()
+        await db.execute(
+            """
+            INSERT INTO workflow_run_history (
+                history_id, workflow_run_id, status, current_node, metadata,
+                last_error, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"hist_{uuid.uuid4().hex}",
+                workflow_run_id,
+                status,
+                current_node,
+                json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                last_error,
+                created_at,
+            ),
+        )
 
     @staticmethod
     def _snapshot_from_row(row: aiosqlite.Row) -> WorkflowRunSnapshot:

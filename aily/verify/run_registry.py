@@ -30,6 +30,17 @@ def _read_json(path: Path, default: Any) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_json_payload(path: Path, default: Any) -> Any:
+    payload = _read_json(path, default)
+    if not isinstance(payload, dict) or "_origin" not in payload:
+        return payload
+    if "records" in payload and len(payload) == 2:
+        return payload["records"]
+    if "data" in payload and len(payload) == 2:
+        return payload["data"]
+    return {key: value for key, value in payload.items() if key != "_origin"}
+
+
 def _read_jsonl(path: Path, *, limit: int = 200) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -38,7 +49,10 @@ def _read_jsonl(path: Path, *, limit: int = 200) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
+            record = json.loads(line)
+            if isinstance(record, dict) and "_origin" in record and len(record) == 1:
+                continue
+            records.append(record)
         except json.JSONDecodeError:
             records.append({"raw": line, "parse_error": True})
     return records[-max(1, limit):]
@@ -61,7 +75,7 @@ class RunRegistry:
                 manifest_path = path / "manifest.json"
                 if not manifest_path.exists():
                     continue
-                manifest = _read_json(manifest_path, {})
+                manifest = _read_json_payload(manifest_path, {})
                 runs.append(self._summary(path.name, manifest))
 
         runs.sort(key=lambda item: item.get("completed_at") or item.get("started_at") or "", reverse=True)
@@ -75,7 +89,7 @@ class RunRegistry:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         path = self._run_path(run_id)
-        manifest = _read_json(path / "manifest.json", {})
+        manifest = _read_json_payload(path / "manifest.json", {})
         if not manifest:
             raise RunNotFoundError(f"Run not found: {run_id}")
 
@@ -83,15 +97,18 @@ class RunRegistry:
             "run": self._summary(path.name, manifest),
             "manifest": manifest,
             "command": (path / "command.txt").read_text(encoding="utf-8") if (path / "command.txt").exists() else "",
-            "environment": _read_json(path / "environment.json", {}),
-            "source_manifest": _read_json(path / "source-manifest.json", []),
-            "vault_counts_before": _read_json(path / "vault-counts-before.json", {}),
-            "vault_counts_after": _read_json(path / "vault-counts-after.json", {}),
-            "graph_before": _read_json(path / "graph-before.json", {}),
-            "graph_after": _read_json(path / "graph-after.json", {}),
-            "failures": _read_json(path / "failures.json", []),
-            "ui_event_summary": _read_json(path / "ui-event-summary.json", {}),
-            "samples": _read_json(path / "samples" / "index.json", {}),
+            "environment": _read_json_payload(path / "environment.json", {}),
+            "source_manifest": _read_json_payload(path / "source-manifest.json", []),
+            "vault_counts_before": _read_json_payload(path / "vault-counts-before.json", {}),
+            "vault_counts_after": _read_json_payload(path / "vault-counts-after.json", {}),
+            "graph_before": _read_json_payload(path / "graph-before.json", {}),
+            "graph_after": _read_json_payload(path / "graph-after.json", {}),
+            "failures": _read_json_payload(path / "failures.json", []),
+            "ui_event_summary": _read_json_payload(path / "ui-event-summary.json", {}),
+            "evidence_matrix": _read_json_payload(path / "evidence-matrix.json", {}),
+            "obsidian_vault_review": _read_json_payload(path / "obsidian-vault-review.json", {}),
+            "cross_source_reconciliation": _read_json_payload(path / "cross-source-reconciliation.json", {}),
+            "samples": _read_json_payload(path / "samples" / "index.json", {}),
         }
 
     def get_events(self, run_id: str, *, limit: int = 500) -> dict[str, Any]:

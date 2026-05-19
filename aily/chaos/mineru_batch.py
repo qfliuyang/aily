@@ -16,6 +16,7 @@ from typing import Any
 
 from aily.chaos.config import ChaosConfig
 from aily.chaos.dikiwi_bridge import ChaosDikiwiBridge
+from aily.chaos.kiosk_markdown import render_kiosk_markdown
 from aily.chaos.processors.mineru_processor import MinerUProcessor, _MinerULocalAPIService
 from aily.chaos.types import ExtractedContentMultimodal
 from aily.config import SETTINGS
@@ -323,7 +324,7 @@ class MinerUChaosBatchRunner:
                 None,
             )
 
-        saved = self._persist_extraction(extracted, source_path)
+        saved = await self._persist_extraction(extracted, source_path)
         return (
             MinerUBatchItemResult(
                 source_path=str(source_path),
@@ -336,7 +337,7 @@ class MinerUChaosBatchRunner:
             extracted,
         )
 
-    def _persist_extraction(
+    async def _persist_extraction(
         self,
         extracted: ExtractedContentMultimodal,
         source_path: Path,
@@ -349,15 +350,22 @@ class MinerUChaosBatchRunner:
         base_name = chaos_base_name(extracted, source_path)
         json_path = output_dir / f"{base_name}.json"
         markdown_path = output_dir / f"{base_name}.md"
-        transcript_path = self._write_chaos_transcript(extracted, source_path)
+        transcript_result = await self._write_chaos_transcript(extracted, source_path)
+        transcript_path = transcript_result["path"]
         extracted.metadata["chaos_note_path"] = str(transcript_path)
+        extracted.metadata["kiosk_markdown"] = {
+            "page_count": transcript_result["page_count"],
+            "screenshot_count": transcript_result["screenshot_count"],
+            "screenshot_renderer": transcript_result["screenshot_renderer"],
+            "screenshot_error": transcript_result["screenshot_error"],
+        }
         extracted.metadata["chaos_visual_assets"] = self._get_visual_asset_embeds(extracted, base_name)
 
         json_path.write_text(
             json.dumps(extracted.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        markdown_path.write_text(self._render_processed_markdown(extracted, source_path, base_name), encoding="utf-8")
+        markdown_path.write_text(transcript_path.read_text(encoding="utf-8"), encoding="utf-8")
 
         return {
             "json_path": json_path,
@@ -365,11 +373,11 @@ class MinerUChaosBatchRunner:
             "transcript_path": transcript_path,
         }
 
-    def _write_chaos_transcript(
+    async def _write_chaos_transcript(
         self,
         extracted: ExtractedContentMultimodal,
         source_path: Path,
-    ) -> Path:
+    ) -> dict[str, Any]:
         """Write a one-to-one transcript note into 00-Chaos."""
         transcript_dir = self.vault_path / "00-Chaos"
         transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -382,26 +390,21 @@ class MinerUChaosBatchRunner:
             transcript_path = transcript_dir / f"{base_name}_{counter}.md"
             counter += 1
 
-        lines = [
-            f"# {display_title}",
-            "",
-            f"**Original File:** {source_path.name}",
-            "",
-            f"**Type:** {extracted.source_type}",
-            "",
-            f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "",
-            f"**Semantic Node:** {base_name}",
-            "",
-            "---",
-            "",
-            extracted.get_full_text(),
-        ]
-        asset_section = self._render_visual_asset_section(extracted, base_name)
-        if asset_section:
-            lines.extend(["", *asset_section])
-        transcript_path.write_text("\n".join(lines), encoding="utf-8")
-        return transcript_path
+        rendered = await render_kiosk_markdown(
+            extracted=extracted,
+            source_path=source_path,
+            base_name=base_name,
+            vault_path=self.vault_path,
+        )
+        transcript_path.write_text(rendered.markdown, encoding="utf-8")
+        return {
+            "path": transcript_path,
+            "page_count": rendered.page_count,
+            "screenshot_count": rendered.screenshot_count,
+            "screenshot_renderer": rendered.screenshot_renderer,
+            "screenshot_error": rendered.screenshot_error,
+            "display_title": display_title,
+        }
 
     def _render_processed_markdown(
         self,

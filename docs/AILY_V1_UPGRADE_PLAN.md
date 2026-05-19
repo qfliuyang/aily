@@ -999,7 +999,7 @@ Documents stored in Obsidian:
 - Engineering Assessment evaluations
 - Commercial Feasibility evaluations
 - comprehensive business plans
-- outbound delivery records
+- evidence-bound dossiers
 
 Recommended V1 vault layout:
 
@@ -1018,14 +1018,16 @@ Recommended V1 vault layout:
   Second-Opinions/
 08-Evaluations/
 09-Business-Plans/
-10-Outbox/
+10-Dossiers/
 99-System/
 ```
 
 `00-Chaos` is already assigned to raw source material, extracted assets, and
 documents converted into Markdown. V1 must not introduce another `00-*` folder
 for status, prompts, or operations. System-level documents should live in
-`99-System`, while outbound delivery records should remain in `10-Outbox`.
+`99-System`. Dossiers are the promoted final reader-facing synthesis artifact
+and should live in `10-Dossiers`. The previous export/email delivery stage is
+removed from V1.
 
 Obsidian document metadata should include:
 
@@ -1054,60 +1056,41 @@ Acceptance criteria:
 - The vault can be backed up and restored as the human-readable record of Aily's
   work.
 
-### 12. Document Export And Email Delivery
+### 12. Dossier Generation
 
 Purpose:
 
-Provide Aily's official outbound channel for announcing, sharing, or
-disseminating polished ideas.
+Provide Aily's official reader-facing learning artifact for polished,
+evidence-bound ideas.
 
 Flow:
 
 ```text
 Obsidian Markdown
-  -> export job
-  -> PDF and/or DOCX
-  -> email draft
-  -> optional approval
-  -> send email with attachments
-  -> delivery record in Obsidian
+  -> claim extraction
+  -> Vault evidence reconciliation
+  -> Tavily evidence reconciliation
+  -> unsupported-claim quarantine
+  -> dossier in 10-Dossiers
 ```
 
-Supported export targets:
+Supported dossier sources:
 
-- PDF
-- DOCX
-
-Primary V1 export source:
-
-- Obsidian Markdown business plans
-
-Future export sources:
-
-- Deep Research reports
-- team evaluations
-- I/W/I summaries
-- investor-style one-pagers
-- technical memos
-
-Email delivery requirements:
-
-- configurable SMTP or provider-backed email transport
-- recipient list
-- subject and body template
-- attachment selection
-- preview/dry-run mode
-- manual approval before sending by default
-- audit log of sent messages
-- delivery record written to `10-Outbox`
+- source-equivalent Markdown
+- Data, Information, and Knowledge notes
+- Insight, Wisdom, and Impact notes
+- research packets
+- specialist evaluations
+- business plans
+- Tavily search results
 
 Acceptance criteria:
 
-- A business plan stored in Obsidian can be exported to PDF.
-- A business plan stored in Obsidian can be exported to DOCX.
-- An email can be generated with exported attachments.
-- Dry-run mode shows recipient, subject, body, and attachments without sending.
-- Sent emails create an Obsidian delivery record with attachment hashes.
+- A dossier is written under `10-Dossiers`.
+- Every claim is tied to Vault evidence or Tavily evidence.
+- Unsupported claims remain explicitly marked as hypotheses.
+- The dossier is readable as a substantive human learning document, not a
+  placeholder or internal audit dump.
 
 ## V1.0 Data Model Additions
 
@@ -1287,7 +1270,7 @@ Primary surfaces:
 7. Team Evaluation Room
 8. Business Plan Workspace
 9. Obsidian Document Vault
-10. Export And Email Outbox
+10. Dossier Workspace
 11. Operations / Evidence
 
 Recommended V1 layout:
@@ -1776,29 +1759,27 @@ Acceptance:
   folder.
 - Obsidian remains usable even if Studio is unavailable.
 
-### Phase 14: Export And Email Outbox
+### Phase 14: Evidence-Bound Dossiers
 
 Goal:
 
-Turn Obsidian Markdown into formal outbound documents and email attachments.
+Turn Vault-grounded knowledge into human-readable dossiers with explicit source
+lineage and no unsupported claims.
 
 Deliverables:
 
-- Markdown-to-PDF export
-- Markdown-to-DOCX export
-- email draft model
-- configurable email transport
-- preview/dry-run flow
-- manual approval gate
-- delivery records in `10-Outbox`
+- dossier generation under `10-Dossiers`
+- claim-to-evidence mapping
+- Vault and Tavily source citations
+- unsupported-claim quarantine
+- readability and source-lineage scoring
 
 Acceptance:
 
-- A business plan in Obsidian exports to PDF and DOCX.
-- A dry-run email displays recipients, subject, body, and attachments.
-- An approved email can be sent with exported attachments.
-- Delivery records include recipient, timestamp, attachment hashes, and source
-  Obsidian document IDs.
+- A dossier can be regenerated from the Vault without manually authored content.
+- Every substantive claim maps to Vault evidence or Tavily evidence.
+- Unsupported hypotheses are labeled as unresolved, not presented as facts.
+- The dossier is readable as a learning document for a human reviewer.
 
 ### Phase 15: Operations, Security, And Evidence
 
