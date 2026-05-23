@@ -1,7 +1,7 @@
 {
   "name": "aily-copilot",
-  "version": "0.2.0",
-  "description": "Aily-backed Obsidian Copilot fork for grounded vault chat, dossiers, and preview-first drafts.",
+  "version": "0.3.0",
+  "description": "Aily's Obsidian-native Copilot, forked from Obsidian Copilot and connected to the Aily knowledge backend.",
   "main": "main.js",
   "scripts": {
     "dev": "run-p dev:*",
@@ -23,7 +23,7 @@
     "test:vault": "bash scripts/test-vault.sh"
   },
   "keywords": [],
-  "author": "Logan Yang",
+  "author": "Aily, based on Obsidian Copilot by Logan Yang",
   "nano-staged": {
     "*.{js,jsx,ts,tsx,json,css,md}": [
       "prettier --write"

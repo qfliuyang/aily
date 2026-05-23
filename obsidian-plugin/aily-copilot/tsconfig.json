@@ -21,6 +21,6 @@
     "types": ["jest"],
     "lib": ["DOM", "DOM.Iterable", "ES5", "ES6", "ES7", "ES2022", "ESNext"]
   },
-  "include": ["src/main.ts"],
+  "include": ["**/*.ts", "src", "typings/**/*.ts"],
   "exclude": ["node_modules"]
 }

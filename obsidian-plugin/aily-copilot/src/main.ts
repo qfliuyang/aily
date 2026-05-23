@@ -1,442 +1,992 @@
+import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
+import ProjectManager from "@/LLMProviders/projectManager";
 import {
-  App,
-  ItemView,
-  MarkdownRenderer,
+  CustomModel,
+  getCurrentProject,
+  setSelectedTextContexts,
+  getSelectedTextContexts,
+} from "@/aiParams";
+import { NoteSelectedTextContext, SelectedTextContext } from "@/types/message";
+import { registerCommands } from "@/commands";
+import CopilotView from "@/components/CopilotView";
+import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
+import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
+
+import { registerContextMenu } from "@/commands/contextMenu";
+import { CustomCommandRegister } from "@/commands/customCommandRegister";
+import { migrateCommands, suggestDefaultCommands } from "@/commands/migrator";
+import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
+import { SystemPromptRegister } from "@/system-prompts/systemPromptRegister";
+import { ProjectRegister } from "@/projects/projectRegister";
+import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
+import { ChatManager } from "@/core/ChatManager";
+import { MessageRepository } from "@/core/MessageRepository";
+import { logError, logInfo, logWarn } from "@/logger";
+import { logFileManager } from "@/logFileManager";
+import { KeychainService } from "@/services/keychainService";
+import {
+  persistSettings,
+  loadSettingsWithKeychain,
+  flushPersistence,
+  resetPersistenceState,
+} from "@/services/settingsPersistence";
+import { UserMemoryManager } from "@/memory/UserMemoryManager";
+import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
+import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
+import {
+  getWebViewerService,
+  startActiveWebTabTracking,
+} from "@/services/webViewerService/webViewerServiceSingleton";
+import { WebSelectionTracker } from "@/services/webViewerService/webViewerServiceSelection";
+import VectorStoreManager from "@/search/vectorStoreManager";
+import { CopilotSettingTab } from "@/settings/SettingsPage";
+import {
+  getModelKeyFromModel,
+  getSettings,
+  setSettings,
+  subscribeToSettingsChange,
+} from "@/settings/model";
+import { ChatUIState } from "@/state/ChatUIState";
+import { VaultDataManager } from "@/state/vaultDataAtoms";
+import { FileParserManager } from "@/tools/FileParserManager";
+import { initializeBuiltinTools } from "@/tools/builtinTools";
+import {
+  ChatSelectionHighlightController,
+  hideChatSelectionHighlight,
+  QuickAskController,
+  SelectionHighlight,
+} from "@/editor";
+import {
+  Editor,
+  MarkdownView,
+  Menu,
   Notice,
+  Platform,
   Plugin,
-  PluginSettingTab,
-  requestUrl,
-  Setting,
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
+import { ChatHistoryItem } from "@/components/chat-components/ChatHistoryPopover";
+import {
+  extractChatDate,
+  extractChatLastAccessedAtMs,
+  extractChatTitle,
+  filterChatHistoryFiles,
+} from "@/utils/chatHistoryUtils";
+import { RecentUsageManager } from "@/utils/recentUsageManager";
+import {
+  listMarkdownFiles,
+  patchFrontmatter,
+  resolveFileByPath,
+  trashFile,
+} from "@/utils/vaultAdapterUtils";
+import { v4 as uuidv4 } from "uuid";
 
-const VIEW_TYPE_AILY_COPILOT = "aily-copilot-view";
+// Removed unused FileTrackingState interface
 
-interface AilyCopilotSettings {
-  apiBaseUrl: string;
-  apiToken: string;
-  useLlm: boolean;
-  activeProjectId: string;
-}
-
-const DEFAULT_SETTINGS: AilyCopilotSettings = {
-  apiBaseUrl: "http://127.0.0.1:8000",
-  apiToken: "",
-  useLlm: true,
-  activeProjectId: "",
-};
-
-type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
-
-type AilyResponse<T> = T & { detail?: string };
-
-export default class AilyCopilotPlugin extends Plugin {
-  settings: AilyCopilotSettings;
-
+export default class CopilotPlugin extends Plugin {
+  // Plugin components
+  projectManager: ProjectManager;
+  brevilabsClient: BrevilabsClient;
+  userMessageHistory: string[] = [];
+  vectorStoreManager: VectorStoreManager;
+  fileParserManager: FileParserManager;
+  customCommandRegister: CustomCommandRegister;
+  systemPromptRegister: SystemPromptRegister;
+  projectRegister: ProjectRegister;
+  settingsUnsubscriber?: () => void;
+  chatUIState: ChatUIState;
+  userMemoryManager: UserMemoryManager;
+  quickAskController: QuickAskController;
+  chatSelectionHighlightController: ChatSelectionHighlightController;
+  private selectionDebounceTimer?: number;
+  private selectionChangeHandler?: () => void;
+  private selectionListenerDocument?: Document;
+  private lastSelectionSignature?: string;
+  private webSelectionTracker?: WebSelectionTracker;
+  private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
   async onload(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.registerView(VIEW_TYPE_AILY_COPILOT, (leaf) => new AilyCopilotView(leaf, this));
+    // Reason: clear stale module-level persistence state + KeychainService
+    // singleton left over from a previous plugin lifecycle in the same
+    // process (disable→enable, dev hot reload, "Open another vault" without
+    // restart). Doing this at the START of onload (instead of at the end of
+    // onunload) avoids a race: onunload is fire-and-forget from Obsidian's
+    // perspective, so its `await flushPersistence()` continuation can fire
+    // AFTER the next onload has already initialized — and would then null
+    // out the new instance, breaking saves until another full reload.
+    resetPersistenceState();
+    KeychainService.resetInstance();
+    KeychainService.getInstance(this.app);
+    await this.loadSettings();
+    this.settingsUnsubscriber = subscribeToSettingsChange((prev, next) => {
+      void (async () => {
+        try {
+          await persistSettings(next, (data) => this.saveData(data), prev);
+        } catch (error) {
+          // Reason: Do NOT rollback memory state on persist failure.
+          // The writeQueue serializes I/O, so a later setSettings() may already
+          // be queued. Rolling back memory would create a split where memory is S0
+          // but disk ends up at S2 when the later write succeeds.
+          // Instead, just notify the user — the in-memory state remains current,
+          // and the next successful persist will reconcile disk with memory.
+          logError("Failed to persist settings.", error);
+          new Notice("Copilot failed to save settings. Check logs and try again.");
+        }
+        registerCommands(this, prev, next);
+      })();
+    });
+    this.addSettingTab(new CopilotSettingTab(this.app, this));
 
-    this.addRibbonIcon("bot-message-square", "Open Aily Copilot", () => {
+    // Core plugin initialization
+
+    // Initialize built-in tools with vault access
+    initializeBuiltinTools(this.app.vault);
+
+    // Initialize BrevilabsClient
+    this.brevilabsClient = BrevilabsClient.getInstance();
+    this.brevilabsClient.setPluginVersion(this.manifest.version);
+    void checkIsPlusUser();
+    void refreshSelfHostModeValidation();
+
+    // Initialize ProjectManager
+    this.projectManager = ProjectManager.getInstance(this.app, this);
+
+    // Always construct VectorStoreManager; it internally no-ops when semantic search is disabled
+    this.vectorStoreManager = VectorStoreManager.getInstance();
+
+    // Initialize VaultDataManager for centralized vault data (notes, folders, tags)
+    // Note: VaultDataManager tracks ALL data; hooks filter based on parameters
+    const vaultDataManager = VaultDataManager.getInstance();
+    vaultDataManager.initialize();
+
+    // Initialize FileParserManager early with other core services
+    this.fileParserManager = new FileParserManager(this.brevilabsClient, this.app.vault);
+
+    // Initialize ChatUIState with new architecture
+    const messageRepo = new MessageRepository();
+    const chainManager = this.projectManager.getCurrentChainManager();
+    const chatManager = new ChatManager(messageRepo, chainManager, this.fileParserManager, this);
+    this.chatUIState = new ChatUIState(chatManager);
+
+    // Initialize UserMemoryManager
+    this.userMemoryManager = new UserMemoryManager(this.app);
+
+    // Initialize QuickAskController and register CM6 extension
+    this.quickAskController = new QuickAskController(this);
+    this.registerEditorExtension(this.quickAskController.createExtension());
+
+    // Initialize Chat selection highlight controller
+    this.chatSelectionHighlightController = new ChatSelectionHighlightController(this, {
+      closeQuickAskOnChatFocus: false,
+    });
+    this.chatSelectionHighlightController.initialize();
+
+    // Single source of truth for Active Web Tab ({activeWebTab}) state
+    // Preserves activeWebTab when switching to Chat view
+    // Only run on desktop - Web Viewer is not available on mobile
+    if (Platform.isDesktopApp) {
+      const { activeLeafRef, layoutRef } = startActiveWebTabTracking(this.app, {
+        preserveOnViewTypes: [CHAT_VIEWTYPE],
+      });
+      this.registerEvent(activeLeafRef);
+      this.registerEvent(layoutRef);
+    }
+
+    this.registerView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
+    this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
+
+    this.initActiveLeafChangeHandler();
+
+    this.addRibbonIcon("message-square", "Open Copilot Chat", (evt: MouseEvent) => {
       void this.activateView();
     });
 
-    this.addCommand({
-      id: "open-aily-copilot",
-      name: "Open Aily Copilot",
-      callback: () => void this.activateView(),
+    registerCommands(this, undefined, getSettings());
+
+    // Tool initialization is now handled automatically in CopilotPlusChainRunner and AutonomousAgentChainRunner
+
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu: Menu) => {
+        registerContextMenu(menu, this.app);
+      })
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        // Delegate to chat selection highlight controller
+        this.chatSelectionHighlightController.handleActiveLeafChange(leaf ?? null);
+
+        if (leaf && leaf.view instanceof MarkdownView) {
+          const file = leaf.view.file;
+          if (file) {
+            // Note: File tracking and real-time reindexing removed for simplicity
+            // Semantic search indexes are rebuilt manually or on startup as needed
+            const activeCopilotView = this.app.workspace
+              .getLeavesOfType(CHAT_VIEWTYPE)
+              .find((leaf) => leaf.view instanceof CopilotView)?.view as CopilotView;
+
+            if (activeCopilotView) {
+              const event = new CustomEvent(EVENT_NAMES.ACTIVE_LEAF_CHANGE);
+              activeCopilotView.eventTarget.dispatchEvent(event);
+            }
+          }
+        }
+      })
+    );
+
+    this.customCommandRegister = new CustomCommandRegister(this, this.app.vault);
+    this.systemPromptRegister = new SystemPromptRegister(this, this.app.vault);
+    this.projectRegister = new ProjectRegister(this.app);
+
+    this.app.workspace.onLayoutReady(() => {
+      // Reason: projects must initialize after vault file tree is indexed (onLayoutReady),
+      // not in onload(). Otherwise getAbstractFileByPath() returns null for non-hidden
+      // folders and the adapter fallback creates synthetic TFiles that crash vault.read().
+      // This matches the system-prompts initialization pattern.
+      this.projectRegister.initialize().catch((error) => {
+        logError("[Projects] ProjectRegister initialization failed", error);
+        new Notice("Failed to load projects. Check console for details.");
+      });
+
+      // Initialize custom commands
+      void this.customCommandRegister
+        .initialize()
+        .then(migrateCommands)
+        .then(suggestDefaultCommands);
+
+      // Initialize system prompts (independent from custom commands)
+      void this.systemPromptRegister
+        .initialize()
+        .then(() => migrateSystemPromptsFromSettings(this.app.vault));
     });
 
-    this.addCommand({
-      id: "ask-aily-about-active-note",
-      name: "Ask Aily about active note",
-      callback: async () => {
-        await this.activateView();
-        const view = this.getAilyView();
-        view?.seedFromActiveNote();
+    // Initialize automatic selection handler
+    this.initSelectionHandler();
+
+    // Initialize web selection watcher (Desktop only)
+    this.initWebSelectionWatcher();
+  }
+
+  async onunload() {
+    // Best-effort flush of pending keychain/data.json writes.
+    // Reason: onunload() is void in Obsidian's type system, but awaiting here
+    // is no worse than fire-and-forget, and consistent with the log flush below.
+    // (Module-level state + KeychainService singleton reset happen at the
+    // START of the next onload, not here — see comment in onload above for
+    // the late-write race that motivated the move.)
+    await flushPersistence();
+
+    // Clear all persistent selection highlights before unload
+    // This prevents "stuck" highlights after hot reload (dev environment)
+    this.clearAllPersistentSelectionHighlights();
+
+    // Cleanup chat selection highlight controller
+    this.chatSelectionHighlightController?.cleanup();
+
+    if (this.projectManager) {
+      this.projectManager.onunload();
+    }
+
+    // Cleanup VaultDataManager event listeners
+    const vaultDataManager = VaultDataManager.getInstance();
+    vaultDataManager.cleanup();
+
+    this.customCommandRegister.cleanup();
+    this.systemPromptRegister.cleanup();
+    this.projectRegister.cleanup();
+    this.settingsUnsubscriber?.();
+
+    // Cleanup selection handler
+    this.cleanupSelectionHandler();
+    this.cleanupWebSelectionWatcher();
+    this.clearSelectionContext();
+
+    // Cleanup Web Viewer state tracking (webview event listeners)
+    try {
+      const webViewerService = getWebViewerService(this.app);
+      webViewerService.stopActiveWebTabTracking();
+    } catch {
+      // Ignore errors if service not available
+    }
+
+    // Best-effort flush of log file
+    await logFileManager.flush();
+    logInfo("Copilot plugin unloaded");
+  }
+
+  /**
+   * Clear all persistent selection highlights across all Markdown editors.
+   * Called during plugin unload to prevent "stuck" highlights after hot reload.
+   */
+  private clearAllPersistentSelectionHighlights(): void {
+    try {
+      const leaves = this.app.workspace.getLeavesOfType("markdown");
+      for (const leaf of leaves) {
+        const view = leaf.view;
+        if (!(view instanceof MarkdownView)) continue;
+        const cm = view.editor?.cm;
+        if (cm) {
+          SelectionHighlight.hide(cm);
+          hideChatSelectionHighlight(cm);
+        }
+      }
+    } catch (error) {
+      logWarn("Failed to clear persistent selection highlights:", error);
+    }
+  }
+
+  updateUserMessageHistory(newMessage: string) {
+    this.userMessageHistory = [...this.userMessageHistory, newMessage];
+  }
+
+  async autosaveCurrentChat() {
+    if (getSettings().autosaveChat) {
+      const chatView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0]?.view as CopilotView;
+      if (chatView) {
+        await chatView.saveChat();
+      }
+    }
+  }
+
+  async processText(
+    editor: Editor,
+    eventType: string,
+    eventSubtype?: string,
+    checkSelectedText = true
+  ) {
+    const selectedText = editor.getSelection();
+
+    const isChatWindowActive = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE).length > 0;
+
+    if (!isChatWindowActive) {
+      await this.activateView();
+    }
+
+    // Without the timeout, the view is not yet active
+    window.setTimeout(() => {
+      const activeCopilotView = this.app.workspace
+        .getLeavesOfType(CHAT_VIEWTYPE)
+        .find((leaf) => leaf.view instanceof CopilotView)?.view as CopilotView;
+      if (activeCopilotView && (!checkSelectedText || selectedText)) {
+        const event = new CustomEvent(eventType, { detail: { selectedText, eventSubtype } });
+        activeCopilotView.eventTarget.dispatchEvent(event);
+      }
+    }, 0);
+  }
+
+  processSelection(editor: Editor, eventType: string, eventSubtype?: string) {
+    void this.processText(editor, eventType, eventSubtype);
+  }
+
+  emitChatIsVisible() {
+    const activeCopilotView = this.app.workspace
+      .getLeavesOfType(CHAT_VIEWTYPE)
+      .find((leaf) => leaf.view instanceof CopilotView)?.view as CopilotView;
+
+    if (activeCopilotView) {
+      const event = new CustomEvent(EVENT_NAMES.CHAT_IS_VISIBLE);
+      activeCopilotView.eventTarget.dispatchEvent(event);
+    }
+  }
+
+  initActiveLeafChangeHandler() {
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (!leaf) {
+          return;
+        }
+        if (leaf.getViewState().type === CHAT_VIEWTYPE) {
+          this.emitChatIsVisible();
+        }
+      })
+    );
+  }
+
+  /**
+   * Initialize automatic text selection handler
+   * Listens to selectionchange events and automatically adds selected text to chat context
+   */
+  initSelectionHandler() {
+    this.selectionChangeHandler = () => {
+      // Clear existing debounce timer
+      if (this.selectionDebounceTimer) {
+        window.clearTimeout(this.selectionDebounceTimer);
+      }
+
+      // Debounce selection changes to avoid excessive triggers
+      this.selectionDebounceTimer = window.setTimeout(() => {
+        this.handleSelectionChange();
+      }, 500);
+    };
+
+    // Capture the document at registration so removal targets the same one
+    // (activeDocument can change if the user focuses a popout window).
+    this.selectionListenerDocument = activeDocument;
+    this.selectionListenerDocument.addEventListener("selectionchange", this.selectionChangeHandler);
+  }
+
+  /**
+   * Clean up selection handler on plugin unload
+   */
+  cleanupSelectionHandler() {
+    if (this.selectionDebounceTimer) {
+      window.clearTimeout(this.selectionDebounceTimer);
+    }
+    if (this.selectionChangeHandler && this.selectionListenerDocument) {
+      this.selectionListenerDocument.removeEventListener(
+        "selectionchange",
+        this.selectionChangeHandler
+      );
+    }
+    this.selectionListenerDocument = undefined;
+  }
+
+  /**
+   * Clears the auto-selected text context if one was previously captured
+   */
+  private clearSelectionContext() {
+    setSelectedTextContexts([]);
+  }
+
+  /**
+   * Clears the auto-selected web text context for a specific URL.
+   * Preserves contexts from other sourceTypes and other URLs.
+   */
+  private clearWebSelectionContextForUrl(url: string): void {
+    const current = getSelectedTextContexts();
+    const next = current.filter((c) => c.sourceType !== "web" || c.url !== url);
+    if (next.length === current.length) {
+      return;
+    }
+    setSelectedTextContexts(next);
+  }
+
+  /**
+   * Stores the provided selection as the active selected text context.
+   * Only keeps the latest selection - note and web selections are mutually exclusive.
+   */
+  private setSelectionContext(context: SelectedTextContext) {
+    setSelectedTextContexts([context]);
+  }
+
+  /**
+   * Handle text selection changes
+   * Only processes selections from markdown editors
+   */
+  handleSelectionChange() {
+    // Check if auto-inclusion is enabled
+    const settings = getSettings();
+    if (!settings.autoAddSelectionToContext) {
+      return;
+    }
+
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || !activeView.editor) {
+      return;
+    }
+
+    const editor = activeView.editor;
+    const activeFile = this.app.workspace.getActiveFile();
+
+    // Get selection range first to validate it exists
+    const selectionRange = editor.listSelections()[0];
+    if (!selectionRange) {
+      return;
+    }
+
+    // Compute selection signature to avoid redundant updates
+    const signature = activeFile
+      ? `${activeFile.path}:${selectionRange.anchor.line}:${selectionRange.anchor.ch}:${selectionRange.head.line}:${selectionRange.head.ch}`
+      : "";
+
+    // Skip if selection hasn't changed
+    if (signature === this.lastSelectionSignature) {
+      return;
+    }
+    this.lastSelectionSignature = signature;
+
+    const selectedText = editor.getSelection();
+
+    // If selection is empty, clear note-type contexts
+    if (!selectedText || !selectedText.trim()) {
+      const currentContexts = getSelectedTextContexts();
+      const nonNoteContexts = currentContexts.filter((ctx) => ctx.sourceType !== "note");
+      if (currentContexts.length !== nonNoteContexts.length) {
+        setSelectedTextContexts(nonNoteContexts);
+      }
+      return;
+    }
+
+    if (!activeFile) {
+      return;
+    }
+
+    const anchorLine = selectionRange.anchor.line + 1;
+    const headLine = selectionRange.head.line + 1;
+    const startLine = Math.min(anchorLine, headLine);
+    const endLine = Math.max(anchorLine, headLine);
+
+    // Create selected text context
+    const selectedTextContext: NoteSelectedTextContext = {
+      id: uuidv4(),
+      content: selectedText,
+      sourceType: "note",
+      noteTitle: activeFile.basename,
+      notePath: activeFile.path,
+      startLine,
+      endLine,
+    };
+
+    this.setSelectionContext(selectedTextContext);
+  }
+
+  /**
+   * Initialize web selection watcher for auto-adding web tab selections.
+   * Desktop only - uses WebSelectionTracker with self-scheduling pattern.
+   */
+  initWebSelectionWatcher() {
+    // Only run on desktop
+    if (!Platform.isDesktopApp) {
+      return;
+    }
+
+    const webViewerService = getWebViewerService(this.app);
+
+    this.webSelectionTracker = new WebSelectionTracker({
+      intervalMs: 500,
+      emptySelectionDebounceCount: 2,
+      isEnabled: () => getSettings().autoAddSelectionToContext,
+      getLeaf: () => webViewerService.getActiveLeaf() ?? webViewerService.getLastActiveLeaf(),
+      getActiveLeaf: () => webViewerService.getActiveLeaf(),
+      onSelectionChange: (context) => {
+        // Use symmetric update strategy via setSelectionContext
+        this.setSelectionContext(context);
+      },
+      onSelectionClear: ({ url }) => {
+        this.clearWebSelectionContextForUrl(url);
       },
     });
 
-    this.addSettingTab(new AilyCopilotSettingTab(this.app, this));
+    this.webSelectionTracker.start();
   }
 
-  onunload(): void {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_AILY_COPILOT);
+  /**
+   * Clean up web selection watcher
+   */
+  cleanupWebSelectionWatcher() {
+    this.webSelectionTracker?.stop();
+    this.webSelectionTracker = undefined;
+  }
+
+  /**
+   * Suppress the current web selection so it won't be auto-captured again until it changes or is cleared.
+   * Called by UI when user removes web selection or starts a new chat.
+   * @param url - Optional URL to suppress (prevents leaf-binding issues when lastActiveLeaf has changed)
+   */
+  suppressCurrentWebSelection(url?: string): void {
+    if (url && url.trim()) {
+      this.webSelectionTracker?.suppressSelectionForUrl(url);
+      return;
+    }
+
+    this.webSelectionTracker?.suppressCurrentSelection();
+  }
+
+  private getCurrentEditorOrDummy(): Editor {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    return {
+      getSelection: () => {
+        const selection = activeView?.editor?.getSelection();
+        if (selection) return selection;
+        // Default to the entire active file if no selection
+        const activeFile = this.app.workspace.getActiveFile();
+        return activeFile ? this.app.vault.read(activeFile) : "";
+      },
+      replaceSelection: activeView?.editor?.replaceSelection.bind(activeView.editor) || (() => {}),
+    } as Partial<Editor> as Editor;
+  }
+
+  processCustomPrompt(eventType: string, customPrompt: string) {
+    const editor = this.getCurrentEditorOrDummy();
+    void this.processText(editor, eventType, customPrompt, false);
+  }
+
+  toggleView() {
+    const leaves = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE);
+    if (leaves.length > 0) {
+      void this.deactivateView();
+    } else {
+      void this.activateView();
+    }
   }
 
   async activateView(): Promise<void> {
-    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_AILY_COPILOT)[0];
-    if (existing) {
-      this.app.workspace.revealLeaf(existing);
+    const leaves = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE);
+    if (leaves.length === 0) {
+      if (getSettings().defaultOpenArea === DEFAULT_OPEN_AREA.VIEW) {
+        await this.app.workspace.getRightLeaf(false).setViewState({
+          type: CHAT_VIEWTYPE,
+          active: true,
+        });
+      } else {
+        await this.app.workspace.getLeaf(true).setViewState({
+          type: CHAT_VIEWTYPE,
+          active: true,
+        });
+      }
+    } else {
+      this.app.workspace.revealLeaf(leaves[0]);
+    }
+    // Small delay to ensure React component is ready to receive the focus event
+    window.setTimeout(() => {
+      this.emitChatIsVisible();
+    }, 50);
+  }
+
+  async deactivateView() {
+    this.app.workspace.detachLeavesOfType(CHAT_VIEWTYPE);
+  }
+
+  async loadSettings() {
+    const rawData = (await this.loadData()) as unknown;
+    const settings = await loadSettingsWithKeychain(rawData, (d) => this.saveData(d));
+    setSettings(settings);
+  }
+
+  mergeActiveModels(
+    existingActiveModels: CustomModel[],
+    builtInModels: CustomModel[]
+  ): CustomModel[] {
+    const modelMap = new Map<string, CustomModel>();
+
+    // Create a unique key for each model, it's model (name + provider)
+
+    // Add or update existing models in the map
+    existingActiveModels.forEach((model) => {
+      const key = getModelKeyFromModel(model);
+      const existingModel = modelMap.get(key);
+      if (existingModel) {
+        // If it's a built-in model, preserve the built-in status
+        modelMap.set(key, {
+          ...model,
+          isBuiltIn: existingModel.isBuiltIn || model.isBuiltIn,
+        });
+      } else {
+        modelMap.set(key, model);
+      }
+    });
+
+    return Array.from(modelMap.values());
+  }
+
+  async loadCopilotChatHistory() {
+    const chatFiles = await this.getChatHistoryFiles();
+    if (chatFiles.length === 0) {
+      new Notice("No chat history found.");
       return;
     }
-    const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
-    await leaf.setViewState({ type: VIEW_TYPE_AILY_COPILOT, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    new LoadChatHistoryModal(
+      this.app,
+      chatFiles,
+      this.chatHistoryLastAccessedAtManager,
+      this.loadChatHistory.bind(this) as (file: TFile) => void
+    ).open();
   }
 
-  getAilyView(): AilyCopilotView | null {
-    const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_AILY_COPILOT)[0];
-    return leaf?.view instanceof AilyCopilotView ? leaf.view : null;
+  async getChatHistoryFiles(): Promise<TFile[]> {
+    const folderFiles = await listMarkdownFiles(this.app, getSettings().defaultSaveFolder);
+    if (folderFiles.length === 0) return [];
+
+    const currentProject = getCurrentProject();
+
+    // Reason: pass all files to filterChatHistoryFiles which checks frontmatter projectId.
+    // A prefix prefilter would miss renamed or legacy files that still have correct frontmatter.
+    return filterChatHistoryFiles(this.app, folderFiles, currentProject?.id);
   }
 
-  async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
-  }
+  async getChatHistoryItems(): Promise<ChatHistoryItem[]> {
+    const files = await this.getChatHistoryFiles();
+    return files.map((file) => {
+      const createdAt = extractChatDate(file);
+      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
 
-  async getAily<T>(path: string): Promise<AilyResponse<T>> {
-    return this.callAily<T>(path, undefined, "GET");
-  }
+      // Use effective last used time (prefers in-memory value for immediate UI updates)
+      const effectiveLastAccessedAtMs =
+        this.chatHistoryLastAccessedAtManager.getEffectiveLastUsedAt(
+          file.path,
+          persistedLastAccessedAtMs ?? createdAt.getTime()
+        );
+      const lastAccessedAt = new Date(effectiveLastAccessedAtMs);
 
-  async postAily<T>(path: string, payload: unknown): Promise<AilyResponse<T>> {
-    return this.callAily<T>(path, payload, "POST");
-  }
-
-  private async callAily<T>(path: string, payload: unknown, method: "GET" | "POST"): Promise<AilyResponse<T>> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (method === "POST") headers["Content-Type"] = "application/json";
-    if (this.settings.apiToken) headers.Authorization = `Bearer ${this.settings.apiToken}`;
-
-    const url = `${this.settings.apiBaseUrl.replace(/\/$/, "")}${path}`;
-    const response = await requestUrl({
-      url,
-      method,
-      headers,
-      body: method === "POST" ? JSON.stringify(payload ?? {}) : undefined,
-      throw: false,
+      return {
+        id: file.path,
+        title: extractChatTitle(file),
+        createdAt,
+        lastAccessedAt,
+      };
     });
-    const json = parseJson(response.text) as AilyResponse<T>;
-    if (response.status < 200 || response.status >= 300) {
-      const detail = typeof json.detail === "string" ? json.detail : response.text || `HTTP ${response.status}`;
-      throw new Error(`Aily API ${response.status}: ${detail}`);
+  }
+
+  /**
+   * Record that a chat history file was accessed by updating its `lastAccessedAt`
+   * YAML frontmatter field (epoch ms), with in-memory tracking and throttled persistence.
+   *
+   * Memory is always updated immediately (for UI sorting), but disk writes are throttled and monotonic.
+   */
+  private async touchChatHistoryLastAccessedAt(file: TFile): Promise<void> {
+    try {
+      // Always update memory for immediate UI feedback
+      this.chatHistoryLastAccessedAtManager.touch(file.path);
+
+      // Check if we should persist to disk (throttled)
+      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
+      const timestampToPersist = this.chatHistoryLastAccessedAtManager.shouldPersist(
+        file.path,
+        persistedLastAccessedAtMs
+      );
+
+      if (timestampToPersist === null) {
+        return;
+      }
+
+      let persistedAtMs = timestampToPersist;
+
+      if (
+        this.app.fileManager?.processFrontMatter &&
+        this.app.vault.getAbstractFileByPath(file.path) != null
+      ) {
+        await this.app.fileManager.processFrontMatter(
+          file,
+          (frontmatter: Record<string, unknown>) => {
+            // Monotonic protection: ensure we never write an older timestamp
+            const existingValue = Number(frontmatter.lastAccessedAt);
+            const existingAtMs =
+              Number.isFinite(existingValue) && existingValue > 0 ? existingValue : 0;
+
+            persistedAtMs = Math.max(existingAtMs, timestampToPersist);
+
+            if (existingAtMs === persistedAtMs) {
+              return;
+            }
+
+            frontmatter.lastAccessedAt = persistedAtMs;
+          }
+        );
+      } else {
+        await patchFrontmatter(this.app, file.path, { lastAccessedAt: persistedAtMs });
+      }
+
+      // Mark persistence successful for throttling purposes
+      this.chatHistoryLastAccessedAtManager.markPersisted(file.path, persistedAtMs);
+    } catch (error) {
+      logWarn(`[CopilotPlugin] Failed to update chat lastAccessedAt for ${file.path}`, error);
     }
-    return json;
-  }
-}
-
-class AilyCopilotView extends ItemView {
-  private plugin: AilyCopilotPlugin;
-  private messages: ChatMessage[] = [];
-  private statusText = "Checking Aily backend...";
-  private inputEl?: HTMLTextAreaElement;
-  private askButton?: HTMLButtonElement;
-  private lastAnswer: any = null;
-  private relevantNotes: any[] = [];
-  private pendingProposal: any = null;
-
-  constructor(leaf: WorkspaceLeaf, plugin: AilyCopilotPlugin) {
-    super(leaf);
-    this.plugin = plugin;
   }
 
-  getViewType(): string {
-    return VIEW_TYPE_AILY_COPILOT;
+  /**
+   * Get the chat history last accessed at manager for use in sorting.
+   * This allows UI components to use in-memory values for immediate feedback.
+   */
+  getChatHistoryLastAccessedAtManager(): RecentUsageManager<string> {
+    return this.chatHistoryLastAccessedAtManager;
   }
 
-  getDisplayText(): string {
-    return "Aily Copilot";
-  }
+  async loadChatHistory(file: TFile) {
+    // First autosave the current chat if the setting is enabled
+    await this.autosaveCurrentChat();
 
-  getIcon(): string {
-    return "bot-message-square";
-  }
-
-  async onOpen(): Promise<void> {
-    this.render();
-    await this.checkBackend();
-  }
-
-  render(): void {
-    const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    container.addClass("aily-copilot-root");
-
-    const header = container.createDiv({ cls: "aily-header" });
-    header.createEl("h2", { text: "Aily Copilot" });
-    header.createEl("div", { cls: "aily-status", text: this.statusText });
-
-    const toolbar = container.createDiv({ cls: "aily-toolbar" });
-    const checkButton = toolbar.createEl("button", { text: "Check Backend" });
-    const dossierButton = toolbar.createEl("button", { text: "Generate Dossier" });
-    const draftButton = toolbar.createEl("button", { text: "Create Draft" });
-    dossierButton.disabled = !this.lastAnswer;
-    draftButton.disabled = !this.lastAnswer;
-    checkButton.onclick = () => void this.checkBackend();
-    dossierButton.onclick = () => void this.generateDossier();
-    draftButton.onclick = () => void this.createDraft();
-
-    const active = this.app.workspace.getActiveFile();
-    container.createDiv({ cls: "aily-active-note", text: active ? `Active note: ${active.path}` : "No active note selected" });
-
-    const transcript = container.createDiv({ cls: "aily-transcript" });
-    for (const message of this.messages) {
-      const bubble = transcript.createDiv({ cls: `aily-message aily-message-${message.role}` });
-      bubble.createDiv({ cls: "aily-message-role", text: message.role === "user" ? "You" : "Aily" });
-      const body = bubble.createDiv({ cls: "aily-message-body" });
-      void MarkdownRenderer.renderMarkdown(message.content, body, "", this);
+    // Check if the Copilot view is already active
+    const existingView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0];
+    if (!existingView) {
+      // Only activate the view if it's not already open
+      await this.activateView();
     }
 
-    if (this.relevantNotes.length > 0) {
-      const relevant = container.createDiv({ cls: "aily-panel" });
-      relevant.createEl("h3", { text: "Relevant Notes" });
-      for (const note of this.relevantNotes.slice(0, 8)) {
-        const item = relevant.createDiv({ cls: "aily-relevant-note" });
-        item.createEl("strong", { text: note.title || note.relative_path });
-        item.createEl("span", { text: note.relative_path || "" });
-        const reason = note.relationship_explanations?.[0];
-        if (reason) item.createEl("small", { text: reason.explanation || reason.relationship || "Related by content" });
+    // Load messages using ChatUIState (which now uses ChatPersistenceManager internally)
+    await this.chatUIState.loadChatHistory(file);
+
+    // Touch "lastAccessedAt" timestamp (throttled to avoid frequent writes)
+    void this.touchChatHistoryLastAccessedAt(file);
+
+    // Update the view
+    const copilotView = (existingView || this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0])
+      ?.view as CopilotView;
+    if (copilotView) {
+      copilotView.updateView();
+    }
+  }
+
+  async loadChatById(fileId: string): Promise<void> {
+    const file = await resolveFileByPath(this.app, fileId);
+    if (file) {
+      await this.loadChatHistory(file);
+    } else {
+      throw new Error("Chat file not found.");
+    }
+  }
+
+  async openChatSourceFile(fileId: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(fileId);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf(true).openFile(file);
+    } else if (await this.app.vault.adapter.exists(fileId)) {
+      new Notice(
+        "Cannot open source files from hidden directories. To open chat notes in the editor, save them to a non-hidden folder in settings."
+      );
+    } else {
+      throw new Error("Chat file not found.");
+    }
+  }
+
+  async updateChatTitle(fileId: string, newTitle: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(fileId);
+    if (file instanceof TFile) {
+      await this.app.fileManager.processFrontMatter(
+        file,
+        (frontmatter: Record<string, unknown>) => {
+          frontmatter.topic = newTitle;
+        }
+      );
+
+      // Wait for metadata cache to update with improved error handling
+      // This ensures that subsequent calls to extractChatTitle will get the updated data
+      await new Promise<void>((resolve) => {
+        const handler = (updatedFile: TFile) => {
+          if (updatedFile.path === fileId) {
+            this.app.metadataCache.off("changed", handler);
+            window.clearTimeout(timeoutId);
+            resolve();
+          }
+        };
+
+        this.app.metadataCache.on("changed", handler);
+
+        // Fallback timeout with shorter duration and better error handling
+        const timeoutId = window.setTimeout(() => {
+          this.app.metadataCache.off("changed", handler);
+          // Don't reject, just resolve - the frontmatter update might have worked
+          // even if we didn't catch the event
+          resolve();
+        }, 500); // Reduced timeout for better performance
+      });
+
+      new Notice("Chat title updated.");
+    } else if (await resolveFileByPath(this.app, fileId)) {
+      await patchFrontmatter(this.app, fileId, { topic: newTitle.trim() });
+      new Notice("Chat title updated.");
+    } else {
+      throw new Error("Chat file not found.");
+    }
+  }
+
+  async deleteChatHistory(fileId: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(fileId);
+    if (file instanceof TFile) {
+      await trashFile(this.app, file);
+      new Notice("Chat deleted.");
+    } else if (await this.app.vault.adapter.exists(fileId)) {
+      await this.app.vault.adapter.remove(fileId);
+      new Notice("Chat deleted.");
+    } else {
+      throw new Error("Chat file not found.");
+    }
+  }
+
+  async handleNewChat() {
+    clearRecordedPromptPayload();
+    await logFileManager.clear();
+
+    // Analyze chat messages for memory if enabled
+    if (getSettings().enableRecentConversations) {
+      try {
+        // Get the current chat model from the chain manager
+        const chainManager = this.projectManager.getCurrentChainManager();
+        const chatModel = chainManager.chatModelManager.getChatModel();
+        this.userMemoryManager.addRecentConversation(this.chatUIState.getMessages(), chatModel);
+      } catch (error) {
+        logInfo("Failed to analyze chat messages for memory:", error);
       }
     }
 
-    if (this.pendingProposal) {
-      const proposal = container.createDiv({ cls: "aily-panel" });
-      proposal.createEl("h3", { text: `Draft Preview: ${this.pendingProposal.target_path}` });
-      proposal.createEl("pre", { text: this.pendingProposal.diff || this.pendingProposal.preview || "" });
-      const actions = proposal.createDiv({ cls: "aily-toolbar" });
-      const apply = actions.createEl("button", { text: "Apply Draft" });
-      const reject = actions.createEl("button", { text: "Reject Draft" });
-      apply.onclick = () => void this.applyProposal();
-      reject.onclick = () => void this.rejectProposal();
+    // First autosave the current chat if the setting is enabled
+    await this.autosaveCurrentChat();
+
+    // Abort any ongoing streams before clearing chat
+    const existingView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0];
+    if (existingView) {
+      const copilotView = existingView.view as CopilotView;
+      // Dispatch abort event to stop any ongoing streams
+      const abortEvent = new CustomEvent(EVENT_NAMES.ABORT_STREAM, {
+        detail: { reason: ABORT_REASON.NEW_CHAT },
+      });
+      copilotView.eventTarget.dispatchEvent(abortEvent);
     }
 
-    const composer = container.createDiv({ cls: "aily-composer" });
-    this.inputEl = composer.createEl("textarea", {
-      attr: { placeholder: "Ask Aily about this vault, active note, dossier, product strategy, or evidence chain..." },
+    // Clear messages through ChatUIState (which also clears chain memory)
+    this.chatUIState.clearMessages();
+
+    // Update view if it exists
+    if (existingView) {
+      const copilotView = existingView.view as CopilotView;
+      copilotView.updateView();
+    } else {
+      // If view doesn't exist, open it
+      await this.activateView();
+    }
+
+    // Note: UI-specific state like includeActiveNote setting is handled in the Chat component
+    // This ensures proper separation of concerns between plugin logic and UI state
+  }
+
+  async newChat() {
+    // Just delegate to the shared method
+    await this.handleNewChat();
+  }
+
+  async customSearchDB(
+    query: string,
+    salientTerms: string[],
+    textWeight: number
+  ): Promise<{ content: string; metadata: Record<string, unknown> }[]> {
+    const settings = getSettings();
+
+    // Run FilterRetriever for guaranteed title/tag matches
+    const { FilterRetriever } = await import("@/search/v3/FilterRetriever");
+    const { mergeFilterAndSearchResults } = await import("@/search/v3/mergeResults");
+    const filterRetriever = new FilterRetriever(this.app, {
+      salientTerms: salientTerms,
+      maxK: 20,
     });
-    this.inputEl.rows = 5;
-    this.inputEl.addEventListener("keydown", (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        void this.askFromInput();
-      }
-    });
-    this.askButton = composer.createEl("button", { text: "Ask Aily" });
-    this.askButton.onclick = () => void this.askFromInput();
+    const filterDocs = await filterRetriever.getRelevantDocuments(query);
+
+    // Run main retriever for scored results
+    const retriever = settings.enableSemanticSearchV3
+      ? new (await import("@/search/v3/MergedSemanticRetriever")).MergedSemanticRetriever(
+          this.app,
+          {
+            minSimilarityScore: 0.3,
+            maxK: 20,
+            salientTerms: salientTerms,
+            textWeight: textWeight,
+            returnAll: false,
+          }
+        )
+      : new (await import("@/search/v3/TieredLexicalRetriever")).TieredLexicalRetriever(this.app, {
+          minSimilarityScore: 0.3,
+          maxK: 20,
+          salientTerms: salientTerms,
+          textWeight: textWeight,
+          returnAll: false,
+          useRerankerThreshold: undefined,
+        });
+
+    const searchDocs = await retriever.getRelevantDocuments(query);
+    const { filterResults, searchResults } = mergeFilterAndSearchResults(filterDocs, searchDocs);
+    const allDocs = [...filterResults, ...searchResults];
+
+    return allDocs.map((doc) => ({
+      content: doc.pageContent,
+      metadata: doc.metadata,
+    }));
   }
-
-  seedFromActiveNote(): void {
-    const active = this.app.workspace.getActiveFile();
-    const prompt = active
-      ? `Explain the strongest evidence, weak assumptions, and product implications in @note ${active.path}`
-      : "Explain the strongest evidence and product implications in this vault.";
-    void this.ask(prompt);
-  }
-
-  private async checkBackend(): Promise<void> {
-    try {
-      const status = await this.plugin.getAily<any>("/api/copilot/status");
-      const features = status.features ? Object.keys(status.features).filter((key) => status.features[key]).join(", ") : "unknown features";
-      this.statusText = `Connected: ${status.vault_path}. Features: ${features}`;
-    } catch (error) {
-      this.statusText = `Backend unavailable: ${(error as Error).message}`;
-      new Notice(this.statusText);
-    }
-    this.render();
-  }
-
-  private async askFromInput(): Promise<void> {
-    const text = this.inputEl?.value.trim() ?? "";
-    if (!text) {
-      new Notice("Type a question for Aily first.");
-      return;
-    }
-    if (this.inputEl) this.inputEl.value = "";
-    await this.ask(text);
-  }
-
-  private async ask(text: string): Promise<void> {
-    this.messages.push({ role: "user", content: text });
-    this.statusText = "Aily is thinking...";
-    this.render();
-    try {
-      const active = this.app.workspace.getActiveFile();
-      const answer = await this.plugin.postAily<any>("/api/copilot/chat", {
-        message: text,
-        search_query: active ? `${text} ${active.basename}` : text,
-        project_id: this.plugin.settings.activeProjectId,
-        limit: 8,
-        use_llm: this.plugin.settings.useLlm,
-      });
-      this.lastAnswer = answer;
-      this.messages.push({ role: "assistant", content: answer.answer || "Aily returned an empty answer." });
-      this.statusText = `Answer grounded: ${answer.grounding_status || "unknown"}; citations: ${(answer.citations || []).length}`;
-      await this.loadRelevantNotes(text, active);
-    } catch (error) {
-      const message = `Aily request failed: ${(error as Error).message}`;
-      this.messages.push({ role: "assistant", content: message });
-      this.statusText = message;
-      new Notice(message, 8000);
-    }
-    this.render();
-  }
-
-  private async loadRelevantNotes(query: string, active: TFile | null): Promise<void> {
-    try {
-      const response = await this.plugin.postAily<any>("/api/copilot/vault/relevant", {
-        query,
-        seed_paths: active ? [active.path] : [],
-        project_id: this.plugin.settings.activeProjectId,
-        limit: 8,
-      });
-      this.relevantNotes = response.recommendations || [];
-    } catch {
-      this.relevantNotes = [];
-    }
-  }
-
-  private async generateDossier(): Promise<void> {
-    const active = this.app.workspace.getActiveFile();
-    const topic = active?.basename || "Aily Copilot dossier";
-    try {
-      const response = await this.plugin.postAily<any>("/api/copilot/dossiers/generate", {
-        topic,
-        project_id: this.plugin.settings.activeProjectId,
-        query_terms: [topic],
-        seed_claims: this.lastAnswer?.answer ? [stripMarkdown(this.lastAnswer.answer).slice(0, 900)] : [],
-      });
-      this.messages.push({ role: "assistant", content: `Dossier generated: [[${response.relative_path}|${response.title}]]` });
-      this.statusText = `Dossier generated: ${response.relative_path}`;
-    } catch (error) {
-      this.statusText = `Dossier failed: ${(error as Error).message}`;
-      new Notice(this.statusText, 8000);
-    }
-    this.render();
-  }
-
-  private async createDraft(): Promise<void> {
-    if (!this.lastAnswer?.answer) return;
-    const active = this.app.workspace.getActiveFile();
-    const base = active?.basename || "Aily Copilot Answer";
-    const title = `${base} - Aily Copilot Brief`;
-    const content = [`# ${title}`, "", "Origin: Generated by Aily-Copilot Obsidian plugin after user preview request.", "", this.lastAnswer.answer].join("\n");
-    try {
-      const response = await this.plugin.postAily<any>("/api/copilot/proposals/create", {
-        title,
-        target_path: `10-Dossiers/${slugify(title)}.md`,
-        content,
-        mode: "create",
-        rationale: "User requested a preview-first Aily-Copilot draft from the latest grounded answer.",
-        source_citations: this.lastAnswer.citations || [],
-      });
-      this.pendingProposal = response.proposal;
-      this.statusText = `Draft staged: ${response.proposal.target_path}`;
-    } catch (error) {
-      this.statusText = `Draft preview failed: ${(error as Error).message}`;
-      new Notice(this.statusText, 8000);
-    }
-    this.render();
-  }
-
-  private async applyProposal(): Promise<void> {
-    if (!this.pendingProposal?.id) return;
-    try {
-      const response = await this.plugin.postAily<any>("/api/copilot/proposals/apply", { proposal_id: this.pendingProposal.id });
-      this.pendingProposal = response.proposal;
-      this.messages.push({ role: "assistant", content: `Draft applied: [[${response.proposal.target_path}]]` });
-      this.statusText = `Draft applied: ${response.proposal.target_path}`;
-    } catch (error) {
-      this.statusText = `Apply failed: ${(error as Error).message}`;
-      new Notice(this.statusText, 8000);
-    }
-    this.render();
-  }
-
-  private async rejectProposal(): Promise<void> {
-    if (!this.pendingProposal?.id) return;
-    try {
-      await this.plugin.postAily<any>("/api/copilot/proposals/reject", { proposal_id: this.pendingProposal.id });
-      this.pendingProposal = null;
-      this.messages.push({ role: "assistant", content: "Draft rejected. No vault note was changed." });
-      this.statusText = "Draft rejected.";
-    } catch (error) {
-      this.statusText = `Reject failed: ${(error as Error).message}`;
-      new Notice(this.statusText, 8000);
-    }
-    this.render();
-  }
-}
-
-class AilyCopilotSettingTab extends PluginSettingTab {
-  plugin: AilyCopilotPlugin;
-
-  constructor(app: App, plugin: AilyCopilotPlugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
-    containerEl.createEl("h2", { text: "Aily Copilot" });
-
-    new Setting(containerEl)
-      .setName("Aily API base URL")
-      .setDesc("FastAPI server URL. Default: http://127.0.0.1:8000")
-      .addText((text) =>
-        text.setValue(this.plugin.settings.apiBaseUrl).onChange(async (value) => {
-          this.plugin.settings.apiBaseUrl = value.trim() || DEFAULT_SETTINGS.apiBaseUrl;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Aily API token")
-      .setDesc("Optional token if Aily UI authentication is enabled.")
-      .addText((text) =>
-        text
-          .setPlaceholder("Leave empty for local backend")
-          .setValue(this.plugin.settings.apiToken)
-          .onChange(async (value) => {
-            this.plugin.settings.apiToken = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Use LLM for chat")
-      .setDesc("When disabled, Aily returns deterministic extractive answers from vault evidence.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.useLlm).onChange(async (value) => {
-          this.plugin.settings.useLlm = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Active project ID")
-      .setDesc("Optional Aily project scope. Leave empty for whole vault.")
-      .addText((text) =>
-        text.setValue(this.plugin.settings.activeProjectId).onChange(async (value) => {
-          this.plugin.settings.activeProjectId = value.trim();
-          await this.plugin.saveSettings();
-        })
-      );
-  }
-}
-
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function stripMarkdown(text: string): string {
-  return String(text || "")
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/[\[\]_*`>#-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function slugify(text: string): string {
-  return (
-    String(text || "aily-copilot-brief")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "aily-copilot-brief"
-  );
 }

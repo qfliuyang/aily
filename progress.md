@@ -5,6 +5,25 @@ Role: Planning/progress log only; not acceptance evidence for any gate.
 
 # Aily V1 Progress Log
 
+## 2026-05-23 Aily-Copilot Upstream Fork Replacement
+
+- Replaced the stripped `aily-copilot` pane implementation with a full
+  upstream-derived Obsidian Copilot source tree from
+  `logancyang/obsidian-copilot` commit `bd8829f`.
+- Preserved upstream Copilot's React chat surface, mode selector, context
+  controls, chat history controls, settings system, project UI, and AGPL-3.0
+  license.
+- Added `ChainType.AILY_CHAIN`, `AilyChainRunner`, and `AilyBackendClient` so
+  `Aily` is a first-class Copilot chat mode backed by `/api/copilot/chat`.
+- Added Aily backend settings for base URL, optional bearer token, backend LLM
+  routing, and connection testing.
+- Installed the rebuilt plugin into
+  `/Users/luzi/Library/Mobile Documents/com~apple~CloudDocs/Documents/aily/.obsidian/plugins/aily-copilot`.
+- Runtime evidence: after restarting Obsidian with CDP, the upstream Copilot
+  chat opened with the `aily` mode selected and successfully returned a
+  grounded Aily backend response with vault citations. Screenshot:
+  `/tmp/aily-copilot-upstream-fork-working.png`.
+
 ## 2026-05-17
 
 Created the unattended development planning surface:

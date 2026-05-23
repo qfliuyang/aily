@@ -28,9 +28,10 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Hosted-mode guardrails: `aily/security/`
 - Aily-Copilot backend API: `aily/copilot/`, mounted under `/api/copilot`
 - Aily-Copilot Obsidian companion plugin:
-  `obsidian-plugin/aily-copilot`, now a local fork of
-  `logancyang/obsidian-copilot` with an Aily-specific entrypoint, installed
-  and enabled in the iCloud vault
+  `obsidian-plugin/aily-copilot`, now a full upstream-derived fork of
+  `logancyang/obsidian-copilot` with the upstream React chat surface preserved
+  and an added native Aily chain mode, installed and enabled in the iCloud
+  vault
 
 ## Active Flow
 
@@ -44,8 +45,8 @@ This file is the shortest trustworthy map of the codebase as it exists now.
    context envelopes, expose content-based graph/relevant-note navigation,
    scope retrieval through local projects, and stage preview-first note writes.
 8. The Aily-Copilot companion plugin is installed and enabled in the iCloud
-   vault and can call Aily backend chat, relevant-note, dossier, project, and
-   proposal APIs from an Obsidian side panel.
+   vault. It uses Obsidian Copilot's upstream chat UI and routes the `Aily`
+   chat mode through Aily backend chat APIs with vault citations.
 
 ## Active Vault Layout
 
