@@ -1,9 +1,10 @@
 {
   "id": "aily-copilot",
   "name": "Aily Copilot",
-  "version": "0.1.0",
-  "minAppVersion": "1.5.0",
-  "description": "Chat with an Aily vault, trace citations, and generate dossiers from Obsidian.",
-  "author": "Aily",
-  "isDesktopOnly": false
+  "version": "0.2.0",
+  "minAppVersion": "1.11.4",
+  "isDesktopOnly": false,
+  "description": "Aily-backed Obsidian Copilot fork for grounded vault chat, dossiers, and preview-first drafts.",
+  "author": "Aily, forked from Obsidian Copilot by Logan Yang",
+  "authorUrl": "https://github.com/logancyang/obsidian-copilot"
 }

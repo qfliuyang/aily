@@ -1,0 +1,126 @@
+/*
+  Aily Copilot styles.
+  Fork base: https://github.com/logancyang/obsidian-copilot
+*/
+
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+.aily-copilot-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 12px;
+}
+
+.aily-header {
+  display: grid;
+  gap: 4px;
+}
+
+.aily-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.aily-status,
+.aily-active-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.aily-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aily-toolbar button {
+  flex: 1 1 auto;
+}
+
+.aily-transcript {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 220px;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.aily-message {
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--background-secondary);
+}
+
+.aily-message-user {
+  background: var(--background-modifier-hover);
+}
+
+.aily-message-role {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.aily-message-body {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.aily-panel {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.aily-panel h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.aily-relevant-note {
+  display: grid;
+  gap: 2px;
+  padding: 6px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.aily-relevant-note:first-of-type {
+  border-top: 0;
+}
+
+.aily-relevant-note span,
+.aily-relevant-note small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.aily-panel pre {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  white-space: pre-wrap;
+}
+
+.aily-composer {
+  display: grid;
+  gap: 8px;
+}
+
+.aily-composer textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+}

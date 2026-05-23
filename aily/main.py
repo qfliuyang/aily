@@ -12,6 +12,7 @@ from fastapi import FastAPI, UploadFile
 from fastapi import Request
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from langgraph.types import Command
 
@@ -3109,6 +3110,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["app://obsidian.md", "capacitor://localhost", "http://localhost", "http://127.0.0.1"],
+    allow_origin_regex=r"^app://.*$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")

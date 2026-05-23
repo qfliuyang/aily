@@ -28,7 +28,9 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Hosted-mode guardrails: `aily/security/`
 - Aily-Copilot backend API: `aily/copilot/`, mounted under `/api/copilot`
 - Aily-Copilot Obsidian companion plugin:
-  `obsidian-plugin/aily-copilot`, installed and enabled in the iCloud vault
+  `obsidian-plugin/aily-copilot`, now a local fork of
+  `logancyang/obsidian-copilot` with an Aily-specific entrypoint, installed
+  and enabled in the iCloud vault
 
 ## Active Flow
 

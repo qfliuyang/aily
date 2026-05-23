@@ -1186,6 +1186,41 @@ Residual risk:
 - The real iCloud vault currently contains only a small origin-labeled seed
   pair plus default notes, so large-scale dossier quality still depends on
   ingesting richer source material.
+
+## 2026-05-23 Aily-Copilot Obsidian Runtime Fix
+
+Issue:
+
+- The first thin local plugin could be installed on disk but was not proven
+  inside the Obsidian renderer. The chat pane did not perform useful work for
+  the user.
+
+Fix:
+
+- Replaced the scratch plugin source with a local fork of
+  `logancyang/obsidian-copilot` under `obsidian-plugin/aily-copilot`.
+- Preserved the upstream AGPL-3.0 license in the forked plugin tree.
+- Replaced the fork entrypoint with an Aily-backed Obsidian plugin that uses
+  Obsidian's `requestUrl` API instead of browser `fetch`.
+- Added FastAPI CORS middleware for Obsidian app origins.
+- Built and installed the forked plugin into the iCloud vault.
+
+Runtime verification:
+
+- `npm ci --ignore-scripts` completed in the fork workspace.
+- `npm run build` completed and generated `main.js`/`styles.css`.
+- `node --check obsidian-plugin/aily-copilot/main.js` passed.
+- `node --check` passed for the installed vault plugin bundle.
+- `uv run python -m compileall -q aily scripts` passed.
+- `uv run python scripts/run_aily_copilot_real_vault_smoke.py` exited `0`.
+- CORS preflight from `Origin: app://obsidian.md` returned `200 OK`.
+- Obsidian was relaunched with remote debugging and agent-browser verified the
+  actual desktop pane:
+  - `Aily Copilot` pane visible.
+  - Input and `Ask Aily` button visible.
+  - A real question was submitted.
+  - The pane returned a grounded answer with citations and relevant notes.
+  - Screenshot saved locally at `/tmp/aily-copilot-obisidian-working.png`.
 - M0-M9 and Gate0-Gate6 were present and marked `PASS` in the release matrix.
 - All 9 required prior manifests validated successfully.
 - Gate 6 dry-run review found no real email send.
