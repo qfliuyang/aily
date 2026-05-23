@@ -3,9 +3,7 @@ import { ChainType } from "@/chainType";
 import { BUILTIN_CHAT_MODELS, USER_SENDER } from "@/constants";
 import {
   AilyChainRunner,
-  AutonomousAgentChainRunner,
   ChainRunner,
-  CopilotPlusChainRunner,
   LLMChainRunner,
   ProjectChainRunner,
   VaultQAChainRunner,
@@ -101,7 +99,7 @@ export default class ChainManager {
     }
 
     try {
-      if (chainType === ChainType.AILY_CHAIN) {
+      if (chainType === ChainType.AILY_CHAIN || chainType === ChainType.COPILOT_PLUS_CHAIN) {
         this.pendingModelError = null;
         logInfo("Using Aily backend mode; skipping direct LLM model initialization.");
         return;
@@ -177,7 +175,6 @@ export default class ChainManager {
 
   private getChainRunner(): ChainRunner {
     const chainType = getChainType();
-    const settings = getSettings();
 
     switch (chainType) {
       case ChainType.AILY_CHAIN:
@@ -187,11 +184,7 @@ export default class ChainManager {
       case ChainType.VAULT_QA_CHAIN:
         return new VaultQAChainRunner(this);
       case ChainType.COPILOT_PLUS_CHAIN:
-        // Use AutonomousAgentChainRunner if the setting is enabled
-        if (settings.enableAutonomousAgent) {
-          return new AutonomousAgentChainRunner(this);
-        }
-        return new CopilotPlusChainRunner(this);
+        return new AilyChainRunner(this);
       case ChainType.PROJECT_CHAIN:
         return new ProjectChainRunner(this);
       default:

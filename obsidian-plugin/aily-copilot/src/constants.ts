@@ -878,16 +878,16 @@ export const ALLOWED_NOTE_CONTEXT_EXTENSIONS = [...TEXT_READABLE_EXTENSIONS, "pd
 
 export const RESTRICTION_MESSAGES = {
   NON_MARKDOWN_FILES_RESTRICTED:
-    "Non-markdown files are only available in Copilot Plus mode. Please upgrade to access this file type.",
+    "Non-markdown files are available in Aily Copilot Plus mode.",
   URL_PROCESSING_RESTRICTED:
-    "URL processing is only available in Copilot Plus mode. URLs will not be processed for context.",
+    "URL processing is available in Aily Copilot Plus mode.",
   UNSUPPORTED_FILE_TYPE: (extension: string) =>
     `${extension.toUpperCase()} files are not supported in the current mode.`,
 } as const;
 
 export const DEFAULT_SETTINGS: CopilotSettings = {
   userId: uuidv4(),
-  isPlusUser: false,
+  isPlusUser: true,
   plusLicenseKey: "",
   openAIApiKey: "",
   openAIOrgId: "",

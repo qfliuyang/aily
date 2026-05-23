@@ -98,7 +98,7 @@ export const CopilotPlusSettings: React.FC = () => {
       <section className="tw-flex tw-flex-col tw-gap-4">
         <div className="tw-flex tw-items-center tw-py-4">
           <Badge variant="secondary" className="tw-text-accent">
-            Plus Required
+            Included with Aily Copilot
           </Badge>
         </div>
         <div className="tw-flex tw-flex-col tw-gap-4">
@@ -107,7 +107,7 @@ export const CopilotPlusSettings: React.FC = () => {
           <SettingItem
             type="switch"
             title="Enable Autonomous Agent"
-            description="Enable autonomous agent mode in Plus chat. The AI will reason step-by-step and decide which tools to use automatically, improving response quality for complex queries."
+            description="Enable autonomous agent controls in Aily Copilot Plus. The AI can reason step-by-step and decide which tools to use automatically."
             checked={settings.enableAutonomousAgent}
             onCheckedChange={(checked) => {
               updateSetting("enableAutonomousAgent", checked);
@@ -183,7 +183,7 @@ export const CopilotPlusSettings: React.FC = () => {
             <>
               <div className="tw-flex tw-items-center tw-gap-1.5 tw-pt-4 tw-text-xl tw-font-semibold">
                 Self-Host Mode
-                <HelpTooltip content="Lifetime license required" />
+                <HelpTooltip content="Optional local infrastructure. Aily Copilot Plus access is already included." />
               </div>
 
               <SettingItem
@@ -199,7 +199,7 @@ export const CopilotPlusSettings: React.FC = () => {
                       content={
                         <div className="tw-flex tw-max-w-96 tw-flex-col tw-gap-2 tw-py-4">
                           <div className="tw-text-sm tw-font-medium tw-text-accent">
-                            Self-Host Mode (Believer/Supporter only)
+                            Self-Host Mode
                           </div>
                           <div className="tw-text-xs tw-text-muted">
                             Connect to your own self-hosted backend (e.g., Miyo) for complete
@@ -207,7 +207,7 @@ export const CopilotPlusSettings: React.FC = () => {
                             custom model deployments.
                           </div>
                           <div className="tw-text-xs tw-text-muted">
-                            Requires re-validation every 15 days when online.
+                            This is optional and does not control Aily Copilot Plus access.
                           </div>
                         </div>
                       }
