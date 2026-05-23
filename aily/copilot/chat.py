@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from aily.copilot.context import CopilotContextEnvelopeBuilder
 from aily.copilot.vault import VaultSearchService
+from aily.ui.telemetry import ui_telemetry_scope
 
 
 class ChatLLM(Protocol):
@@ -41,6 +42,7 @@ class CopilotVaultChatService:
         chat_history: list[dict[str, Any]] | None = None,
         use_llm: bool = True,
         llm_client: ChatLLM | None = None,
+        system_prompt: str = "",
     ) -> dict[str, Any]:
         user_message = str(message or "").strip()
         query = str(search_query or user_message).strip()
@@ -55,7 +57,7 @@ class CopilotVaultChatService:
             user_message=user_message,
             search_results=results,
             chat_history=chat_history or [],
-            system_prompt=_COPILOT_SYSTEM_PROMPT,
+            system_prompt=_merged_system_prompt(system_prompt),
         )
 
         if not results:
@@ -110,7 +112,8 @@ class CopilotVaultChatService:
                 "content": envelope["serialized_text"],
             },
         ]
-        return await llm_client.chat(messages, temperature=0.2)
+        with ui_telemetry_scope(workload="copilot.chat"):
+            return await llm_client.chat(messages, temperature=0.2)
 
 
 _COPILOT_SYSTEM_PROMPT = (
@@ -118,6 +121,13 @@ _COPILOT_SYSTEM_PROMPT = (
     "Separate facts from inference. Use citation IDs for all substantive claims. "
     "Do not invent sources. If evidence is weak, say what is missing."
 )
+
+
+def _merged_system_prompt(project_prompt: str = "") -> str:
+    clean_project_prompt = str(project_prompt or "").strip()
+    if not clean_project_prompt:
+        return _COPILOT_SYSTEM_PROMPT
+    return f"{_COPILOT_SYSTEM_PROMPT}\n\nProject instructions:\n{clean_project_prompt}"
 
 
 def _extractive_answer(user_message: str, results: list[dict[str, Any]]) -> str:

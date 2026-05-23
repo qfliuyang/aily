@@ -27,8 +27,8 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Provider capability matrix: `aily/llm/provider_capabilities.py`
 - Hosted-mode guardrails: `aily/security/`
 - Aily-Copilot backend API: `aily/copilot/`, mounted under `/api/copilot`
-- Aily-Copilot Obsidian companion plugin MVP:
-  `obsidian-plugin/aily-copilot`
+- Aily-Copilot Obsidian companion plugin:
+  `obsidian-plugin/aily-copilot`, installed and enabled in the iCloud vault
 
 ## Active Flow
 
@@ -39,10 +39,11 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 5. After IMPACT, Reactor and Entrepreneur components still exist as legacy higher-order engines that V1 should wrap or quarantine behind the new orchestrator design.
 6. Notes are written into the numbered Obsidian vault layout.
 7. Aily-Copilot can search and read the configured vault, build citation-ready
-   context envelopes, and expose graph-neighborhood primitives for a future
-   Obsidian companion plugin.
-8. The Aily-Copilot companion plugin can be installed into the iCloud vault and
-   call Aily backend chat/dossier APIs from an Obsidian side panel.
+   context envelopes, expose content-based graph/relevant-note navigation,
+   scope retrieval through local projects, and stage preview-first note writes.
+8. The Aily-Copilot companion plugin is installed and enabled in the iCloud
+   vault and can call Aily backend chat, relevant-note, dossier, project, and
+   proposal APIs from an Obsidian side panel.
 
 ## Active Vault Layout
 
@@ -53,8 +54,12 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - `04-Insight`
 - `05-Wisdom`
 - `06-Impact`
-- `07-Proposal`
-- `08-Entrepreneurship`
+- `07-Research`
+- `08-Evaluations`
+- `09-Business-Plans`
+- `10-Dossiers`
+- `99-MOC`
+- `99-System`
 
 ## Reference Docs
 

@@ -110,7 +110,10 @@ Current status:
 - Backend route exists at `/api/copilot/chat`.
 - Deterministic extractive mode is covered by
   `scripts/run_aily_copilot_backend_evidence.py`.
-- Live LLM answer quality still needs real-provider evidence.
+- Live provider smoke is covered by
+  `/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/manifest.json`.
+- LLM traffic monitor confirms `copilot.chat` routed to DeepSeek:
+  `/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/copilot-llm-traffic-monitor.json`.
 
 ### AC3: Dossier From Chat
 
@@ -137,7 +140,9 @@ Current status:
 - Backend route exists at `/api/copilot/dossiers/generate`.
 - Fixture-vault dossier generation is covered by
   `scripts/run_aily_copilot_backend_evidence.py`.
-- Real-vault dossier quality review remains pending.
+- Real-vault smoke verifies the dossier/proposal path can operate from the
+  iCloud vault, but full dossier editorial quality still depends on the
+  quality and quantity of ingested source notes.
 
 ### AC4: Graph-Aware Knowledge Navigation
 
@@ -158,6 +163,14 @@ Gate:
 
 - Obsidian Graph View and Aily graph output both expose meaningful structure.
 
+Current status:
+
+- `/api/copilot/vault/relevant` returns content-based recommendations with
+  relationship explanations from shared terms, shared tags, direct links, and
+  backlinks.
+- Fixture evidence and real-vault smoke verify relevant-note output without
+  artificial central hub nodes.
+
 ### AC5: Project Mode
 
 Deliverables:
@@ -175,6 +188,13 @@ Tests:
 Gate:
 
 - Users can run separate business or research workspaces without context bleed.
+
+Current status:
+
+- `/api/copilot/projects`, `/projects/upsert`, and `/projects/delete` persist
+  local project scopes.
+- Chat, relevant-note lookup, and dossier generation accept `project_id` and
+  merge project include/exclude folders plus source terms into retrieval.
 
 ### AC6: Obsidian Companion Plugin MVP
 
@@ -198,9 +218,12 @@ Gate:
 Current status:
 
 - Plugin MVP exists under `obsidian-plugin/aily-copilot`.
-- Installer script copies it to the configured iCloud vault plugin folder.
+- Installer script copies it to the configured iCloud vault plugin folder and
+  enables `aily-copilot` in `.obsidian/community-plugins.json`.
 - JavaScript syntax is checked with `node --check`.
-- Manual Obsidian enablement and runtime smoke test remain pending.
+- Real-vault smoke verifies installed/enabled files and backend product calls.
+- A human visual click-through in the desktop Obsidian app remains the only
+  check that cannot be completed from this terminal session.
 
 ### AC7: Write Preview And Human Approval
 
@@ -219,7 +242,17 @@ Tests:
 
 Gate:
 
+- User-approved writes are previewed with a diff before the target vault note
+  is changed.
 - Aily can help improve notes without violating user trust.
+
+Current status:
+
+- `/api/copilot/proposals/create`, `/proposals/apply`, `/proposals/reject`,
+  and `/proposals/list` implement preview-first write staging outside the
+  vault until approval.
+- Fixture evidence verifies apply writes only after approval.
+- Real-vault smoke verifies rejected preview does not create the target note.
 
 ## Quality Gates
 
@@ -235,14 +268,16 @@ Each gate needs multiple evidence sources:
 
 Passing a gate requires content quality, not only file existence.
 
-## First Implementation Slice
+## Current Implementation Slice
 
-Build AC1 now:
+Aily-Copilot now includes:
 
-1. Add `aily/copilot` package.
-2. Add vault search/read/context services.
-3. Add `/api/copilot` router.
-4. Add deterministic backend evidence script.
-5. Run compile and evidence script.
+1. Backend vault search/read/context/chat/dossier/relevant/project/proposal APIs.
+2. A thin Obsidian side-panel plugin installed and enabled in the iCloud vault.
+3. Deterministic fixture-vault evidence.
+4. Real iCloud vault smoke evidence.
+5. Live DeepSeek `copilot.chat` traffic evidence.
 
-This creates the foundation for the Obsidian plugin and grounded vault chat.
+Remaining product risk is now content depth, not core copilot plumbing: the
+real iCloud vault still needs richer ingested source material before dossiers
+and relevant-note navigation can show high editorial value at scale.

@@ -119,3 +119,19 @@ Reviewed on 2026-05-23:
   companion plugin.
 - AC1 should begin with backend vault search/read/context APIs so the plugin can
   remain a UI shell rather than a second reasoning engine.
+
+## Aily-Copilot Product Readiness Findings
+
+Recorded on 2026-05-23:
+
+- Aily-Copilot now has enough backend surface to behave like a real Obsidian
+  companion: grounded chat, relevant-note navigation, project scopes, dossier
+  generation, and preview-first writes.
+- Preview-first writing is the key product safety guardrail. Creating a proposal
+  stores a diff outside the vault; applying it is the only path that mutates a
+  target note.
+- Live provider evidence confirms `copilot.chat` uses DeepSeek and records
+  sanitized traffic metadata with token usage.
+- Real product value is now bottlenecked by vault content depth. The iCloud
+  vault needs richer ingested PDFs/source notes before dossiers and graph
+  recommendations can be judged at the level expected for leadership output.

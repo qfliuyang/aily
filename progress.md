@@ -1130,6 +1130,62 @@ Known gaps:
   wired but the evidence uses deterministic mode to avoid unnecessary API spend.
 - Obsidian runtime behavior still needs a manual smoke test after enabling the
   plugin in Obsidian.
+
+## 2026-05-23 Aily-Copilot Product Readiness Slice
+
+Implementation:
+
+- Added persistent Aily-Copilot project scopes in `aily/copilot/projects.py`.
+- Added preview-first proposal storage in `aily/copilot/proposals.py`; targets
+  are not changed until an apply request succeeds.
+- Extended `VaultSearchService` with content-based relevant-note
+  recommendations and relationship explanations.
+- Extended `/api/copilot` with relevant-note, project, and proposal endpoints.
+- Added `copilot.chat`/`copilot.dossier` traffic expectations to the LLM
+  monitor route table.
+- Expanded the Obsidian plugin with project selection, relevant notes, draft
+  preview, and apply/reject actions.
+- Updated the plugin installer to enable `aily-copilot` in the iCloud vault.
+- Added `scripts/run_aily_copilot_real_vault_smoke.py` for HTTP smoke tests
+  against the actual iCloud vault and running backend.
+
+Evidence:
+
+```text
+/Users/luzi/.aily/runs/2026-05-23T07-21-35Z_aily_copilot_backend/manifest.json
+/Users/luzi/.aily/runs/2026-05-23T07-21-35Z_aily_copilot_real_vault/manifest.json
+/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/manifest.json
+/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/copilot-llm-traffic-monitor.json
+```
+
+Verification:
+
+- `uv run python -m compileall -q aily scripts` passed.
+- `node --check obsidian-plugin/aily-copilot/main.js` passed.
+- Installed plugin `main.js` under the iCloud vault passed `node --check`.
+- `uv run python scripts/run_aily_copilot_backend_evidence.py` exited `0`.
+- `uv run python scripts/run_aily_copilot_real_vault_smoke.py` exited `0`.
+- `uv run python scripts/run_aily_copilot_real_vault_smoke.py --use-live-llm`
+  exited `0` and recorded a DeepSeek `copilot.chat` traffic receipt.
+- `uv run python scripts/monitor_llm_traffic.py --no-require-kimi ...` exited
+  `0` for the copilot live trace.
+
+Runtime status:
+
+- Backend is running at `http://127.0.0.1:8000`.
+- The active test/user vault is
+  `/Users/luzi/Library/Mobile Documents/com~apple~CloudDocs/Documents/aily`.
+- The plugin is installed under `.obsidian/plugins/aily-copilot` and enabled in
+  `.obsidian/community-plugins.json`.
+
+Residual risk:
+
+- Terminal evidence cannot prove the visual desktop Obsidian click-through.
+  The plugin is installed/enabled and backend calls are verified; the remaining
+  check is opening Obsidian and using the side panel as a human.
+- The real iCloud vault currently contains only a small origin-labeled seed
+  pair plus default notes, so large-scale dossier quality still depends on
+  ingesting richer source material.
 - M0-M9 and Gate0-Gate6 were present and marked `PASS` in the release matrix.
 - All 9 required prior manifests validated successfully.
 - Gate 6 dry-run review found no real email send.

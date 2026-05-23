@@ -139,6 +139,68 @@ class VaultSearchService:
             "shared_tags": shared_tags,
         }
 
+    def relevant_notes(
+        self,
+        *,
+        query: str = "",
+        seed_paths: list[str] | None = None,
+        include_dirs: list[str] | None = None,
+        exclude_dirs: list[str] | None = None,
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        """Return content-based note recommendations with relationship reasons."""
+        seeds: list[VaultNote] = []
+        for seed_path in seed_paths or []:
+            try:
+                seeds.append(self.load_note(self.resolve_note_path(seed_path)))
+            except (FileNotFoundError, ValueError):
+                continue
+        seed_terms = set(_tokenize(query))
+        seed_tags: set[str] = set()
+        seed_links: set[str] = set()
+        seed_titles: set[str] = set()
+        for seed in seeds:
+            seed_terms.update(_tokenize(seed.title))
+            seed_terms.update(_tokenize(_excerpt_for_terms(seed.body, list(seed_terms) or [seed.title], radius=900)))
+            seed_tags.update(seed.tags)
+            seed_links.update(_normalize_link(link) for link in seed.wikilinks)
+            seed_titles.add(_normalize_link(seed.title))
+            seed_titles.add(_normalize_link(seed.path.stem))
+
+        include_prefixes = tuple(_clean_prefix(item) for item in include_dirs or [] if _clean_prefix(item))
+        exclude_prefixes = tuple(_clean_prefix(item) for item in exclude_dirs or [] if _clean_prefix(item))
+        seed_paths_normalized = {seed.relative_path for seed in seeds}
+        scored: list[tuple[float, VaultNote, list[dict[str, Any]]]] = []
+        for note in self.iter_notes(include_prefixes=include_prefixes, exclude_prefixes=exclude_prefixes):
+            if note.relative_path in seed_paths_normalized:
+                continue
+            score, reasons = _relevance_score(note, seed_terms=seed_terms, seed_tags=seed_tags, seed_links=seed_links, seed_titles=seed_titles)
+            if score > 0 and reasons:
+                scored.append((score, note, reasons))
+        scored.sort(key=lambda item: (-item[0], item[1].relative_path.lower()))
+        recommendations = [
+            {
+                "rank": index,
+                "relative_path": note.relative_path,
+                "title": note.title,
+                "score": round(score, 4),
+                "relationship_explanations": reasons,
+                "excerpt": _excerpt_for_terms(note.body, sorted(seed_terms)[:8] or [query]),
+                "tags": note.tags,
+                "wikilinks": note.wikilinks[:20],
+                "sha256": note.sha256,
+            }
+            for index, (score, note, reasons) in enumerate(scored[: max(1, min(limit, 50))], 1)
+        ]
+        return {
+            "vault_path": str(self.vault_path),
+            "query": query,
+            "seed_paths": [seed.relative_path for seed in seeds],
+            "seed_terms": sorted(seed_terms)[:80],
+            "returned": len(recommendations),
+            "recommendations": recommendations,
+        }
+
     def iter_notes(
         self,
         *,
@@ -296,6 +358,74 @@ def _score_note(note: VaultNote, query: str, terms: list[str]) -> tuple[float, d
     reasons["link_boost"] = round(link_boost, 4)
     compact_reasons = {key: value for key, value in reasons.items() if value not in ({}, [], False, 0)}
     return score, compact_reasons
+
+
+def _relevance_score(
+    note: VaultNote,
+    *,
+    seed_terms: set[str],
+    seed_tags: set[str],
+    seed_links: set[str],
+    seed_titles: set[str],
+) -> tuple[float, list[dict[str, Any]]]:
+    title_text = note.title.lower()
+    body_text = note.body.lower()
+    path_text = note.relative_path.lower()
+    note_tags = set(note.tags)
+    normalized_links = {_normalize_link(link) for link in note.wikilinks}
+    reasons: list[dict[str, Any]] = []
+    score = 0.0
+
+    matched_terms = sorted(
+        term for term in seed_terms if len(term) > 2 and (term.lower() in title_text or term.lower() in body_text or term.lower() in path_text)
+    )[:12]
+    if matched_terms:
+        score += min(14.0, len(matched_terms) * 1.4)
+        reasons.append(
+            {
+                "relationship": "shared_content_terms",
+                "evidence": matched_terms,
+                "explanation": "Shares substantive terms with the question or seed notes.",
+            }
+        )
+
+    matched_tags = sorted(seed_tags.intersection(note_tags))
+    if matched_tags:
+        score += min(8.0, len(matched_tags) * 2.0)
+        reasons.append(
+            {
+                "relationship": "shared_tags",
+                "evidence": matched_tags,
+                "explanation": "Uses overlapping semantic tags.",
+            }
+        )
+
+    if normalized_links.intersection(seed_titles):
+        linked = sorted(normalized_links.intersection(seed_titles))
+        score += 9.0
+        reasons.append(
+            {
+                "relationship": "links_to_seed",
+                "evidence": linked,
+                "explanation": "Directly links to one of the selected seed notes.",
+            }
+        )
+
+    if seed_links.intersection({_normalize_link(note.path.stem), _normalize_link(note.title)}):
+        linked_by_seed = sorted(seed_links.intersection({_normalize_link(note.path.stem), _normalize_link(note.title)}))
+        score += 9.0
+        reasons.append(
+            {
+                "relationship": "linked_from_seed",
+                "evidence": linked_by_seed,
+                "explanation": "A selected seed note directly links to this note.",
+            }
+        )
+
+    link_count = len(normalized_links)
+    if link_count:
+        score += min(2.0, link_count * 0.08)
+    return score, reasons
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:

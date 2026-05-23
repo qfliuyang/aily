@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aily.verify.llm_traffic import build_traffic_monitor
+from aily.verify.llm_traffic import TrafficMonitorThresholds, build_traffic_monitor
 
 
 def _parse_args() -> argparse.Namespace:
@@ -24,6 +24,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default="", help="Logical run id for the monitor artifact.")
     parser.add_argument("--scenario", default="", help="Scenario name.")
     parser.add_argument("--output", type=Path, default=None, help="Output JSON path.")
+    parser.add_argument("--no-require-kimi", action="store_true", help="Do not require Kimi coverage for this monitor.")
+    parser.add_argument("--no-require-deepseek", action="store_true", help="Do not require DeepSeek coverage for this monitor.")
     return parser.parse_args()
 
 
@@ -45,7 +47,15 @@ def _trace_paths(args: argparse.Namespace) -> list[Path]:
 
 def main() -> int:
     args = _parse_args()
-    report = build_traffic_monitor(_trace_paths(args), run_id=args.run_id, scenario=args.scenario)
+    report = build_traffic_monitor(
+        _trace_paths(args),
+        run_id=args.run_id,
+        scenario=args.scenario,
+        thresholds=TrafficMonitorThresholds(
+            require_kimi=not args.no_require_kimi,
+            require_deepseek=not args.no_require_deepseek,
+        ),
+    )
     text = json.dumps(report, indent=2, ensure_ascii=False)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

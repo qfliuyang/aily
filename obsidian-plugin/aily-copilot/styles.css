@@ -18,6 +18,12 @@
   font-size: 12px;
 }
 
+.aily-copilot__project {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+
 .aily-copilot__transcript {
   display: flex;
   flex: 1;
@@ -66,4 +72,43 @@
   width: 100%;
   min-height: 100px;
   resize: vertical;
+}
+
+.aily-copilot__relevant,
+.aily-copilot__proposal {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.aily-copilot__relevant h3,
+.aily-copilot__proposal h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.aily-copilot__source {
+  display: grid;
+  gap: 2px;
+  padding: 6px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.aily-copilot__source:first-of-type {
+  border-top: 0;
+}
+
+.aily-copilot__source span,
+.aily-copilot__source small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.aily-copilot__proposal pre {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  white-space: pre-wrap;
 }

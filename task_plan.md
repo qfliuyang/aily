@@ -85,12 +85,14 @@ Initial team launched for discovery and M0/Gate 0 scoping:
 
 ## Active Work
 
-- Current milestone: AC2/AC3/AC6 Aily-Copilot usable MVP verification
+- Current milestone: Aily-Copilot product readiness verification
 - Current write scope: `docs/`, `aily/copilot/`, `aily/main.py`, evidence
   scripts, and vault-path configuration touched in the current productization
   slice
-- Current evidence target:
-  `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json`
+- Current evidence targets:
+  `/Users/luzi/.aily/runs/2026-05-23T07-21-35Z_aily_copilot_backend/manifest.json`
+  and
+  `/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/manifest.json`
 
 ## Aily-Copilot Product Track
 
@@ -98,12 +100,12 @@ Initial team launched for discovery and M0/Gate 0 scoping:
 |---|---|---|---|
 | AC0 | DONE | Product research and plan | `docs/OBSIDIAN_COPILOT_REVIEW.md`, `docs/AILY_COPILOT_DEVELOPMENT_PLAN.md` |
 | AC1 | DONE | Backend vault search/read/context API | `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json` |
-| AC2 | VERIFY | Grounded vault chat with citations | Backend route covered by `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json`; real LLM answer quality pending |
-| AC3 | VERIFY | Dossier generation from chat | Backend route writes `10-Dossiers` in fixture evidence; real-vault quality pending |
-| AC4 | TODO | Graph-aware relevant notes | pending |
-| AC5 | TODO | Project mode | pending |
-| AC6 | PARTIAL | Obsidian companion plugin MVP | Plugin installed into iCloud vault and JS syntax checked; in-Obsidian manual smoke pending |
-| AC7 | TODO | Preview-first write workflow | pending |
+| AC2 | DONE | Grounded vault chat with citations | Deterministic fixture evidence plus live DeepSeek smoke `/Users/luzi/.aily/runs/2026-05-23T07-21-42Z_aily_copilot_real_vault/manifest.json` |
+| AC3 | DONE | Dossier generation from chat | Fixture route writes `10-Dossiers`; real-vault smoke verifies product API flow |
+| AC4 | DONE | Graph-aware relevant notes | `/api/copilot/vault/relevant` with relationship explanations covered by fixture and real-vault smoke |
+| AC5 | DONE | Project mode | Persistent project upsert/list/delete and project-scoped chat/relevant/dossier covered by evidence |
+| AC6 | DONE | Obsidian companion plugin MVP | Plugin installed and enabled in iCloud vault, JS checked, backend calls covered by real-vault smoke |
+| AC7 | DONE | Preview-first write workflow | Proposal create/apply/reject covered by fixture evidence; real-vault smoke rejects without target mutation |
 
 ## Required Per-Run Checklist
 

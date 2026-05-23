@@ -31,6 +31,8 @@ EXPECTED_PROVIDERS_BY_WORKLOAD = {
     "entrepreneur": "deepseek",
     "guru": "deepseek",
     "gstack": "deepseek",
+    "copilot.chat": "deepseek",
+    "copilot.dossier": "deepseek",
 }
 
 

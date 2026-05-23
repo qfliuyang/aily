@@ -151,9 +151,19 @@ def main() -> int:
         failures.append(_failure("citation_catalog_present", envelope=envelope_a))
 
     app = FastAPI()
-    app.include_router(create_copilot_router(vault_path=vault_path))
+    app.include_router(create_copilot_router(vault_path=vault_path, state_dir=runtime_dir / "copilot-state"))
     client = TestClient(app)
     api_status = client.get("/api/copilot/status")
+    api_project = client.post(
+        "/api/copilot/projects/upsert",
+        json={
+            "name": "JR-GO EDA project",
+            "include_dirs": ["02-Information", "03-Knowledge", "10-Dossiers"],
+            "source_terms": ["JR-GO", "EDA", "chiplet"],
+            "system_prompt": "Focus on semiconductor product evidence.",
+        },
+    )
+    project_id = api_project.json().get("project", {}).get("id", "") if api_project.status_code == 200 else ""
     api_search = client.post("/api/copilot/vault/search", json={"query": "JR-GO EDA", "limit": 3})
     api_read = client.post(
         "/api/copilot/vault/read",
@@ -165,7 +175,21 @@ def main() -> int:
     )
     api_chat = client.post(
         "/api/copilot/chat",
-        json={"message": "Explain JR-GO as a product system.", "search_query": "JR-GO EDA chiplet", "use_llm": False},
+        json={
+            "message": "Explain JR-GO as a product system.",
+            "search_query": "JR-GO EDA chiplet",
+            "project_id": project_id,
+            "use_llm": False,
+        },
+    )
+    api_relevant = client.post(
+        "/api/copilot/vault/relevant",
+        json={
+            "query": "JR-GO product evidence",
+            "seed_paths": ["03-Knowledge/JR-GO Technical Proposal.md"],
+            "project_id": project_id,
+            "limit": 5,
+        },
     )
     api_dossier = client.post(
         "/api/copilot/dossiers/generate",
@@ -176,14 +200,34 @@ def main() -> int:
             "max_vault_evidence": 20,
         },
     )
+    api_proposal = client.post(
+        "/api/copilot/proposals/create",
+        json={
+            "title": "JR-GO Copilot Evidence Brief",
+            "target_path": "10-Dossiers/JR-GO Copilot Evidence Brief.md",
+            "content": "# JR-GO Copilot Evidence Brief\n\nJR-GO combines EDA automation and chiplet planning based on cited vault evidence.\n",
+            "mode": "create",
+            "rationale": "Evidence-runner preview-first write test.",
+            "source_citations": [{"citation_id": "V001", "relative_path": "03-Knowledge/JR-GO Technical Proposal.md"}],
+        },
+    )
+    proposal_id = api_proposal.json().get("proposal", {}).get("id", "") if api_proposal.status_code == 200 else ""
+    api_apply = client.post("/api/copilot/proposals/apply", json={"proposal_id": proposal_id}) if proposal_id else None
     for name, response in {
         "api_status": api_status,
+        "api_project": api_project,
         "api_search": api_search,
         "api_read": api_read,
         "api_envelope": api_envelope,
         "api_chat": api_chat,
+        "api_relevant": api_relevant,
         "api_dossier": api_dossier,
+        "api_proposal": api_proposal,
+        "api_apply": api_apply,
     }.items():
+        if response is None:
+            failures.append(_failure(name, status_code=0, body="request not executed"))
+            continue
         if response.status_code != 200:
             failures.append(_failure(name, status_code=response.status_code, body=response.text))
     if api_chat.status_code == 200:
@@ -201,6 +245,13 @@ def main() -> int:
             failures.append(_failure("dossier_written_to_10_dossiers", dossier=dossier_payload))
         if not dossier_path.is_file():
             failures.append(_failure("dossier_file_exists", dossier=dossier_payload))
+    if api_relevant.status_code == 200 and not api_relevant.json().get("recommendations"):
+        failures.append(_failure("relevant_notes_present", relevant=api_relevant.json()))
+    if api_apply and api_apply.status_code == 200:
+        applied_payload = api_apply.json()
+        applied_path = vault_path / str(applied_payload.get("proposal", {}).get("target_path", ""))
+        if not applied_path.is_file():
+            failures.append(_failure("proposal_apply_writes_target_after_approval", proposal=applied_payload))
 
     result = {
         "fixture_files": fixture_files,
@@ -212,7 +263,10 @@ def main() -> int:
         "citation_count": len(envelope_a["citation_catalog"]),
         "api_search_returned": api_search.json().get("returned") if api_search.status_code == 200 else None,
         "api_chat_grounding_status": api_chat.json().get("grounding_status") if api_chat.status_code == 200 else None,
+        "api_relevant_returned": api_relevant.json().get("returned") if api_relevant.status_code == 200 else None,
         "api_dossier_relative_path": api_dossier.json().get("relative_path") if api_dossier.status_code == 200 else None,
+        "api_project_id": project_id,
+        "api_proposal_status": api_apply.json().get("proposal", {}).get("status") if api_apply and api_apply.status_code == 200 else None,
     }
     evidence.write_json("fixture-files.json", fixture_files, generation_method="Aily-Copilot fixture vault creation")
     evidence.write_json("vault-search.json", search_result, generation_method="VaultSearchService.search")
@@ -223,11 +277,15 @@ def main() -> int:
         "api-smoke.json",
         {
             "status": api_status.json() if api_status.status_code == 200 else api_status.text,
+            "project": api_project.json() if api_project.status_code == 200 else api_project.text,
             "search": api_search.json() if api_search.status_code == 200 else api_search.text,
             "read": api_read.json() if api_read.status_code == 200 else api_read.text,
             "envelope": api_envelope.json() if api_envelope.status_code == 200 else api_envelope.text,
             "chat": api_chat.json() if api_chat.status_code == 200 else api_chat.text,
+            "relevant": api_relevant.json() if api_relevant.status_code == 200 else api_relevant.text,
             "dossier": api_dossier.json() if api_dossier.status_code == 200 else api_dossier.text,
+            "proposal": api_proposal.json() if api_proposal.status_code == 200 else api_proposal.text,
+            "apply": api_apply.json() if api_apply and api_apply.status_code == 200 else (api_apply.text if api_apply else ""),
         },
         generation_method="FastAPI TestClient calls against create_copilot_router",
     )
