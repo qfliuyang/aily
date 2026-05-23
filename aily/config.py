@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     feishu_encrypt_key: str = ""
     obsidian_rest_api_key: str = ""
     obsidian_vault_path: str = ""
-    dikiwi_vault_path: str = "/Users/luzi/Documents/aily/aily"
+    dikiwi_vault_path: str = "/Users/luzi/Library/Mobile Documents/com~apple~CloudDocs/Documents/aily"
     obsidian_rest_api_port: int = 27123
     llm_provider: str = "kimi"
     llm_api_key: str = ""

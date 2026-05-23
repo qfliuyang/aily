@@ -46,7 +46,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pdf", type=Path, default=None, help="Original PDF source path.")
     parser.add_argument("--run-id", default="", help="Optional evidence run id.")
     parser.add_argument("--runs-root", type=Path, default=SETTINGS.evidence_runs_dir, help="Evidence root directory.")
-    parser.add_argument("--vault-path", type=Path, default=None, help="Visible Obsidian test vault path. Defaults to ~/Documents/Aily Test Vaults/<run-id>.")
+    parser.add_argument("--vault-path", type=Path, default=None, help="Visible Obsidian vault path. Defaults to configured iCloud Documents Aily vault.")
     return parser.parse_args()
 
 

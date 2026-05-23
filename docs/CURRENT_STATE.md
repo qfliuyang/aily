@@ -26,6 +26,7 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Provider route and timeout control: `aily/llm/provider_routes.py`, `aily/llm/llm_router.py`
 - Provider capability matrix: `aily/llm/provider_capabilities.py`
 - Hosted-mode guardrails: `aily/security/`
+- Aily-Copilot backend API: `aily/copilot/`, mounted under `/api/copilot`
 
 ## Active Flow
 
@@ -35,6 +36,9 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 4. The older incremental graph-growth trigger remains available for full DIKIWI runs, but Insight/Wisdom/Impact are treated as triggered synthesis work rather than default ingestion work.
 5. After IMPACT, Reactor and Entrepreneur components still exist as legacy higher-order engines that V1 should wrap or quarantine behind the new orchestrator design.
 6. Notes are written into the numbered Obsidian vault layout.
+7. Aily-Copilot can search and read the configured vault, build citation-ready
+   context envelopes, and expose graph-neighborhood primitives for a future
+   Obsidian companion plugin.
 
 ## Active Vault Layout
 

@@ -1032,6 +1032,62 @@ Verification:
   `/Users/luzi/Documents/Aily Test Vaults/20260519T_20pdf_panel_e2e`.
 - Current visible test vault cleanup removed the old delivery folder and moved
   dossiers into `10-Dossiers`.
+
+## 2026-05-23 Shared iCloud Vault Becomes Default Test Vault
+
+User decision:
+
+- Future evidence and development runs should use
+  `/Users/luzi/Library/Mobile Documents/com~apple~CloudDocs/Documents/aily`
+  as the default Obsidian vault so generated notes are directly usable.
+
+Implementation notes:
+
+- Updated the local `.env` vault path values to the iCloud Documents vault.
+- Updated the default `dikiwi_vault_path` fallback in `aily/config.py`.
+- Updated evidence-run vault resolution to use the configured shared vault
+  instead of creating `~/Documents/Aily Test Vaults/<run-id>`.
+- Updated the visible-vault guard to allow both normal `~/Documents` paths and
+  the iCloud Documents path.
+- Created the standard V1 vault layout in the iCloud vault with
+  `scripts/setup_v1_vault_layout.py`.
+
+Verification:
+
+- `resolve_test_vault_path("example-run")` resolved to the iCloud vault.
+- `scripts/setup_v1_vault_layout.py` reported no missing required V1
+  directories after setup.
+
+## 2026-05-23 Aily-Copilot AC0/AC1 Started
+
+Research:
+
+- Reviewed `https://github.com/logancyang/obsidian-copilot` source and docs.
+- Captured product/code-review findings in `docs/OBSIDIAN_COPILOT_REVIEW.md`.
+- Captured Aily-Copilot plan in `docs/AILY_COPILOT_DEVELOPMENT_PLAN.md`.
+
+Implementation:
+
+- Added `aily/copilot` package.
+- Added deterministic `VaultSearchService` for lexical vault search, note
+  reading, backlink/link extraction, and graph-neighborhood payloads.
+- Added `CopilotContextEnvelopeBuilder` with L1-L5-style layers, stable hashes,
+  and a citation catalog.
+- Added `/api/copilot` router with status, vault search, read note,
+  neighborhood, and context-envelope endpoints.
+- Mounted the router in `aily/main.py`.
+
+Evidence:
+
+```text
+/Users/luzi/.aily/runs/2026-05-23T06-50-08Z_aily_copilot_backend/manifest.json
+```
+
+Verification:
+
+- `uv run python scripts/run_aily_copilot_backend_evidence.py` exited `0`.
+- Evidence runner validated service behavior and FastAPI router smoke calls.
+- `uv run python -m compileall -q aily scripts` passed.
 - M0-M9 and Gate0-Gate6 were present and marked `PASS` in the release matrix.
 - All 9 required prior manifests validated successfully.
 - Gate 6 dry-run review found no real email send.

@@ -17,6 +17,7 @@ from langgraph.types import Command
 
 from aily.business import BusinessPlanStore, BusinessPlanSynthesizer
 from aily.config import SETTINGS
+from aily.copilot.router import create_copilot_router
 from aily.queue.db import QueueDB
 from aily.queue.worker import JobWorker
 from aily.browser.fetcher import BrowserFetcher, FetchError
@@ -3165,6 +3166,14 @@ async def ready() -> dict[str, Any]:
     }
 
 app.include_router(webhook.router)
+app.include_router(
+    create_copilot_router(
+        vault_path=_studio_vault_path(),
+        auth_token=SETTINGS.ui_auth_token if (SETTINGS.ui_auth_enabled or SETTINGS.hosted_mode) else "",
+        rate_limiter=ui_rate_limiter,
+        trust_proxy_headers=SETTINGS.trusted_proxy_headers,
+    )
+)
 app.include_router(
     create_ui_router(
         upload_handler=_handle_ui_upload,

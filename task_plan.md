@@ -85,10 +85,25 @@ Initial team launched for discovery and M0/Gate 0 scoping:
 
 ## Active Work
 
-- Current milestone: complete
-- Current write scope: none
-- Current evidence target: complete; M0-M9 and Gate0-Gate6 have independent
-  passing manifests
+- Current milestone: AC1 Aily-Copilot backend vault chat foundation
+- Current write scope: `docs/`, `aily/copilot/`, `aily/main.py`, evidence
+  scripts, and vault-path configuration touched in the current productization
+  slice
+- Current evidence target:
+  `/Users/luzi/.aily/runs/2026-05-23T06-50-08Z_aily_copilot_backend/manifest.json`
+
+## Aily-Copilot Product Track
+
+| ID | Status | Milestone | Evidence |
+|---|---|---|---|
+| AC0 | DONE | Product research and plan | `docs/OBSIDIAN_COPILOT_REVIEW.md`, `docs/AILY_COPILOT_DEVELOPMENT_PLAN.md` |
+| AC1 | VERIFY | Backend vault search/read/context API | `/Users/luzi/.aily/runs/2026-05-23T06-50-08Z_aily_copilot_backend/manifest.json` |
+| AC2 | TODO | Grounded vault chat with citations | pending |
+| AC3 | TODO | Dossier generation from chat | pending |
+| AC4 | TODO | Graph-aware relevant notes | pending |
+| AC5 | TODO | Project mode | pending |
+| AC6 | TODO | Obsidian companion plugin MVP | pending |
+| AC7 | TODO | Preview-first write workflow | pending |
 
 ## Required Per-Run Checklist
 

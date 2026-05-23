@@ -103,3 +103,19 @@ Initial read-only specialist team findings on 2026-05-17:
 - Security/config: Obsidian REST is reachable locally and configured without a
   literal `Bearer ` prefix. Gate 0 still needs machine-generated evidence and
   vault folder readiness.
+
+## Aily-Copilot Product Research Findings
+
+Reviewed on 2026-05-23:
+
+- Obsidian Copilot's strongest reusable product patterns are layered context
+  envelopes, deterministic vault search, inline citations, project-scoped
+  context, tool metadata, memory separation, and preview-first file editing.
+- Aily should not fork Obsidian Copilot as the main implementation because the
+  repo is AGPL-3.0 and because Aily's backend workflows require durable stores,
+  evidence gates, DIKIWI, Tavily research, dossier generation, and graph-quality
+  scoring.
+- The right architecture is an Aily FastAPI backend plus a thin Obsidian
+  companion plugin.
+- AC1 should begin with backend vault search/read/context APIs so the plugin can
+  remain a UI shell rather than a second reasoning engine.

@@ -67,7 +67,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--second-opinion-pdf", type=Path, default=None, help="Second-opinion/reference PDF path.")
     parser.add_argument("--run-id", default="", help="Optional evidence run id.")
     parser.add_argument("--runs-root", type=Path, default=SETTINGS.evidence_runs_dir, help="Evidence root directory.")
-    parser.add_argument("--vault-path", type=Path, default=None, help="Visible Obsidian test vault path. Defaults to ~/Documents/Aily Test Vaults/<run-id>.")
+    parser.add_argument("--vault-path", type=Path, default=None, help="Visible Obsidian vault path. Defaults to configured iCloud Documents Aily vault.")
     parser.add_argument("--research-model", default="mini", choices=["mini", "pro"], help="Tavily research model/depth.")
     parser.add_argument("--max-results", type=int, default=3, help="Tavily max results.")
     return parser.parse_args()
