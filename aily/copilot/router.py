@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -456,7 +457,8 @@ def _copilot_config_response() -> dict[str, Any]:
         },
         "routes": routes,
         "workload_routes_json": _redacted_workload_routes_json(),
-        "persistence": "runtime_only",
+        "persistence": "env_file",
+        "env_path": str(_settings_env_path()),
     }
 
 
@@ -509,33 +511,46 @@ def _redact_mapping(value: Any) -> Any:
 
 
 def _apply_copilot_config_update(payload: CopilotConfigUpdateRequest) -> None:
+    env_updates: dict[str, str] = {}
     if payload.llm_provider is not None:
         SETTINGS.llm_provider = _validate_provider(payload.llm_provider)
+        env_updates["LLM_PROVIDER"] = SETTINGS.llm_provider
     if payload.kimi_api_key is not None:
         SETTINGS.kimi_api_key = payload.kimi_api_key.strip()
+        env_updates["KIMI_API_KEY"] = SETTINGS.kimi_api_key
     if payload.kimi_model is not None:
         SETTINGS.kimi_model = _required_text(payload.kimi_model, "kimi_model")
+        env_updates["KIMI_MODEL"] = SETTINGS.kimi_model
     if payload.kimi_vision_model is not None:
         SETTINGS.kimi_vision_model = _required_text(payload.kimi_vision_model, "kimi_vision_model")
+        env_updates["KIMI_VISION_MODEL"] = SETTINGS.kimi_vision_model
     if payload.deepseek_api_key is not None:
         SETTINGS.deepseek_api_key = payload.deepseek_api_key.strip()
+        env_updates["DEEPSEEK_API_KEY"] = SETTINGS.deepseek_api_key
     if payload.deepseek_model is not None:
         SETTINGS.deepseek_model = _required_text(payload.deepseek_model, "deepseek_model")
+        env_updates["DEEPSEEK_MODEL"] = SETTINGS.deepseek_model
     if payload.tavily_api_key is not None:
         SETTINGS.tavily_api_key = payload.tavily_api_key.strip()
+        env_updates["TAVILY_API_KEY"] = SETTINGS.tavily_api_key
     if payload.tavily_search_depth is not None:
         depth = payload.tavily_search_depth.strip().lower()
         if depth not in {"basic", "advanced"}:
             raise ValueError("tavily_search_depth must be either 'basic' or 'advanced'")
         SETTINGS.tavily_search_depth = depth
+        env_updates["TAVILY_SEARCH_DEPTH"] = SETTINGS.tavily_search_depth
     if payload.llm_timeout_seconds is not None:
         SETTINGS.llm_timeout_seconds = payload.llm_timeout_seconds
+        env_updates["LLM_TIMEOUT_SECONDS"] = str(SETTINGS.llm_timeout_seconds)
     if payload.llm_max_retries is not None:
         SETTINGS.llm_max_retries = payload.llm_max_retries
+        env_updates["LLM_MAX_RETRIES"] = str(SETTINGS.llm_max_retries)
     if payload.llm_max_concurrency is not None:
         SETTINGS.llm_max_concurrency = payload.llm_max_concurrency
+        env_updates["LLM_MAX_CONCURRENCY"] = str(SETTINGS.llm_max_concurrency)
     if payload.llm_min_interval_seconds is not None:
         SETTINGS.llm_min_interval_seconds = payload.llm_min_interval_seconds
+        env_updates["LLM_MIN_INTERVAL_SECONDS"] = str(SETTINGS.llm_min_interval_seconds)
 
     if payload.copilot_chat_provider is not None:
         _set_workload_provider("copilot.chat", payload.copilot_chat_provider)
@@ -543,6 +558,13 @@ def _apply_copilot_config_update(payload: CopilotConfigUpdateRequest) -> None:
         _set_workload_provider("copilot.dossier", payload.copilot_dossier_provider)
 
     _sync_primary_llm_settings()
+    if payload.copilot_chat_provider is not None or payload.copilot_dossier_provider is not None:
+        env_updates["LLM_WORKLOAD_ROUTES_JSON"] = SETTINGS.llm_workload_routes_json
+    if payload.llm_provider is not None:
+        env_updates["LLM_BASE_URL"] = SETTINGS.llm_base_url
+        env_updates["LLM_MODEL"] = SETTINGS.llm_model
+    if env_updates:
+        _write_env_updates(env_updates)
 
 
 def _validate_provider(provider: str) -> str:
@@ -596,6 +618,47 @@ def _sync_primary_llm_settings() -> None:
     SETTINGS.llm_base_url = "https://api.deepseek.com"
     SETTINGS.llm_model = SETTINGS.deepseek_model or SETTINGS.llm_model
     SETTINGS.llm_api_key = SETTINGS.deepseek_api_key or SETTINGS.llm_api_key
+
+
+def _settings_env_path() -> Path:
+    env_file = SETTINGS.model_config.get("env_file", ".env")
+    if isinstance(env_file, (list, tuple)):
+        env_file = env_file[0] if env_file else ".env"
+    path = Path(str(env_file))
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def _write_env_updates(updates: dict[str, str]) -> None:
+    env_path = _settings_env_path()
+    if not env_path.exists():
+        env_path.write_text("", encoding="utf-8")
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    updated_keys: set[str] = set()
+    rendered: list[str] = []
+    assignment_pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+    for line in lines:
+        match = assignment_pattern.match(line)
+        key = match.group(1) if match else ""
+        if key in updates:
+            rendered.append(f"{key}={_format_env_value(updates[key])}")
+            updated_keys.add(key)
+        else:
+            rendered.append(line)
+    for key, value in updates.items():
+        if key not in updated_keys:
+            rendered.append(f"{key}={_format_env_value(value)}")
+    env_path.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
+
+
+def _format_env_value(value: str) -> str:
+    clean = str(value)
+    if clean == "":
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_./:@+-]+", clean):
+        return clean
+    return json.dumps(clean)
 
 
 def _merge_scope(
