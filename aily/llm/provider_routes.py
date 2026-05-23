@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from typing import Any
 
@@ -313,13 +314,31 @@ class PrimaryLLMRoute:
 
     @classmethod
     def build_settings_resolver(cls, settings: Any) -> Any:
-        """Return a cached workload->client resolver for a settings object."""
-        cache: dict[tuple[str, bool | None], LLMClient] = {}
+        """Return a cached workload->client resolver for a settings object.
+
+        The cache key includes the resolved route so runtime settings changes
+        made through Aily-Copilot settings take effect for new requests.
+        """
+        cache: dict[tuple[Any, ...], LLMClient] = {}
 
         def _resolve(workload: str, thinking: bool | None = None) -> LLMClient:
-            key = (str(workload or "default"), thinking)
+            route = cls.resolve_route(settings, workload=str(workload or "default"), thinking=thinking)
+            api_key_fingerprint = hashlib.sha256(route.api_key.encode("utf-8")).hexdigest() if route.api_key else ""
+            key = (
+                route.workload,
+                thinking,
+                route.provider,
+                route.model,
+                route.base_url,
+                api_key_fingerprint,
+                route.thinking,
+                route.max_concurrency,
+                route.min_interval_seconds,
+                route.timeout,
+                route.max_retries,
+            )
             if key not in cache:
-                cache[key] = cls.from_settings(settings, workload=key[0], thinking=thinking)
+                cache[key] = cls.build_client(route)
             return cache[key]
 
         return _resolve

@@ -1,5 +1,9 @@
 import { ChainType } from "@/chainType";
-import { AilyBackendClient } from "@/aily/AilyBackendClient";
+import {
+  AilyBackendClient,
+  type AilyConfigResponse,
+  type AilyConfigUpdateRequest,
+} from "@/aily/AilyBackendClient";
 import { Button } from "@/components/ui/button";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Input } from "@/components/ui/input";
@@ -16,7 +20,7 @@ import { checkModelApiKey, formatDateTime } from "@/utils";
 import { isSortStrategy } from "@/utils/recentUsageManager";
 import { Key, Loader2 } from "lucide-react";
 import { Notice } from "obsidian";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ApiKeyDialog } from "./ApiKeyDialog";
 
 const ChainType2Label: Record<ChainType, string> = {
@@ -27,15 +31,58 @@ const ChainType2Label: Record<ChainType, string> = {
   [ChainType.PROJECT_CHAIN]: "Projects (alpha)",
 };
 
+type AilyProvider = "kimi" | "deepseek";
+type TavilySearchDepth = "basic" | "advanced";
+
+interface AilyConfigDraft {
+  llmProvider: AilyProvider;
+  copilotChatProvider: AilyProvider;
+  copilotDossierProvider: AilyProvider;
+  kimiModel: string;
+  kimiVisionModel: string;
+  deepseekModel: string;
+  tavilySearchDepth: TavilySearchDepth;
+  timeoutSeconds: string;
+  maxRetries: string;
+  maxConcurrency: string;
+  minIntervalSeconds: string;
+}
+
+const defaultAilyConfigDraft: AilyConfigDraft = {
+  llmProvider: "kimi",
+  copilotChatProvider: "deepseek",
+  copilotDossierProvider: "deepseek",
+  kimiModel: "kimi-k2.6",
+  kimiVisionModel: "kimi-k2.6",
+  deepseekModel: "deepseek-v4-pro",
+  tavilySearchDepth: "basic",
+  timeoutSeconds: "120",
+  maxRetries: "2",
+  maxConcurrency: "1",
+  minIntervalSeconds: "6",
+};
+
 export const BasicSettings: React.FC = () => {
   const app = useApp();
   const settings = useSettingsValue();
   const { setSelectedTab } = useTab();
   const [isChecking, setIsChecking] = useState(false);
   const [isCheckingAily, setIsCheckingAily] = useState(false);
+  const [isLoadingAilyConfig, setIsLoadingAilyConfig] = useState(false);
+  const [isSavingAilyConfig, setIsSavingAilyConfig] = useState(false);
+  const [ailyConfig, setAilyConfig] = useState<AilyConfigResponse | null>(null);
+  const [ailyConfigDraft, setAilyConfigDraft] =
+    useState<AilyConfigDraft>(defaultAilyConfigDraft);
+  const [kimiApiKeyDraft, setKimiApiKeyDraft] = useState("");
+  const [deepseekApiKeyDraft, setDeepseekApiKeyDraft] = useState("");
+  const [tavilyApiKeyDraft, setTavilyApiKeyDraft] = useState("");
   const [conversationNoteName, setConversationNoteName] = useState(
     settings.defaultConversationNoteName || "{$date}_{$time}__{$topic}"
   );
+
+  useEffect(() => {
+    void loadAilyConfig({ silent: true });
+  }, [settings.ailyApiBaseUrl, settings.ailyApiToken]);
 
   const applyCustomNoteFormat = () => {
     setIsChecking(true);
@@ -102,6 +149,99 @@ export const BasicSettings: React.FC = () => {
     }
   };
 
+  const loadAilyConfig = async ({ silent = false }: { silent?: boolean } = {}) => {
+    setIsLoadingAilyConfig(true);
+    try {
+      const config = await new AilyBackendClient().config();
+      setAilyConfig(config);
+      setAilyConfigDraft({
+        llmProvider: config.llm_provider,
+        copilotChatProvider: config.routes.copilot_chat.provider,
+        copilotDossierProvider: config.routes.copilot_dossier.provider,
+        kimiModel: config.kimi.model,
+        kimiVisionModel: config.kimi.vision_model,
+        deepseekModel: config.deepseek.model,
+        tavilySearchDepth: config.tavily.search_depth,
+        timeoutSeconds: String(config.runtime.timeout_seconds),
+        maxRetries: String(config.runtime.max_retries),
+        maxConcurrency: String(config.runtime.max_concurrency),
+        minIntervalSeconds: String(config.runtime.min_interval_seconds),
+      });
+      if (!silent) new Notice("Aily configuration loaded", 3000);
+    } catch (error) {
+      if (!silent) {
+        new Notice(
+          `Could not load Aily configuration: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          8000
+        );
+      }
+    } finally {
+      setIsLoadingAilyConfig(false);
+    }
+  };
+
+  const updateAilyConfigDraft = <K extends keyof AilyConfigDraft>(
+    key: K,
+    value: AilyConfigDraft[K]
+  ) => {
+    setAilyConfigDraft((draft) => ({ ...draft, [key]: value }));
+  };
+
+  const saveAilyConfig = async () => {
+    const timeoutSeconds = Number(ailyConfigDraft.timeoutSeconds);
+    const maxRetries = Number(ailyConfigDraft.maxRetries);
+    const maxConcurrency = Number(ailyConfigDraft.maxConcurrency);
+    const minIntervalSeconds = Number(ailyConfigDraft.minIntervalSeconds);
+
+    if (
+      !Number.isFinite(timeoutSeconds) ||
+      !Number.isFinite(maxRetries) ||
+      !Number.isFinite(maxConcurrency) ||
+      !Number.isFinite(minIntervalSeconds)
+    ) {
+      new Notice("Aily runtime limits must be valid numbers", 5000);
+      return;
+    }
+
+    const payload: AilyConfigUpdateRequest = {
+      llm_provider: ailyConfigDraft.llmProvider,
+      copilot_chat_provider: ailyConfigDraft.copilotChatProvider,
+      copilot_dossier_provider: ailyConfigDraft.copilotDossierProvider,
+      kimi_model: ailyConfigDraft.kimiModel.trim(),
+      kimi_vision_model: ailyConfigDraft.kimiVisionModel.trim(),
+      deepseek_model: ailyConfigDraft.deepseekModel.trim(),
+      tavily_search_depth: ailyConfigDraft.tavilySearchDepth,
+      llm_timeout_seconds: timeoutSeconds,
+      llm_max_retries: maxRetries,
+      llm_max_concurrency: maxConcurrency,
+      llm_min_interval_seconds: minIntervalSeconds,
+    };
+    if (kimiApiKeyDraft.trim()) payload.kimi_api_key = kimiApiKeyDraft.trim();
+    if (deepseekApiKeyDraft.trim()) payload.deepseek_api_key = deepseekApiKeyDraft.trim();
+    if (tavilyApiKeyDraft.trim()) payload.tavily_api_key = tavilyApiKeyDraft.trim();
+
+    setIsSavingAilyConfig(true);
+    try {
+      const config = await new AilyBackendClient().updateConfig(payload);
+      setAilyConfig(config);
+      setKimiApiKeyDraft("");
+      setDeepseekApiKeyDraft("");
+      setTavilyApiKeyDraft("");
+      new Notice("Aily runtime configuration saved", 4000);
+    } catch (error) {
+      new Notice(
+        `Could not save Aily configuration: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        8000
+      );
+    } finally {
+      setIsSavingAilyConfig(false);
+    }
+  };
+
   const defaultModelActivated = !!settings.activeModels.find(
     (m) => m.enabled && getModelKeyFromModel(m) === settings.defaultModelKey
   );
@@ -142,6 +282,195 @@ export const BasicSettings: React.FC = () => {
             checked={settings.ailyUseLlm}
             onCheckedChange={(checked) => updateSetting("ailyUseLlm", checked)}
           />
+          <SettingItem
+            type="select"
+            title="Default Aily Provider"
+            description="Backend default provider for Aily workloads that do not have a more specific route."
+            value={ailyConfigDraft.llmProvider}
+            onChange={(value) => updateAilyConfigDraft("llmProvider", value as AilyProvider)}
+            options={[
+              { label: "Kimi", value: "kimi" },
+              { label: "DeepSeek", value: "deepseek" },
+            ]}
+          />
+          <SettingItem
+            type="select"
+            title="Copilot Chat Provider"
+            description="Provider used by Aily mode for grounded vault chat."
+            value={ailyConfigDraft.copilotChatProvider}
+            onChange={(value) =>
+              updateAilyConfigDraft("copilotChatProvider", value as AilyProvider)
+            }
+            options={[
+              { label: "DeepSeek", value: "deepseek" },
+              { label: "Kimi", value: "kimi" },
+            ]}
+          />
+          <SettingItem
+            type="select"
+            title="Dossier Provider"
+            description="Provider used when Aily generates dossier drafts from the vault."
+            value={ailyConfigDraft.copilotDossierProvider}
+            onChange={(value) =>
+              updateAilyConfigDraft("copilotDossierProvider", value as AilyProvider)
+            }
+            options={[
+              { label: "DeepSeek", value: "deepseek" },
+              { label: "Kimi", value: "kimi" },
+            ]}
+          />
+          <SettingItem
+            type="custom"
+            title="Kimi"
+            description={`Model settings. API key is ${
+              ailyConfig?.kimi.api_key.configured
+                ? `configured (${ailyConfig.kimi.api_key.preview})`
+                : "not configured"
+            }.`}
+          >
+            <div className="tw-grid tw-w-full tw-gap-2 sm:tw-w-[360px]">
+              <Input
+                type="text"
+                placeholder="Kimi chat model"
+                value={ailyConfigDraft.kimiModel}
+                onChange={(event) => updateAilyConfigDraft("kimiModel", event.target.value)}
+              />
+              <Input
+                type="text"
+                placeholder="Kimi vision model"
+                value={ailyConfigDraft.kimiVisionModel}
+                onChange={(event) => updateAilyConfigDraft("kimiVisionModel", event.target.value)}
+              />
+              <Input
+                type="password"
+                placeholder="New Kimi API key; leave blank to keep existing"
+                value={kimiApiKeyDraft}
+                onChange={(event) => setKimiApiKeyDraft(event.target.value)}
+              />
+            </div>
+          </SettingItem>
+          <SettingItem
+            type="custom"
+            title="DeepSeek"
+            description={`Model settings. API key is ${
+              ailyConfig?.deepseek.api_key.configured
+                ? `configured (${ailyConfig.deepseek.api_key.preview})`
+                : "not configured"
+            }.`}
+          >
+            <div className="tw-grid tw-w-full tw-gap-2 sm:tw-w-[360px]">
+              <Input
+                type="text"
+                placeholder="DeepSeek chat model"
+                value={ailyConfigDraft.deepseekModel}
+                onChange={(event) => updateAilyConfigDraft("deepseekModel", event.target.value)}
+              />
+              <Input
+                type="password"
+                placeholder="New DeepSeek API key; leave blank to keep existing"
+                value={deepseekApiKeyDraft}
+                onChange={(event) => setDeepseekApiKeyDraft(event.target.value)}
+              />
+            </div>
+          </SettingItem>
+          <SettingItem
+            type="custom"
+            title="Tavily Search"
+            description={`External web research for grounded dossiers and research packets. API key is ${
+              ailyConfig?.tavily.api_key.configured
+                ? `configured (${ailyConfig.tavily.api_key.preview})`
+                : "not configured"
+            }.`}
+          >
+            <div className="tw-grid tw-w-full tw-gap-2 sm:tw-w-[360px]">
+              <select
+                value={ailyConfigDraft.tavilySearchDepth}
+                onChange={(event) =>
+                  updateAilyConfigDraft("tavilySearchDepth", event.target.value as TavilySearchDepth)
+                }
+                className="tw-flex tw-h-9 tw-w-full tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-dropdown tw-px-3 tw-py-1 tw-text-sm"
+              >
+                <option value="basic">Basic search depth</option>
+                <option value="advanced">Advanced search depth</option>
+              </select>
+              <Input
+                type="password"
+                placeholder="New Tavily API key; leave blank to keep existing"
+                value={tavilyApiKeyDraft}
+                onChange={(event) => setTavilyApiKeyDraft(event.target.value)}
+              />
+            </div>
+          </SettingItem>
+          <SettingItem
+            type="custom"
+            title="Runtime Limits"
+            description="Provider timeout, retries, concurrency, and minimum request interval used by Aily LLM calls."
+          >
+            <div className="tw-grid tw-w-full tw-grid-cols-2 tw-gap-2 sm:tw-w-[360px]">
+              <Input
+                type="number"
+                placeholder="Timeout seconds"
+                value={ailyConfigDraft.timeoutSeconds}
+                onChange={(event) => updateAilyConfigDraft("timeoutSeconds", event.target.value)}
+              />
+              <Input
+                type="number"
+                placeholder="Max retries"
+                value={ailyConfigDraft.maxRetries}
+                onChange={(event) => updateAilyConfigDraft("maxRetries", event.target.value)}
+              />
+              <Input
+                type="number"
+                placeholder="Max concurrency"
+                value={ailyConfigDraft.maxConcurrency}
+                onChange={(event) => updateAilyConfigDraft("maxConcurrency", event.target.value)}
+              />
+              <Input
+                type="number"
+                placeholder="Min interval seconds"
+                value={ailyConfigDraft.minIntervalSeconds}
+                onChange={(event) =>
+                  updateAilyConfigDraft("minIntervalSeconds", event.target.value)
+                }
+              />
+            </div>
+          </SettingItem>
+          <SettingItem
+            type="custom"
+            title="Aily Runtime Config"
+            description="Load or save redacted backend runtime settings. Secret values are never read back into Obsidian."
+          >
+            <div className="tw-flex tw-flex-wrap tw-gap-2">
+              <Button
+                onClick={() => void loadAilyConfig()}
+                disabled={isLoadingAilyConfig || isSavingAilyConfig}
+                variant="secondary"
+              >
+                {isLoadingAilyConfig ? (
+                  <>
+                    <Loader2 className="tw-mr-2 tw-size-4 tw-animate-spin" />
+                    Loading
+                  </>
+                ) : (
+                  "Load Config"
+                )}
+              </Button>
+              <Button
+                onClick={() => void saveAilyConfig()}
+                disabled={isSavingAilyConfig || isLoadingAilyConfig}
+                variant="default"
+              >
+                {isSavingAilyConfig ? (
+                  <>
+                    <Loader2 className="tw-mr-2 tw-size-4 tw-animate-spin" />
+                    Saving
+                  </>
+                ) : (
+                  "Save Config"
+                )}
+              </Button>
+            </div>
+          </SettingItem>
           <SettingItem
             type="custom"
             title="Connection"

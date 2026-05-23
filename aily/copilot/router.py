@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +18,7 @@ from aily.copilot.projects import CopilotProjectStore
 from aily.copilot.proposals import CopilotProposalStore
 from aily.copilot.vault import VaultSearchService
 from aily.dossier import DossierBuildRequest, DossierService
+from aily.llm.provider_routes import PrimaryLLMRoute
 from aily.security.rate_limit import FixedWindowRateLimiter
 from aily.writer.vault_layout import inspect_v1_vault_layout
 
@@ -108,6 +110,23 @@ class ProposalListRequest(BaseModel):
     status: str = ""
 
 
+class CopilotConfigUpdateRequest(BaseModel):
+    llm_provider: str | None = None
+    copilot_chat_provider: str | None = None
+    copilot_dossier_provider: str | None = None
+    kimi_api_key: str | None = None
+    kimi_model: str | None = None
+    kimi_vision_model: str | None = None
+    deepseek_api_key: str | None = None
+    deepseek_model: str | None = None
+    tavily_api_key: str | None = None
+    tavily_search_depth: str | None = None
+    llm_timeout_seconds: float | None = Field(default=None, ge=1.0, le=600.0)
+    llm_max_retries: int | None = Field(default=None, ge=0, le=10)
+    llm_max_concurrency: int | None = Field(default=None, ge=1, le=16)
+    llm_min_interval_seconds: float | None = Field(default=None, ge=0.0, le=120.0)
+
+
 def create_copilot_router(
     *,
     vault_path: Path,
@@ -186,6 +205,20 @@ def create_copilot_router(
                 "preview_writes": True,
             },
         }
+
+    @router.get("/config")
+    async def get_config(request: Request) -> dict[str, Any]:
+        _check_rate_limit(request)
+        return _copilot_config_response()
+
+    @router.post("/config")
+    async def update_config(request: Request, payload: CopilotConfigUpdateRequest) -> dict[str, Any]:
+        _check_rate_limit(request)
+        try:
+            _apply_copilot_config_update(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _copilot_config_response()
 
     @router.post("/vault/search")
     async def search_vault(request: Request, payload: VaultSearchRequest) -> dict[str, Any]:
@@ -391,6 +424,178 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _copilot_config_response() -> dict[str, Any]:
+    routes = {
+        "copilot_chat": _describe_route("copilot.chat"),
+        "copilot_dossier": _describe_route("copilot.dossier"),
+    }
+    return {
+        "llm_provider": SETTINGS.llm_provider,
+        "llm_base_url": SETTINGS.llm_base_url,
+        "llm_model": SETTINGS.llm_model,
+        "kimi": {
+            "model": SETTINGS.kimi_model,
+            "vision_model": SETTINGS.kimi_vision_model,
+            "api_key": _redacted_secret(SETTINGS.kimi_api_key),
+        },
+        "deepseek": {
+            "model": SETTINGS.deepseek_model,
+            "api_key": _redacted_secret(SETTINGS.deepseek_api_key),
+        },
+        "tavily": {
+            "search_depth": SETTINGS.tavily_search_depth,
+            "api_key": _redacted_secret(SETTINGS.tavily_api_key),
+        },
+        "runtime": {
+            "timeout_seconds": SETTINGS.llm_timeout_seconds,
+            "max_retries": SETTINGS.llm_max_retries,
+            "max_concurrency": SETTINGS.llm_max_concurrency,
+            "min_interval_seconds": SETTINGS.llm_min_interval_seconds,
+        },
+        "routes": routes,
+        "workload_routes_json": _redacted_workload_routes_json(),
+        "persistence": "runtime_only",
+    }
+
+
+def _describe_route(workload: str) -> dict[str, Any]:
+    route = PrimaryLLMRoute.resolve_route(SETTINGS, workload=workload)
+    return {
+        "workload": route.workload,
+        "provider": route.provider,
+        "model": route.model,
+        "base_url": route.base_url,
+        "api_key_configured": bool(str(route.api_key or "").strip()),
+    }
+
+
+def _redacted_secret(value: str) -> dict[str, Any]:
+    secret = str(value or "").strip()
+    if not secret:
+        return {"configured": False, "preview": ""}
+    if len(secret) <= 8:
+        preview = f"{secret[:2]}...{secret[-2:]}"
+    else:
+        preview = f"{secret[:4]}...{secret[-4:]}"
+    return {"configured": True, "preview": preview}
+
+
+def _redacted_workload_routes_json() -> str:
+    raw = str(SETTINGS.llm_workload_routes_json or "").strip()
+    if not raw:
+        return ""
+    try:
+        routes = _load_workload_routes()
+    except ValueError:
+        return "<invalid json>"
+    return json.dumps(_redact_mapping(routes), sort_keys=True)
+
+
+def _redact_mapping(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, child in value.items():
+            normalized = str(key).lower()
+            if any(marker in normalized for marker in ("api_key", "token", "secret", "password")):
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = _redact_mapping(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_mapping(child) for child in value]
+    return value
+
+
+def _apply_copilot_config_update(payload: CopilotConfigUpdateRequest) -> None:
+    if payload.llm_provider is not None:
+        SETTINGS.llm_provider = _validate_provider(payload.llm_provider)
+    if payload.kimi_api_key is not None:
+        SETTINGS.kimi_api_key = payload.kimi_api_key.strip()
+    if payload.kimi_model is not None:
+        SETTINGS.kimi_model = _required_text(payload.kimi_model, "kimi_model")
+    if payload.kimi_vision_model is not None:
+        SETTINGS.kimi_vision_model = _required_text(payload.kimi_vision_model, "kimi_vision_model")
+    if payload.deepseek_api_key is not None:
+        SETTINGS.deepseek_api_key = payload.deepseek_api_key.strip()
+    if payload.deepseek_model is not None:
+        SETTINGS.deepseek_model = _required_text(payload.deepseek_model, "deepseek_model")
+    if payload.tavily_api_key is not None:
+        SETTINGS.tavily_api_key = payload.tavily_api_key.strip()
+    if payload.tavily_search_depth is not None:
+        depth = payload.tavily_search_depth.strip().lower()
+        if depth not in {"basic", "advanced"}:
+            raise ValueError("tavily_search_depth must be either 'basic' or 'advanced'")
+        SETTINGS.tavily_search_depth = depth
+    if payload.llm_timeout_seconds is not None:
+        SETTINGS.llm_timeout_seconds = payload.llm_timeout_seconds
+    if payload.llm_max_retries is not None:
+        SETTINGS.llm_max_retries = payload.llm_max_retries
+    if payload.llm_max_concurrency is not None:
+        SETTINGS.llm_max_concurrency = payload.llm_max_concurrency
+    if payload.llm_min_interval_seconds is not None:
+        SETTINGS.llm_min_interval_seconds = payload.llm_min_interval_seconds
+
+    if payload.copilot_chat_provider is not None:
+        _set_workload_provider("copilot.chat", payload.copilot_chat_provider)
+    if payload.copilot_dossier_provider is not None:
+        _set_workload_provider("copilot.dossier", payload.copilot_dossier_provider)
+
+    _sync_primary_llm_settings()
+
+
+def _validate_provider(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized not in {"kimi", "deepseek"}:
+        raise ValueError("Provider must be either 'kimi' or 'deepseek'")
+    return normalized
+
+
+def _required_text(value: str, field_name: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        raise ValueError(f"{field_name} cannot be empty")
+    return clean
+
+
+def _set_workload_provider(workload: str, provider: str) -> None:
+    normalized = _validate_provider(provider)
+    routes = _load_workload_routes()
+    route = dict(routes.get(workload, {}))
+    route["provider"] = normalized
+    routes[workload] = route
+    SETTINGS.llm_workload_routes_json = json.dumps(routes, sort_keys=True)
+
+
+def _load_workload_routes() -> dict[str, dict[str, Any]]:
+    raw = str(SETTINGS.llm_workload_routes_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid llm_workload_routes_json: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("llm_workload_routes_json must decode to an object")
+    routes: dict[str, dict[str, Any]] = {}
+    for key, value in parsed.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            routes[key.strip().lower()] = dict(value)
+    return routes
+
+
+def _sync_primary_llm_settings() -> None:
+    provider = _validate_provider(SETTINGS.llm_provider)
+    SETTINGS.llm_provider = provider
+    if provider == "kimi":
+        SETTINGS.llm_base_url = "https://api.moonshot.cn/v1"
+        SETTINGS.llm_model = SETTINGS.kimi_model or SETTINGS.llm_model
+        SETTINGS.llm_api_key = SETTINGS.kimi_api_key or SETTINGS.llm_api_key
+        return
+    SETTINGS.llm_base_url = "https://api.deepseek.com"
+    SETTINGS.llm_model = SETTINGS.deepseek_model or SETTINGS.llm_model
+    SETTINGS.llm_api_key = SETTINGS.deepseek_api_key or SETTINGS.llm_api_key
 
 
 def _merge_scope(
