@@ -17,6 +17,15 @@ import { QASettings } from "./components/QASettings";
 const TAB_IDS = ["basic", "model", "QA", "command", "plus", "advanced"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
+const labels: Record<TabId, string> = {
+  basic: "common",
+  model: "Model",
+  QA: "QA",
+  command: "Command",
+  plus: "advanced",
+  advanced: "others",
+};
+
 // tab icons
 const icons: Record<TabId, JSX.Element> = {
   basic: <Cog className="tw-size-5" />,
@@ -41,7 +50,7 @@ const components: Record<TabId, React.FC> = {
 const tabs: TabItemType[] = TAB_IDS.map((id) => ({
   id,
   icon: icons[id],
-  label: id.charAt(0).toUpperCase() + id.slice(1),
+  label: labels[id],
 }));
 
 const SettingsContent: React.FC = () => {
