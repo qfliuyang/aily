@@ -163,14 +163,44 @@ def main() -> int:
         "/api/copilot/context/envelope",
         json={"user_message": "Explain JR-GO", "search_results": api_search.json().get("results", [])},
     )
+    api_chat = client.post(
+        "/api/copilot/chat",
+        json={"message": "Explain JR-GO as a product system.", "search_query": "JR-GO EDA chiplet", "use_llm": False},
+    )
+    api_dossier = client.post(
+        "/api/copilot/dossiers/generate",
+        json={
+            "topic": "JR-GO EDA chiplet product system",
+            "query_terms": ["JR-GO", "EDA", "chiplet"],
+            "seed_claims": ["JR-GO connects EDA workflow evidence to product reasoning."],
+            "max_vault_evidence": 20,
+        },
+    )
     for name, response in {
         "api_status": api_status,
         "api_search": api_search,
         "api_read": api_read,
         "api_envelope": api_envelope,
+        "api_chat": api_chat,
+        "api_dossier": api_dossier,
     }.items():
         if response.status_code != 200:
             failures.append(_failure(name, status_code=response.status_code, body=response.text))
+    if api_chat.status_code == 200:
+        chat_payload = api_chat.json()
+        if chat_payload.get("grounding_status") != "grounded":
+            failures.append(_failure("chat_grounded", chat=chat_payload))
+        if not chat_payload.get("citations"):
+            failures.append(_failure("chat_has_citations", chat=chat_payload))
+        if "[V001]" not in chat_payload.get("answer", ""):
+            failures.append(_failure("chat_answer_uses_citation", chat=chat_payload))
+    if api_dossier.status_code == 200:
+        dossier_payload = api_dossier.json()
+        dossier_path = vault_path / str(dossier_payload.get("relative_path") or "")
+        if not str(dossier_payload.get("relative_path") or "").startswith("10-Dossiers/"):
+            failures.append(_failure("dossier_written_to_10_dossiers", dossier=dossier_payload))
+        if not dossier_path.is_file():
+            failures.append(_failure("dossier_file_exists", dossier=dossier_payload))
 
     result = {
         "fixture_files": fixture_files,
@@ -181,6 +211,8 @@ def main() -> int:
         "context_combined_hash": envelope_a["combined_hash"],
         "citation_count": len(envelope_a["citation_catalog"]),
         "api_search_returned": api_search.json().get("returned") if api_search.status_code == 200 else None,
+        "api_chat_grounding_status": api_chat.json().get("grounding_status") if api_chat.status_code == 200 else None,
+        "api_dossier_relative_path": api_dossier.json().get("relative_path") if api_dossier.status_code == 200 else None,
     }
     evidence.write_json("fixture-files.json", fixture_files, generation_method="Aily-Copilot fixture vault creation")
     evidence.write_json("vault-search.json", search_result, generation_method="VaultSearchService.search")
@@ -194,6 +226,8 @@ def main() -> int:
             "search": api_search.json() if api_search.status_code == 200 else api_search.text,
             "read": api_read.json() if api_read.status_code == 200 else api_read.text,
             "envelope": api_envelope.json() if api_envelope.status_code == 200 else api_envelope.text,
+            "chat": api_chat.json() if api_chat.status_code == 200 else api_chat.text,
+            "dossier": api_dossier.json() if api_dossier.status_code == 200 else api_dossier.text,
         },
         generation_method="FastAPI TestClient calls against create_copilot_router",
     )

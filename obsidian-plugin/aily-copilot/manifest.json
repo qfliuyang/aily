@@ -1,0 +1,9 @@
+{
+  "id": "aily-copilot",
+  "name": "Aily Copilot",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Chat with an Aily vault, trace citations, and generate dossiers from Obsidian.",
+  "author": "Aily",
+  "isDesktopOnly": false
+}

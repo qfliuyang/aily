@@ -3169,6 +3169,7 @@ app.include_router(webhook.router)
 app.include_router(
     create_copilot_router(
         vault_path=_studio_vault_path(),
+        llm_client_factory=lambda: llm_resolver("copilot.chat"),
         auth_token=SETTINGS.ui_auth_token if (SETTINGS.ui_auth_enabled or SETTINGS.hosted_mode) else "",
         rate_limiter=ui_rate_limiter,
         trust_proxy_headers=SETTINGS.trusted_proxy_headers,

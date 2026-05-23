@@ -27,6 +27,8 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 - Provider capability matrix: `aily/llm/provider_capabilities.py`
 - Hosted-mode guardrails: `aily/security/`
 - Aily-Copilot backend API: `aily/copilot/`, mounted under `/api/copilot`
+- Aily-Copilot Obsidian companion plugin MVP:
+  `obsidian-plugin/aily-copilot`
 
 ## Active Flow
 
@@ -39,6 +41,8 @@ This file is the shortest trustworthy map of the codebase as it exists now.
 7. Aily-Copilot can search and read the configured vault, build citation-ready
    context envelopes, and expose graph-neighborhood primitives for a future
    Obsidian companion plugin.
+8. The Aily-Copilot companion plugin can be installed into the iCloud vault and
+   call Aily backend chat/dossier APIs from an Obsidian side panel.
 
 ## Active Vault Layout
 

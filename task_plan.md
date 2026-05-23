@@ -85,24 +85,24 @@ Initial team launched for discovery and M0/Gate 0 scoping:
 
 ## Active Work
 
-- Current milestone: AC1 Aily-Copilot backend vault chat foundation
+- Current milestone: AC2/AC3/AC6 Aily-Copilot usable MVP verification
 - Current write scope: `docs/`, `aily/copilot/`, `aily/main.py`, evidence
   scripts, and vault-path configuration touched in the current productization
   slice
 - Current evidence target:
-  `/Users/luzi/.aily/runs/2026-05-23T06-50-08Z_aily_copilot_backend/manifest.json`
+  `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json`
 
 ## Aily-Copilot Product Track
 
 | ID | Status | Milestone | Evidence |
 |---|---|---|---|
 | AC0 | DONE | Product research and plan | `docs/OBSIDIAN_COPILOT_REVIEW.md`, `docs/AILY_COPILOT_DEVELOPMENT_PLAN.md` |
-| AC1 | VERIFY | Backend vault search/read/context API | `/Users/luzi/.aily/runs/2026-05-23T06-50-08Z_aily_copilot_backend/manifest.json` |
-| AC2 | TODO | Grounded vault chat with citations | pending |
-| AC3 | TODO | Dossier generation from chat | pending |
+| AC1 | DONE | Backend vault search/read/context API | `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json` |
+| AC2 | VERIFY | Grounded vault chat with citations | Backend route covered by `/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json`; real LLM answer quality pending |
+| AC3 | VERIFY | Dossier generation from chat | Backend route writes `10-Dossiers` in fixture evidence; real-vault quality pending |
 | AC4 | TODO | Graph-aware relevant notes | pending |
 | AC5 | TODO | Project mode | pending |
-| AC6 | TODO | Obsidian companion plugin MVP | pending |
+| AC6 | PARTIAL | Obsidian companion plugin MVP | Plugin installed into iCloud vault and JS syntax checked; in-Obsidian manual smoke pending |
 | AC7 | TODO | Preview-first write workflow | pending |
 
 ## Required Per-Run Checklist

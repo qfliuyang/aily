@@ -1,0 +1,69 @@
+.aily-copilot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 12px;
+}
+
+.aily-copilot__header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.aily-copilot__header p,
+.aily-copilot__context {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.aily-copilot__transcript {
+  display: flex;
+  flex: 1;
+  min-height: 220px;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.aily-copilot__message {
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--background-secondary);
+}
+
+.aily-copilot__message--user {
+  background: var(--background-modifier-hover);
+}
+
+.aily-copilot__role {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.aily-copilot__body {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.aily-copilot__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.aily-copilot__actions button {
+  flex: 1;
+}
+
+.aily-copilot__input {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+}

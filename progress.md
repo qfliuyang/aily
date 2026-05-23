@@ -1088,6 +1088,48 @@ Verification:
 - `uv run python scripts/run_aily_copilot_backend_evidence.py` exited `0`.
 - Evidence runner validated service behavior and FastAPI router smoke calls.
 - `uv run python -m compileall -q aily scripts` passed.
+
+## 2026-05-23 Aily-Copilot Grounded Chat And Plugin MVP
+
+Implementation:
+
+- Added `CopilotVaultChatService` for grounded vault answers with citation
+  catalogs.
+- Added `/api/copilot/chat` with deterministic extractive mode and optional
+  live LLM mode.
+- Routed `copilot.chat` and `copilot.dossier` workloads to DeepSeek in the
+  provider route table.
+- Added `/api/copilot/dossiers/generate` to write dossier outputs under
+  `10-Dossiers`.
+- Added a thin Obsidian companion plugin under
+  `obsidian-plugin/aily-copilot`.
+- Added `scripts/install_aily_copilot_plugin.py` and installed the plugin into:
+
+```text
+/Users/luzi/Library/Mobile Documents/com~apple~CloudDocs/Documents/aily/.obsidian/plugins/aily-copilot
+```
+
+Evidence:
+
+```text
+/Users/luzi/.aily/runs/2026-05-23T07-01-27Z_aily_copilot_backend/manifest.json
+```
+
+Verification:
+
+- `uv run python scripts/run_aily_copilot_backend_evidence.py` exited `0`.
+- Evidence covers search, read, neighborhood, context envelope, chat API, and
+  dossier generation API using a fixture vault.
+- `uv run python -m compileall -q aily scripts` passed.
+- `node --check obsidian-plugin/aily-copilot/main.js` passed.
+- Installed plugin `main.js` under the iCloud vault also passed `node --check`.
+
+Known gaps:
+
+- Real LLM answer quality is not yet verified in this evidence run; the route is
+  wired but the evidence uses deterministic mode to avoid unnecessary API spend.
+- Obsidian runtime behavior still needs a manual smoke test after enabling the
+  plugin in Obsidian.
 - M0-M9 and Gate0-Gate6 were present and marked `PASS` in the release matrix.
 - All 9 required prior manifests validated successfully.
 - Gate 6 dry-run review found no real email send.

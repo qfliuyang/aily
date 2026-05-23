@@ -69,6 +69,8 @@ class PrimaryLLMRoute:
         "guru": {"provider": "deepseek"},
         "gstack": {"provider": "deepseek"},
         "chaos.vision": {"provider": "kimi"},
+        "copilot.chat": {"provider": "deepseek"},
+        "copilot.dossier": {"provider": "deepseek"},
     }
 
     @classmethod

@@ -105,6 +105,13 @@ Gate:
 
 - Answers cite vault notes and do not present unsupported claims as facts.
 
+Current status:
+
+- Backend route exists at `/api/copilot/chat`.
+- Deterministic extractive mode is covered by
+  `scripts/run_aily_copilot_backend_evidence.py`.
+- Live LLM answer quality still needs real-provider evidence.
+
 ### AC3: Dossier From Chat
 
 Deliverables:
@@ -124,6 +131,13 @@ Tests:
 Gate:
 
 - A human reviewer can read the dossier as a substantive learning artifact.
+
+Current status:
+
+- Backend route exists at `/api/copilot/dossiers/generate`.
+- Fixture-vault dossier generation is covered by
+  `scripts/run_aily_copilot_backend_evidence.py`.
+- Real-vault dossier quality review remains pending.
 
 ### AC4: Graph-Aware Knowledge Navigation
 
@@ -180,6 +194,13 @@ Tests:
 Gate:
 
 - User can operate Aily from inside Obsidian for real work.
+
+Current status:
+
+- Plugin MVP exists under `obsidian-plugin/aily-copilot`.
+- Installer script copies it to the configured iCloud vault plugin folder.
+- JavaScript syntax is checked with `node --check`.
+- Manual Obsidian enablement and runtime smoke test remain pending.
 
 ### AC7: Write Preview And Human Approval
 
